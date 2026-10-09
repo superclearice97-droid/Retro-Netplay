@@ -43,7 +43,22 @@ This is the checklist the project follows as it's built, so publishing doesn't n
 - Publish a **Privacy Policy** and **Terms of Use** (hosted page, linked from the app and store listing) before the first public release.
 - Google Play requires a privacy policy link and an accurate **Data safety** form.
 
-## 6. Release checklist
+## 6. Privacy by design (build rules)
+
+These keep Retro-Netplay as private as possible from day one.
+
+- **Collect nothing by default.** No accounts, analytics, crash reporting or telemetry unless the user opts in, and every opt-in is off by default.
+- **Relay mode by default for random matchmaking**, so strangers never see your IP address; direct peer-to-peer is opt-in (or the default only for friend invites, with a clear notice).
+- **End-to-end encrypt game streams and inputs** between players (for example DTLS/SRTP or Noise). Relay and matchmaking servers forward encrypted traffic and can't see the game, voice or inputs.
+- **Matchmaking servers keep the minimum:** a random session ID and connection details, held in memory and dropped when the session ends. No IP logs beyond short-lived abuse protection (24–72 hours).
+- **Invite links** use long random tokens, expire when the session ends, and contain no username or IP.
+- **Social account connections are optional.** Ask for the smallest permissions (post a message only), store tokens in the OS keychain/Android Keystore, never on a server, and let users disconnect in one tap.
+- **Local data** (settings, game paths, recent friends) stays on the device. Offer "Delete all my data" in settings.
+- **No third-party SDKs** that phone home (ads, analytics, attribution). Bundle libraries and fonts in the app instead of loading them from CDNs.
+- **Android:** request only the permissions needed (no location, contacts or storage-wide access; use the system file picker for game files). The Play Store Data safety form must say "no data collected" where true.
+- **Updates** are signed and downloaded over HTTPS from the project's own release page.
+
+## 7. Release checklist
 
 - [ ] LICENSE (GPL-3.0) and THIRD_PARTY_NOTICES in the repo and in every build
 - [ ] Source code available for every released binary
@@ -53,3 +68,4 @@ This is the checklist the project follows as it's built, so publishing doesn't n
 - [ ] Age requirement and block/report in random matchmaking
 - [ ] Play Store Data safety form matches what the app really collects
 - [ ] Trademark name search done
+- [ ] Privacy-by-design rules in section 6 met (relay default for randoms, encryption, no telemetry, data deletion)

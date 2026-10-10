@@ -111,6 +111,10 @@ final class Ink {
 
     /** A modal sheet in the app's own style: title, content, then buttons along the bottom. */
     static Dialog sheet(Context c, String title, View content, String yes, Runnable onYes, String no) {
+        return sheet(c, title, content, yes, onYes, no, null);
+    }
+
+    static Dialog sheet(Context c, String title, View content, String yes, Runnable onYes, String no, Runnable onNo) {
         final Dialog d = new Dialog(c);
         d.requestWindowFeature(Window.FEATURE_NO_TITLE);
         LinearLayout col = new LinearLayout(c);
@@ -131,7 +135,7 @@ final class Ink {
         rp.topMargin = dp(c, 18);
         if (no != null) {
             InkButton b = new InkButton(c, null, no, false);
-            b.onPress(d::dismiss);
+            b.onPress(() -> { d.dismiss(); if (onNo != null) onNo.run(); });
             row.addView(b);
         }
         if (yes != null) {

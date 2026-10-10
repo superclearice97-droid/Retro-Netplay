@@ -111,6 +111,34 @@ def validate(req):
     return ""
 
 
+TOKEN_RE = re.compile(r"^[0-9a-f]{8,64}$")
+PROBE_TIMEOUT = 4
+
+
+def validate_probe(req):
+    port = req.get("port")
+    if not isinstance(port, int) or isinstance(port, bool) or not 1024 <= port <= 65535:
+        return "port must be a number from 1024 to 65535"
+    if not isinstance(req.get("token"), str) or not TOKEN_RE.match(req["token"]):
+        return "token must be 8 to 64 hex digits"
+    return ""
+
+
+async def probe(ip, port, token):
+    """Connect back to the asking player's own address only (never anyone else's), and check that the app
+    is what answers, so a player can learn whether their router lets other players in."""
+    w = None
+    try:
+        r, w = await asyncio.wait_for(asyncio.open_connection(ip, port), PROBE_TIMEOUT)
+        line = await asyncio.wait_for(r.readline(), PROBE_TIMEOUT)
+        return line.strip() == token.encode()
+    except (OSError, asyncio.TimeoutError, ValueError):
+        return False
+    finally:
+        if w:
+            w.close()
+
+
 def leave_all(w):
     for key in w.keys:
         for lane in w.lanes:
@@ -178,6 +206,15 @@ async def handle(reader, writer):
             req = json.loads(line)
         except ValueError:
             req = None
+        if isinstance(req, dict) and req.get("op") == "probe":
+            problem = validate_probe(req) or admit(ip, asyncio.get_running_loop().time())
+            if problem:
+                reply = {"op": "error", "msg": problem}
+            else:
+                reply = {"op": "probe", "v": 1, "port": req["port"], "open": await probe(ip, req["port"], req["token"]), "ip": ip}
+            writer.write((json.dumps(reply) + "\n").encode())
+            await writer.drain()
+            return
         problem = validate(req) or admit(ip, asyncio.get_running_loop().time())
         if problem:
             writer.write((json.dumps({"op": "error", "msg": problem}) + "\n").encode())

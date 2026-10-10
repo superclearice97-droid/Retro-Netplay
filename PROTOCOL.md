@@ -53,3 +53,6 @@ The matchmaker also relays the WebRTC setup between the two matched players. Eve
 - The host creates the offer after `hello` and adds two data channels: `pad` (unordered, no retransmits) and `ctl` (reliable, JSON).
 - `pad` packet, 16 bytes little-endian: `ver u8 (=1), seq u8, buttons u32, lx ly rx ry i16, lt rt u8`. Button bit n = W3C standard-gamepad button n (12-15 = d-pad up/down/left/right). Sticks: -32767..32767, up = negative.
 - `ctl` messages: guest `{"t":"hi"}`, `{"t":"ping","ts":n}`, `{"t":"stats","s":{...}}`; host `{"t":"slot","n":2}`, `{"t":"pong","ts":n}`, `{"t":"host","s":{captureAgeMs, convertMs, encodeMs, encodeP95, payMs, totalMs, frames}}` (every 2 s: how long the host spent on each stage, in milliseconds).
+
+## Port check (optional)
+A client may send one line instead of a search: `{"v":1,"op":"probe","port":55435,"token":"<8-64 hex digits>"}`. The server connects back to the address that sent it, on that port (1024-65535 only), reads one line, and answers `{"op":"probe","v":1,"port":55435,"open":true|false,"ip":"<your public address>"}`. `open` is true only if the line it read equals the token, so another program on that port doesn't count. The client listens on the port with a short-lived socket that answers with the token. Counts toward the same per-address rate limit as searches.

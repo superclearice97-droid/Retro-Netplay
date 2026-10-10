@@ -2,6 +2,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Reads the router address so the app can ask it to open the netplay port (NAT-PMP). -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
 
     <!-- Android 11+ hides other apps unless we ask to see them. -->
     <queries>

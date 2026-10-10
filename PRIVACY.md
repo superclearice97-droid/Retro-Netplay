@@ -14,6 +14,16 @@ Your app label and game name, and for emulator netplay your IP address (needed f
 - To connect through home routers, WebRTC asks a STUN server for your public address. By default this is Google's public STUN server (`stun.l.google.com`), which therefore sees your IP address. To avoid third parties, run the matchmaker with the environment variable `NETPLAY_ICE_JSON='[]'` (works on a local network only) or point it at your own STUN/TURN server (see PROTOCOL.md).
 - A TURN relay, if you add one, can see how much data passes through but not its content.
 
+## Game folders
+When you pick game folders, the app reads the file names in them, and the first few kilobytes of .iso and .bin files to tell which console they are for. This happens on your device only. The list of games stays on your device; only the name of the game you search for is sent to the matchmaker.
+
+## Automatic port opening
+If "Open ports automatically" is on (it is by default, and you can turn it off in Settings), the app asks your own router, over your home network only, to open the one port that netplay hosting needs (RetroArch 55435 TCP; Dolphin 2626 UDP on a PC). It uses the standard UPnP or NAT-PMP requests, renews them while the app runs and removes them when the desktop app closes. On Android, the opening expires on its own after two hours. Android needs the "view Wi-Fi connections" permission only to learn the router's address for this.
+
+To check that the port really works, the app asks the matchmaker to connect back to your address on that port once. The matchmaker only ever connects to the address that asked, only to ports 1024 and above, and only counts the test as passed if this app answers with a one-time code. It tells you the public address it saw; it does not keep it.
+
+An open port lets other people's emulators connect to yours while you host. Turn the option off if you never host.
+
 ## Saved on your device
 Settings, game list, controller layout and optional social settings, in `~/.netplay-matchmaker/` (Linux/Mac) or the app's folder (Windows), readable only by you (permissions 0600). Stream timing statistics go to `stream-stats.csv` in the same folder: numbers only (delays, frame rates), no video or names. Delete the folder to remove everything.
 

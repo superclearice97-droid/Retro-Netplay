@@ -36,6 +36,20 @@ BUILT-IN STREAMING (new, the default for PS2 / PS3)
   - Behind a strict router the stream may not connect with only the free STUN server. The fix is
     a TURN relay: set NETPLAY_ICE_JSON on the matchmaker (see PROTOCOL.md).
 
+
+FIRST-TIME SETUP (both apps)
+  The first time you open the app, a short setup walks you through everything once:
+  1. Your games: pick the folders where you keep games. Every game inside is found and
+     named automatically (so it matches the other player's name), and new games show up
+     next time you open the app. If a file could be for two consoles, you're asked once
+     per folder.
+  2. Emulators (PC) / RetroArch (phone): found automatically where possible.
+  3. Online: the matchmaker address, and "Open ports automatically". The app asks your
+     router (UPnP / NAT-PMP) to open only the netplay port, then asks the matchmaker to
+     test it, and tells you in plain words whether hosting will work.
+  4. Controllers (PC).
+  Run it again any time: Settings > Run setup again.
+
 LEGAL AND PRIVACY
   PRIVACY.md says exactly what leaves your device. NOTICE.md lists third-party licenses, the
   Retro-Netplay is licensed under GPL-3.0 (see LICENSE).

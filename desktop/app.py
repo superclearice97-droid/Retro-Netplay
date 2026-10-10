@@ -22,6 +22,8 @@ from pathlib import Path
 import controls
 import ink
 import invites
+import library
+import portmap
 import secretbox
 
 HERE = Path(__file__).resolve().parent
@@ -87,6 +89,7 @@ DEFAULT_CFG = {
     "parsec_peer_id": "", "stream_backend": "own", "paths": {}, "games": [], "last_game": 0,
     "hotkey": [6, 7], "hold": 1.0,
     "slots": controls.default_slots(), "controller_check_done": False,
+    "setup_done": False, "game_folders": [], "folder_answers": {}, "auto_ports": True, "port_status": {},
 }
 invites.fill_defaults(DEFAULT_CFG)
 
@@ -321,6 +324,45 @@ def write_ra_config(cfg):
         return ""
 
 
+PORTS = portmap.PortMapper()
+
+
+def needed_ports(cfg):
+    """Emulators set up on this PC that host netplay, and so need a port open on the router."""
+    return [k for k in portmap.APP_PORTS if emu_ok(cfg["paths"].get(k, ""))]
+
+
+def _local_server(host):
+    h = (host or "").strip().lower()
+    return h in ("", "localhost") or h.startswith(("127.", "10.", "192.168.")) or re.match(r"^172\.(1[6-9]|2\d|3[01])\.", h)
+
+
+def refresh_ports(cfg):
+    """Open the hosting ports on the router (if allowed) and check them through the matchmaker.
+    -> {emulator: {"state": open|closed|mapped|failed, "message": plain words}}; also saved in cfg["port_status"]."""
+    out = {}
+    if not cfg.get("auto_ports", True):
+        cfg["port_status"] = out
+        return out
+    for key in needed_ports(cfg):
+        port, proto, label = portmap.APP_PORTS[key]
+        r = PORTS.open(port, proto)
+        st = {"state": "mapped" if r["ok"] else "failed", "message": f"{label}: " + r["message"]}
+        if proto == "TCP" and not _local_server(cfg.get("server_host")) and not cfg.get("run_server"):
+            c = portmap.check_port(cfg["server_host"], int(cfg["server_port"]), port)
+            if c["open"] is not None:
+                st = {"state": "open" if c["open"] else "closed", "message": f"{label}: " + c["message"]}
+        out[key] = st
+    cfg["port_status"] = out
+    return out
+
+
+def can_host_native(cfg, g):
+    """Only say we can't host when a test proved the port is closed; otherwise keep the old behaviour."""
+    emu = SYSTEMS[g["system"]]["emu"]
+    return (cfg.get("port_status") or {}).get(emu, {}).get("state") != "closed"
+
+
 def safe_peer_id(peer):
     """A Parsec peer ID from the opponent, or "" if it isn't one (never pass odd text to a URL handler)."""
     v = str(peer.get("peer_id", ""))
@@ -469,7 +511,7 @@ class Engine:
         request = {
             "v": 1, "op": "search", "game": game_key(g), "lanes": lanes,
             "info": {"native": {}, "stream": stream_info},
-            "can_host": {"native": True, "stream": stream_host_ok},
+            "can_host": {"native": can_host_native(cfg, g), "stream": stream_host_ok},
             "client": f"desktop-{platform.system().lower()}",
         }
         if code:
@@ -739,8 +781,8 @@ def run_gui():
     game_var = tk.StringVar()
     combo = ttk.Combobox(row, textvariable=game_var, state="readonly")
     combo.pack(side="left", fill="x", expand=True)
-    ttk.Button(row, text="Add game...", command=lambda: add_game()).pack(side="left", padx=(6, 0))
-    ttk.Button(row, text="Remove", command=lambda: remove_game()).pack(side="left", padx=(6, 0))
+    ttk.Button(row, text="Game folders...", command=lambda: open_wizard(only=0)).pack(side="left", padx=(6, 0))
+    ttk.Button(row, text="Add one...", command=lambda: add_game()).pack(side="left", padx=(6, 0))
 
     go_btn = ink.InkButton(tk, frame, "Find an opponent", "search", lambda: engine.toggle(), fam)
     go_btn.pack(fill="x")
@@ -937,6 +979,7 @@ def run_gui():
         btns = ttk.Frame(body)
         btns.pack(fill="x", pady=(8, 0))
         ttk.Button(btns, text="Auto-detect emulators", command=lambda: (autodetect(cfg), win.destroy(), refresh(), open_settings())).pack(side="left")
+        ttk.Button(btns, text="Run setup again", command=lambda: (win.destroy(), open_wizard())).pack(side="left", padx=(6, 0))
         ttk.Button(btns, text="Save", command=save).pack(side="right")
 
     def show_manual():
@@ -1209,18 +1252,39 @@ def run_gui():
             pass
         root.after(120, pump)
 
+    def open_wizard(only=None):
+        import wizard
+        ctx = {"autodetect": autodetect, "emu_ok": emu_ok, "EMUS": EMUS, "SYSTEMS": SYSTEMS,
+               "refresh_ports": refresh_ports, "controller_check": lambda: controller_check(),
+               "done": lambda: (refresh(), save_cfg(cfg), start_background())}
+        wizard.run(root, tk, ttk, filedialog, cfg, ctx, only=only)
+
+    def start_background():
+        """Pick up new games in the folders and keep the router ports open, without slowing the window."""
+        def work():
+            if cfg.get("game_folders"):
+                library_games, _q = library.scan(cfg["game_folders"], cfg.get("folder_answers", {}))
+                merged = library.merge(cfg["games"], library_games)
+                msgs.put(("call", None, lambda: (cfg.__setitem__("games", merged), refresh())))
+            res = refresh_ports(cfg)
+            bad = [v["message"] for v in res.values() if v["state"] in ("closed", "failed")]
+            if bad:
+                msgs.put(("note", bad[0], None))
+        threading.Thread(target=work, daemon=True).start()
+
     refresh()
     pump()
     tick()
     given = [a for a in sys.argv[1:] if a.startswith("netplay://") or "/join?" in a]
     if given:
         root.after(800, lambda: join_with_link(given[0]))
-    if not cfg["controller_check_done"]:
-        root.after(300, lambda: controller_check(then=open_settings if first_run else None))
-    elif first_run:
-        root.after(300, open_settings)
+    if not cfg.get("setup_done"):
+        root.after(300, open_wizard)
+    else:
+        start_background()
     root.mainloop()
     save_cfg(cfg)
+    PORTS.close_all()
 
 
 if __name__ == "__main__":

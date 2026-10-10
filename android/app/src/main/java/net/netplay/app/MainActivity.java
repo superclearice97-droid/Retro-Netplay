@@ -45,6 +45,7 @@ public class MainActivity extends Activity {
     private TextView status, linkView;
     private final String[] checkHelp = {"", "", "", ""};
     private MatchClient running;   // non-null while searching
+    private Setup setup;
     private String currentLink = "";
     private String currentGameName = "";
 
@@ -56,8 +57,16 @@ public class MainActivity extends Activity {
         selected = Math.min(prefs.getInt("last_game", 0), Math.max(0, games.size() - 1));
         buildUi();
         refresh();
-        if (prefs.getString("server_host", "").isEmpty()) {
-            status.setText("First, open Settings and enter the matchmaker address your friend gave you.");
+        setup = new Setup(this, prefs, () -> {
+            loadGames();
+            selected = Math.max(0, Math.min(selected, games.size() - 1));
+            refresh();
+        });
+        if (!prefs.getBoolean("setup_done", false)) {
+            status.setText("Let's set everything up once. It takes about two minutes.");
+            hero.post(() -> setup.start());
+        } else {
+            setup.background(false);
         }
         handleLink(getIntent());
     }
@@ -67,6 +76,12 @@ public class MainActivity extends Activity {
         super.onNewIntent(intent);
         setIntent(intent);
         handleLink(intent);
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == Setup.PICK_FOLDER && resultCode == RESULT_OK && data != null) setup.onFolderPicked(data.getData());
     }
 
     /** Someone tapped an invite link (netplay://join?...) in a browser or chat. */
@@ -131,10 +146,10 @@ public class MainActivity extends Activity {
 
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
-        InkButton add = new InkButton(this, Icons.PLUS, "Add game", false);
-        add.onPress(this::addGame);
-        InkButton remove = new InkButton(this, Icons.TRASH, "Remove", false);
-        remove.onPress(this::removeGame);
+        InkButton add = new InkButton(this, Icons.DISC, "Game folders", false);
+        add.onPress(() -> setup.step(1, true));
+        InkButton remove = new InkButton(this, Icons.PLUS, "Add one", false);
+        remove.onPress(this::addGame);
         row.addView(add, half(0));
         row.addView(remove, half(10));
         body.addView(row, fill(10));
@@ -172,7 +187,7 @@ public class MainActivity extends Activity {
         Map<String, Object> g = currentGame();
         if (g == null) {
             gameName.setText("No game yet");
-            gameSystem.setText("Tap Add game");
+            gameSystem.setText("Tap Game folders");
         } else {
             gameName.setText((String) g.get("name"));
             gameSystem.setText(Games.SYSTEMS.get((String) g.get("system")).label);
@@ -200,7 +215,7 @@ public class MainActivity extends Activity {
                 : "Built-in streaming: when you match, the other player's game opens in your browser and your touch controls play it.";
         if (g == null) {
             st[1] = InkHero.ATTENTION; note[1] = "add one";
-            checkHelp[1] = "Tap Add game and enter a game. Your opponent must add the same game with the exact same name.";
+            checkHelp[1] = "Tap Game folders and pick the folders where your games are. Games are found and named for you, so they match the other player's.";
             st[2] = InkHero.UNKNOWN; note[2] = "-";
             checkHelp[2] = "Pick a game first.";
         } else {
@@ -215,7 +230,9 @@ public class MainActivity extends Activity {
                 boolean ra = retroArchPackage() != null;
                 st[2] = ra ? InkHero.READY : InkHero.ATTENTION;
                 note[2] = ra ? "RetroArch" : "install";
-                checkHelp[2] = ra ? "RetroArch is installed." : "RetroArch isn't installed. Install it for rollback netplay. Streaming still works.";
+                String pm = prefs.getString("port_message", "");
+                checkHelp[2] = (ra ? "RetroArch is installed." : "RetroArch isn't installed. Install it for rollback netplay. Streaming still works.")
+                        + (ra && !pm.isEmpty() ? "\n\n" + pm : "");
             } else {
                 st[1] = InkHero.READY; note[1] = "stream";
                 checkHelp[1] = sys.label + " games play by joining someone's stream." + again;
@@ -245,7 +262,7 @@ public class MainActivity extends Activity {
     private void saveGames() { prefs.edit().putString("games", Json.stringify(games)).apply(); }
 
     private void chooseGame() {
-        if (games.isEmpty()) { addGame(); return; }
+        if (games.isEmpty()) { setup.step(1, true); return; }
         final LinearLayout list = new LinearLayout(this);
         list.setOrientation(LinearLayout.VERTICAL);
         final Dialog[] dlg = new Dialog[1];
@@ -253,6 +270,7 @@ public class MainActivity extends Activity {
             final int idx = i;
             Map<String, Object> g = games.get(i);
             TextView row = Ink.text(this, g.get("name") + "\n" + Games.SYSTEMS.get((String) g.get("system")).label, 15, i == selected, Ink.INK);
+            row.setContentDescription(g.get("name") + ", " + Games.SYSTEMS.get((String) g.get("system")).label + ". Long press to remove.");
             row.setPadding(dp(14), dp(10), dp(14), dp(10));
             row.setMinimumHeight(dp(56));
             row.setGravity(Gravity.CENTER_VERTICAL);
@@ -260,8 +278,18 @@ public class MainActivity extends Activity {
             row.setClickable(true);
             row.setBackground(Ink.surface(this, false));
             row.setOnClickListener(v -> { selected = idx; dlg[0].dismiss(); refresh(); });
+            row.setOnLongClickListener(v -> {
+                dlg[0].dismiss();
+                Ink.sheet(this, "Remove " + games.get(idx).get("name") + "?",
+                        Ink.text(this, Boolean.TRUE.equals(games.get(idx).get("auto"))
+                                ? "It comes back the next time your game folders are scanned, unless you remove the file or folder."
+                                : "Your game file isn't deleted.", 14, false, Ink.INK),
+                        "Remove", () -> { selected = idx; removeGame(); }, "Cancel").show();
+                return true;
+            });
             list.addView(row, fill(idx == 0 ? 0 : 8));
         }
+        list.addView(Ink.text(this, "Tip: press and hold a game to remove it.", 12.5f, false, Ink.INK_SOFT), fill(12));
         dlg[0] = Ink.sheet(this, "Choose a game", list, null, null, "Close");
         dlg[0].show();
     }
@@ -334,17 +362,23 @@ public class MainActivity extends Activity {
         box.addView(Ink.caption(this, "Public address for invite links"), fill(12));
         final EditText inviteHost = Ink.field(this, "blank = same as above", prefs.getString("invite_host", ""));
         box.addView(inviteHost, fill(6));
-        final InkCheck canHost = new InkCheck(this, "I can host netplay (home Wi-Fi, RetroArch port 55435 open)", prefs.getBoolean("can_host", false));
+        final InkCheck autoPorts = new InkCheck(this, "Open the port on my router automatically (recommended)", prefs.getBoolean("auto_ports", true));
+        final InkCheck canHost = new InkCheck(this, "I opened port 55435 on my router myself", prefs.getBoolean("can_host", false));
         final InkCheck inviteOn = new InkCheck(this, "Make an invite link when I search", prefs.getBoolean("invite_on", true));
         final InkCheck randoms = new InkCheck(this, "Also let random players match me", prefs.getBoolean("invite_randoms", true));
         final InkCheck autoShare = new InkCheck(this, "Open the share sheet when I search", prefs.getBoolean("auto_share", true));
         final InkCheck useParsec = new InkCheck(this, "Use Parsec instead of built-in streaming (PS2/PS3)", prefs.getBoolean("use_parsec", false));
-        box.addView(canHost, fill(14));
+        box.addView(autoPorts, fill(14));
+        box.addView(canHost, fill(2));
         box.addView(inviteOn, fill(2));
         box.addView(randoms, fill(2));
         box.addView(autoShare, fill(2));
         box.addView(useParsec, fill(2));
-        Ink.sheet(this, "Settings", box, "Save", () -> {
+        final Dialog[] me = new Dialog[1];
+        InkButton again = new InkButton(this, Icons.CHECK, "Run setup again", false);
+        again.onPress(() -> { if (me[0] != null) me[0].dismiss(); setup.start(); });
+        box.addView(again, fill(16));
+        me[0] = Ink.sheet(this, "Settings", box, "Save", () -> {
             int p = 7777;
             try { p = Integer.parseInt(port.getText().toString().trim()); } catch (NumberFormatException ignored) { }
             prefs.edit().putString("server_host", host.getText().toString().trim())
@@ -353,10 +387,13 @@ public class MainActivity extends Activity {
                     .putBoolean("invite_on", inviteOn.isOn())
                     .putBoolean("invite_randoms", randoms.isOn())
                     .putBoolean("use_parsec", useParsec.isOn())
-                    .putBoolean("auto_share", autoShare.isOn()).apply();
+                    .putBoolean("auto_share", autoShare.isOn())
+                    .putBoolean("auto_ports", autoPorts.isOn()).apply();
             status.setText("Settings saved.");
             refreshChecks();
-        }, "Cancel").show();
+            setup.background(true);
+        }, "Cancel");
+        me[0].show();
     }
 
     // ------------------------------------------------------------ searching
@@ -398,7 +435,7 @@ public class MainActivity extends Activity {
         }
         final Games.Sys sys = Games.SYSTEMS.get((String) g.get("system"));
         final String rom = (String) g.get("rom");
-        final Plan.Offer offer = Plan.offer(sys, retroArchPackage() != null, !rom.isEmpty(), prefs.getBoolean("can_host", false));
+        final Plan.Offer offer = Plan.offer(sys, retroArchPackage() != null, !rom.isEmpty(), setup.canHostNative());
         final String key = Games.key(sys.id, (String) g.get("name"));
         final MatchClient mc = new MatchClient();
         running = mc;
@@ -503,6 +540,14 @@ public class MainActivity extends Activity {
     }
 
     // ------------------------------------------------------------ RetroArch
+    static boolean retroArchInstalled(android.content.Context c) {
+        for (String pkg : RETROARCH_PACKAGES) {
+            try { c.getPackageManager().getPackageInfo(pkg, 0); return true; }
+            catch (PackageManager.NameNotFoundException ignored) { }
+        }
+        return false;
+    }
+
     private String retroArchPackage() {
         for (String pkg : RETROARCH_PACKAGES) {
             try {

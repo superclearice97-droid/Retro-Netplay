@@ -2,6 +2,8 @@ name: Build Android APK
 on:
   push:
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -20,3 +22,11 @@ jobs:
         with:
           name: NetplayMatchmaker-APK
           path: android/app/build/outputs/apk/debug/app-debug.apk
+      - name: Publish as the "latest" release
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk Retro-Netplay.apk
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest Retro-Netplay.apk --title "Retro-Netplay test build" --notes "Early test build (debug-signed). Install on Android and open it. Built from commit ${GITHUB_SHA::7}." --prerelease

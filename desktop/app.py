@@ -687,6 +687,10 @@ def run_gui():
     root.geometry("500x860")
     root.minsize(500, 780)
     fam = ink.apply_theme(root)
+    try:
+        root.iconphoto(True, tk.PhotoImage(file=str(HERE / "icon-256.png")))
+    except tk.TclError:
+        pass
     msgs = queue.Queue()
     engine = Engine(lambda: cfg, lambda state, msg, clip=None: msgs.put((state, msg, clip)))
     pad = Pad(lambda: cfg, engine.toggle, lambda t: msgs.put(("note", t, None)))

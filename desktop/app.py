@@ -283,38 +283,33 @@ def checklist(cfg, g, ncontrollers=None):
 _own_cache = {}
 
 
+def stream_doctor():
+    """-> (ok, full report text). Asks the computer's own Python (which has GStreamer) to check streaming."""
+    if platform.system() != "Linux":
+        return False, "Hosting a built-in stream works from Linux only for now. You can still join a friend's stream."
+    py = runtime.host_python()
+    if not py:
+        return False, "Hosting a stream needs Python 3 and GStreamer on this computer. You can still join a friend's stream."
+    try:
+        r = subprocess.run([py, str(runtime.host_script()), "--doctor"], capture_output=True, text=True, timeout=25)
+        return r.returncode == 0, (r.stdout or r.stderr or "").strip()
+    except (OSError, subprocess.SubprocessError) as e:
+        return False, f"Couldn't check streaming tools ({e})"
+
+
 def own_host_ready(refresh=False):
     """-> (ok, note). Can THIS computer host the built-in stream? (Linux + GStreamer + encoder + virtual pad)"""
     if refresh or "v" not in _own_cache:
-        if platform.system() != "Linux":
-            _own_cache["v"] = (False, "Built-in streaming can host from Linux only for now. You can still join a friend's stream.")
-        elif runtime.FROZEN:
-            # the download can't carry GStreamer: ask the computer's own Python, which runs the stream host
-            py = runtime.host_python()
-            doctor = f"python3 \"{runtime.host_script()}\" --doctor"
-            if not py:
-                _own_cache["v"] = (False, "Hosting a stream needs Python 3 and GStreamer on this computer. You can still join streams.")
-            else:
-                try:
-                    r = subprocess.run([py, str(runtime.host_script()), "--doctor"], capture_output=True, text=True, timeout=20)
-                    _own_cache["v"] = ((True, "Built-in streaming ready (you can host)") if r.returncode == 0 else
-                                       (False, "Some streaming parts are missing. To see what, run: " + doctor))
-                except (OSError, subprocess.SubprocessError) as e:
-                    _own_cache["v"] = (False, f"Couldn't check streaming tools ({e})")
+        ok, report = stream_doctor()
+        if ok:
+            _own_cache["v"] = (True, "Built-in streaming ready (you can host)")
         else:
-            try:
-                import stream_host
-                els = stream_host.available_elements()
-                if els is None:
-                    _own_cache["v"] = (False, "Streaming tools aren't installed. Run: python3 stream_host.py --doctor")
-                elif "webrtcbin" not in els or stream_host.pick_encoder(els)[0] is None:
-                    _own_cache["v"] = (False, "Some streaming parts are missing. Run: python3 stream_host.py --doctor")
-                elif stream_host.uinput_pad.uinput_problem():
-                    _own_cache["v"] = (False, "Virtual controller not allowed yet. Run: python3 stream_host.py --doctor")
-                else:
-                    _own_cache["v"] = (True, "Built-in streaming ready (you can host)")
-            except Exception as e:  # never let a check crash the window
-                _own_cache["v"] = (False, f"Couldn't check streaming tools ({e})")
+            first = next((l[4:].strip() for l in report.splitlines() if l.startswith("[X")), "")
+            if not first:
+                _own_cache["v"] = (False, report.splitlines()[0] if report else "Built-in streaming isn't ready.")
+            else:
+                _own_cache["v"] = (False, f"Hosting PS2/PS3 streams: {first.rstrip('.')}. Joining a friend's stream "
+                                          "works without it. Settings > Streaming check shows how to fix it.")
     return _own_cache["v"]
 
 
@@ -879,8 +874,8 @@ def run_gui():
 
     root = tk.Tk(className="Retro-Netplay")
     root.title("Retro-Netplay")
-    root.geometry("500x860")
-    root.minsize(500, 780)
+    root.geometry("580x940")
+    root.minsize(560, 820)
     fam = ink.apply_theme(root)
     try:
         root.iconphoto(True, tk.PhotoImage(file=str(HERE / "icon-256.png")))
@@ -894,11 +889,11 @@ def run_gui():
         start_local_server(int(cfg["server_port"]), lambda t: msgs.put(("idle", t, None)))
 
     # ---- hero: ink controller with four live heat squares (emulator, game, online, controllers)
-    HW, HH = 500, 250
+    HW, HH = 580, 250
     hero = tk.Canvas(root, width=HW, height=HH, bg=ink.PAPER, highlightthickness=0)
     hero.pack(fill="x")
     ink.draw_hero(hero, HW, HH, fam)
-    spots = [(0.19, 0.34, 3, "Emulator"), (0.80, 0.24, 3, "Game"), (0.77, 0.70, 4, "Online"), (0.23, 0.78, 3, "Controllers")]
+    spots = [(0.14, 0.34, 2, "Emulator"), (0.86, 0.26, 2, "Game"), (0.80, 0.72, 3, "Online"), (0.16, 0.78, 2, "Controllers")]
     heats = [ink.Heat(tk, zoom=z, seed=i + 1) for i, (_x, _y, z, _n) in enumerate(spots)]
     sq_state = {"states": [ink.UNKNOWN] * 4, "notes": [""] * 4, "clock": 0.0, "searching": False}
 
@@ -928,18 +923,26 @@ def run_gui():
     frame = ttk.Frame(root, padding=(18, 12, 18, 14))
     frame.pack(fill="both", expand=True)
 
-    ttk.Label(frame, text="GAME", font=(fam, 9, "bold")).pack(anchor="w")
     row = ttk.Frame(frame)
-    row.pack(fill="x", pady=(4, 10))
-    game_var = tk.StringVar()
-    combo = ttk.Combobox(row, textvariable=game_var, state="readonly")
-    combo.pack(side="left", fill="x", expand=True)
-    ttk.Button(row, text="Game folders...", command=lambda: open_wizard(only=0)).pack(side="left", padx=(6, 0))
-    ttk.Button(row, text="Add one...", command=lambda: add_game()).pack(side="left", padx=(6, 0))
+    row.pack(fill="x")
+    games_lbl = ttk.Label(row, text="YOUR GAMES", font=(fam, 9, "bold"))
+    games_lbl.pack(side="left", anchor="s")
+    ttk.Button(row, text="Add one...", command=lambda: add_game()).pack(side="right")
+    ttk.Button(row, text="Game folders...", command=lambda: open_wizard(only=0)).pack(side="right", padx=(0, 6))
+    lb_row = ttk.Frame(frame)
+    lb_row.pack(fill="x", pady=(6, 10))
+    games_lb = tk.Listbox(lb_row, height=6, font=(fam, 11), activestyle="none", exportselection=False,
+                          bg="#efeeea", fg=ink.INK, relief="solid", borderwidth=1, highlightthickness=2,
+                          highlightcolor=ink.INK, highlightbackground=ink.PAPER,
+                          selectbackground=ink.INK, selectforeground=ink.PAPER)
+    games_sb = ttk.Scrollbar(lb_row, orient="vertical", command=games_lb.yview)
+    games_lb.config(yscrollcommand=games_sb.set)
+    games_lb.pack(side="left", fill="x", expand=True)
+    games_sb.pack(side="left", fill="y")
 
     go_btn = ink.InkButton(tk, frame, "Play", "play", lambda: engine.play_game(), fam)
     go_btn.pack(fill="x")
-    status = ttk.Label(frame, text="Ready.", wraplength=460, justify="left")
+    status = ttk.Label(frame, text="Ready.", wraplength=530, justify="left")
     status.pack(anchor="w", pady=(10, 4))
     link_row = ttk.Frame(frame)
     link_row.pack(fill="x")
@@ -947,13 +950,15 @@ def run_gui():
     ttk.Entry(link_row, textvariable=link_var, state="readonly").pack(side="left", fill="x", expand=True)
     ttk.Button(link_row, text="Copy link", command=lambda: copy_link()).pack(side="left", padx=(6, 0))
     ttk.Button(link_row, text="Post now", command=lambda: engine.announce_now()).pack(side="left", padx=(6, 0))
-    hint = ttk.Label(frame, text="", foreground=ink.SOFT, wraplength=460, justify="left")
+    hint = ttk.Label(frame, text="", foreground=ink.SOFT, wraplength=530, justify="left")
     hint.pack(anchor="w", pady=(0, 8))
 
     ttk.Label(frame, text="SETUP CHECK", font=(fam, 9, "bold")).pack(anchor="w")
     checks = ttk.Frame(frame)
     checks.pack(fill="x", pady=(4, 8))
 
+    hot_row = ttk.Frame(frame)
+    hot_row.pack(fill="x", side="bottom", pady=(8, 0))
     bottom = ttk.Frame(frame)
     bottom.pack(fill="x", side="bottom")
     bottom2 = ttk.Frame(frame)
@@ -963,35 +968,42 @@ def run_gui():
     ttk.Button(bottom2, text="Join with a link...", command=lambda: join_with_link()).pack(side="left", padx=(6, 0))
     ttk.Button(bottom, text="Settings...", command=lambda: open_settings()).pack(side="left")
     ttk.Button(bottom, text="Controllers...", command=lambda: open_controllers()).pack(side="left", padx=(6, 0))
-    hot_lbl = ttk.Label(bottom, text="")
-    hot_lbl.pack(side="right")
-    ttk.Button(bottom, text="Set controller hotkey", command=lambda: set_hotkey()).pack(side="right", padx=6)
+    ttk.Button(bottom, text="Set controller hotkey", command=lambda: set_hotkey()).pack(side="left", padx=(6, 0))
+    hot_lbl = ttk.Label(hot_row, text="", foreground=ink.SOFT)
+    hot_lbl.pack(side="left")
 
     def current():
         gs = cfg["games"]
         return gs[min(cfg["last_game"], len(gs) - 1)] if gs else None
 
     def refresh():
-        names = [f"{g['name']}  ({SYSTEMS[g['system']]['label']})" for g in cfg["games"]]
-        combo["values"] = names
-        if names:
-            cfg["last_game"] = min(cfg["last_game"], len(names) - 1)
-            combo.current(cfg["last_game"])
+        top = games_lb.yview()[0]
+        games_lb.delete(0, "end")
+        for g in cfg["games"]:
+            games_lb.insert("end", f"  {g['name']}   ·   {SYSTEMS[g['system']]['label']}")
+        n = len(cfg["games"])
+        games_lbl.config(text=f"YOUR GAMES  ·  {n}" if n else "YOUR GAMES")
+        if n:
+            cfg["last_game"] = max(0, min(cfg["last_game"], n - 1))
+            games_lb.selection_clear(0, "end")
+            games_lb.selection_set(cfg["last_game"])
+            games_lb.yview_moveto(top)
+            games_lb.see(cfg["last_game"])
         else:
-            game_var.set("")
+            games_lb.insert("end", "  No games yet: click Game folders... and pick where your games are.")
         for w in checks.winfo_children():
             w.destroy()
         g = current()
         if g is None:
-            ttk.Label(checks, text="Click 'Add game...' and choose your game file.").pack(anchor="w")
+            ttk.Label(checks, text="Click Game folders... and pick the folders where your games are.").pack(anchor="w")
         else:
             for ok, text in checklist(cfg, g, len(pad.names)):
                 mark, tone = {True: ("OK", 0.30), False: ("FIX", 0.86), None: ("TIP", 0.62)}[ok]
                 r = ttk.Frame(checks)
                 r.pack(fill="x", anchor="w", pady=1)
                 tk.Label(r, text=mark, bg=ink.spectrum(tone), fg=ink.INK, width=4, font=(fam, 9, "bold")).pack(side="left", padx=(0, 8))
-                ttk.Label(r, text=text, wraplength=400, justify="left").pack(side="left")
-            hint.config(text=f"Your opponent must add this game with the exact name \"{g['name']}\".")
+                ttk.Label(r, text=text, wraplength=470, justify="left").pack(side="left")
+            hint.config(text="Double-click a game (or select it and press Play) to start it and join the queue.")
         update_squares(g)
         hot_lbl.config(text="Hotkey: buttons " + " + ".join(str(b) for b in cfg["hotkey"]) + f", hold {cfg['hold']:g}s")
         save_cfg(cfg)
@@ -1017,9 +1029,18 @@ def run_gui():
         draw_squares()
 
     def on_pick(_e=None):
-        cfg["last_game"] = combo.current()
-        refresh()
-    combo.bind("<<ComboboxSelected>>", on_pick)
+        sel = games_lb.curselection()
+        if sel and sel[0] < len(cfg["games"]) and sel[0] != cfg["last_game"]:
+            cfg["last_game"] = sel[0]
+            refresh()
+    games_lb.bind("<<ListboxSelect>>", on_pick)
+
+    def play_selected(_e=None):
+        on_pick()
+        if cfg["games"] and engine.state == "idle":
+            engine.play_game()
+    games_lb.bind("<Double-Button-1>", play_selected)
+    games_lb.bind("<Return>", play_selected)
 
     def ask_system(exts_name, options):
         win = tk.Toplevel(root)
@@ -1084,7 +1105,7 @@ def run_gui():
         def field(label, key, store, browse=False, folder=False):
             r = ttk.Frame(body)
             r.pack(fill="x", pady=3)
-            ttk.Label(r, text=label, width=18).pack(side="left")
+            ttk.Label(r, text=label, width=22).pack(side="left")
             v = tk.StringVar(value=str(store.get(key, "")))
             vars_[(id(store), key)] = (store, key, v)
             ttk.Entry(r, textvariable=v, width=34).pack(side="left", fill="x", expand=True)
@@ -1134,7 +1155,28 @@ def run_gui():
         btns.pack(fill="x", pady=(8, 0))
         ttk.Button(btns, text="Auto-detect emulators", command=lambda: (autodetect(cfg), win.destroy(), refresh(), open_settings())).pack(side="left")
         ttk.Button(btns, text="Run setup again", command=lambda: (win.destroy(), open_wizard())).pack(side="left", padx=(6, 0))
+        ttk.Button(btns, text="Streaming check", command=lambda: show_stream_check()).pack(side="left", padx=(6, 0))
         ttk.Button(btns, text="Save", command=save).pack(side="right")
+
+    def show_stream_check():
+        win = tk.Toplevel(root)
+        win.title("Streaming check")
+        win.transient(root)
+        body = ttk.Frame(win, padding=12)
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, wraplength=560, justify="left", text=(
+            "Hosting a PS2/PS3 stream for a friend uses GStreamer from your computer. Lines marked [X] need the "
+            "package shown; copy the install command into a terminal. Joining someone else's stream needs none of this.")
+                  ).pack(anchor="w")
+        txt = tk.Text(body, width=86, height=16, font=(fam, 10), wrap="word", bg="#efeeea", fg=ink.INK, relief="solid", borderwidth=1)
+        txt.pack(fill="both", expand=True, pady=(8, 8))
+        txt.insert("end", "Checking...")
+        def work():
+            ok, report = stream_doctor()
+            own_host_ready(refresh=True)
+            msgs.put(("call", None, lambda: (txt.delete("1.0", "end"), txt.insert("end", ("All set: you can host.\n\n" if ok else "") + report), refresh())))
+        threading.Thread(target=work, daemon=True).start()
+        ttk.Button(body, text="Close", command=win.destroy).pack(side="right")
 
     def show_manual():
         win = tk.Toplevel(root)
@@ -1265,7 +1307,7 @@ def run_gui():
                            command=lambda i=i: (controls.copy_binds(cfg["slots"], clip["i"], i), save_cfg(cfg), draw())).pack(side="left", padx=(4, 0))
                 if on:
                     here = controls.ready(slots, i, len(pad.names))
-                    tk.Label(r, text="ready" if here else "waiting...", fg="#1a8a3a" if here else "#b26a00", width=9).pack(side="left")
+                    tk.Label(r, text="ready" if here else "waiting...", fg="#1a8a3a" if here else "#b26a00", width=11, anchor="w").pack(side="left", padx=(6, 0))
                     if sl["binds"]:
                         ttk.Label(r, text="custom").pack(side="left")
             note = "Copied Player %d's layout. Click Paste on the player to give it to." % (clip["i"] + 1) if clip["i"] is not None else \

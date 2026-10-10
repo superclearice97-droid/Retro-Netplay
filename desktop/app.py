@@ -1,0 +1,1124 @@
+"""Netplay Matchmaker: one small window to find an opponent for retro games.
+
+Press the big button (or hold your controller hotkey). The app looks for an
+opponent two ways at once: the emulator's own netplay (rollback) and a
+Parsec-style stream. Whichever finds someone first wins; the other is dropped.
+"""
+import asyncio
+import json
+import os
+import platform
+import queue
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import threading
+import time
+import webbrowser
+from pathlib import Path
+
+import controls
+import invites
+
+HERE = Path(__file__).resolve().parent
+CONFIG_PATH = Path.home() / ".netplay-matchmaker" / "config.json"
+IS_WIN = platform.system() == "Windows"
+LIB_EXT = ".dll" if IS_WIN else (".dylib" if sys.platform == "darwin" else ".so")
+NATIVE_GUEST_DELAY = 6  # seconds the guest waits so the host's emulator is listening first
+
+# native=True means the emulator has netplay we can start. Dolphin's must be clicked through by hand.
+SYSTEMS = {
+    "gba":       {"label": "Game Boy Advance", "emu": "retroarch", "core": "mgba",         "core_name": "mGBA",         "native": True,  "exts": [".gba"]},
+    "ps1":       {"label": "PlayStation 1",    "emu": "retroarch", "core": "pcsx_rearmed", "core_name": "PCSX ReARMed", "native": True,  "exts": [".cue", ".pbp", ".m3u", ".chd"]},
+    "dreamcast": {"label": "Dreamcast",        "emu": "retroarch", "core": "flycast",      "core_name": "Flycast",      "native": True,  "exts": [".gdi", ".cdi", ".chd"]},
+    "gamecube":  {"label": "GameCube / Wii",   "emu": "dolphin",                                                          "native": True,  "exts": [".gcm", ".rvz", ".gcz", ".wbfs", ".iso"]},
+    "ps2":       {"label": "PlayStation 2",    "emu": "pcsx2",                                                            "native": False, "exts": [".iso", ".chd", ".cso", ".bin"]},
+    "ps3":       {"label": "PlayStation 3",    "emu": "rpcs3",                                                            "native": False, "exts": [".bin", ".iso"]},
+}
+
+# label, program names on PATH, glob patterns (relative to common folders)
+EMUS = {
+    "retroarch": ("RetroArch", ["retroarch"], ["RetroArch*/retroarch.exe", "RetroArch*/RetroArch.app"]),
+    "dolphin":   ("Dolphin",   ["dolphin-emu"], ["Dolphin*/Dolphin.exe", "Dolphin-x64/Dolphin.exe"]),
+    "pcsx2":     ("PCSX2",     ["pcsx2-qt", "pcsx2"], ["PCSX2*/pcsx2-qt.exe", "PCSX2*/pcsx2.exe"]),
+    "rpcs3":     ("RPCS3",     ["rpcs3"], ["rpcs3*/rpcs3.exe", "RPCS3*/rpcs3.exe"]),
+}
+
+MANUAL = """HOW TO SET UP CONTROLLERS FOR 2 PLAYERS
+
+1. Connect both controllers BEFORE you open a game.
+   - USB: plug each one into the PC.
+   - Bluetooth: Windows Settings > Bluetooth & devices > Add device. Put the
+     controller in pairing mode (usually hold its pair or share button until the
+     light flashes) and pick it from the list.
+
+2. Check that your PC sees both.
+   Press Start, type "Set up USB game controllers" and open it. You should see
+   two controllers. Select one and click Properties to test its buttons.
+
+3. Set them up in this app (click "Controllers..." on the main window).
+   - Player 1 and Player 2 are always on. Leave them on "Auto", or pick which
+     controller belongs to which player.
+   - Click "Map..." for a player and press each button when asked. It takes
+     about 30 seconds. If the controller already works, you can skip this and
+     the emulator's own detection is used.
+
+4. More than two people?
+   Tick Player 3 and Player 4. Map one controller, click "Copy" on it, then
+   "Paste" on the others, or use "Copy Player 1 to everyone".
+
+5. Not RetroArch? (Dolphin, PCSX2, RPCS3)
+   Those emulators keep their own controller settings, so set each player's
+   controller inside the emulator. Make sure Port 1 and Port 2 use DIFFERENT
+   controllers.
+
+6. Something is still wrong?
+   Close everything, unplug all controllers, plug Player 1's in first and then
+   Player 2's, and start the app again.
+"""
+
+
+DEFAULT_CFG = {
+    "server_host": "127.0.0.1", "server_port": 7777, "run_server": False,
+    "parsec_peer_id": "", "stream_backend": "own", "paths": {}, "games": [], "last_game": 0,
+    "hotkey": [6, 7], "hold": 1.0,
+    "slots": controls.default_slots(), "controller_check_done": False,
+}
+invites.fill_defaults(DEFAULT_CFG)
+
+
+# ----------------------------------------------------------------- config / detection
+def load_cfg():
+    cfg = json.loads(json.dumps(DEFAULT_CFG))
+    try:
+        cfg.update(json.loads(CONFIG_PATH.read_text()))
+    except (OSError, ValueError):
+        pass
+    cfg["slots"] = controls.normalize(cfg["slots"])
+    invites.fill_defaults(cfg)
+    return cfg
+
+
+def save_cfg(cfg):
+    try:
+        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        CONFIG_PATH.write_text(json.dumps(cfg, indent=2))
+        try:
+            os.chmod(CONFIG_PATH, 0o600)  # holds webhook/bot secrets: keep it private
+        except OSError:
+            pass
+    except OSError:
+        pass
+
+
+FLATPAK = {"retroarch": "org.libretro.RetroArch", "dolphin": "org.DolphinEmu.dolphin-emu",
+           "pcsx2": "net.pcsx2.PCSX2", "rpcs3": "net.rpcs3.RPCS3"}
+
+
+def emu_argv(exe):
+    """A path to a program, or a command such as 'flatpak run org.libretro.RetroArch'."""
+    if not exe or Path(exe).exists():
+        return [exe]
+    try:
+        return shlex.split(exe)
+    except ValueError:
+        return [exe]
+
+
+def emu_ok(exe):
+    argv = emu_argv(exe)
+    return bool(exe) and (Path(argv[0]).exists() or bool(shutil.which(argv[0])))
+
+
+def find_flatpak(key):
+    if IS_WIN or not shutil.which("flatpak"):
+        return ""
+    try:
+        r = subprocess.run(["flatpak", "info", FLATPAK[key]], capture_output=True, timeout=6)
+        return f"flatpak run {FLATPAK[key]}" if r.returncode == 0 else ""
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def find_emulator(key):
+    _, names, globs = EMUS[key]
+    for n in names:
+        p = shutil.which(n)
+        if p:
+            return p
+    roots = [Path.home(), Path.home() / "Downloads", Path.home() / "Desktop"]
+    if IS_WIN:
+        for env in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA", "APPDATA"):
+            if os.environ.get(env):
+                roots.append(Path(os.environ[env]))
+        roots += [Path("C:/"), Path("D:/")]
+    else:
+        roots += [Path("/opt"), Path("/Applications")]
+    fp = find_flatpak(key)
+    if fp:
+        return fp
+    for r in roots:
+        for g in globs:
+            for pat in (g, "*/" + g):
+                try:
+                    hit = next(iter(sorted(r.glob(pat))), None)
+                except OSError:
+                    hit = None
+                if hit:
+                    return str(hit)
+    return ""
+
+
+def autodetect(cfg):
+    for key in EMUS:
+        if not emu_ok(cfg["paths"].get(key, "")):
+            cfg["paths"][key] = find_emulator(key)
+
+
+def core_dirs(cfg):
+    dirs = []
+    if cfg["paths"].get("cores"):
+        dirs.append(Path(cfg["paths"]["cores"]))
+    ra = cfg["paths"].get("retroarch")
+    if ra:
+        dirs.append(Path(ra).parent / "cores")
+    dirs += [Path.home() / ".config/retroarch/cores",
+             Path.home() / ".var/app/org.libretro.RetroArch/config/retroarch/cores", Path("/usr/lib/libretro"),
+             Path("/usr/lib64/libretro"), Path("/usr/lib/x86_64-linux-gnu/libretro")]
+    if IS_WIN and os.environ.get("APPDATA"):
+        dirs.append(Path(os.environ["APPDATA"]) / "RetroArch/cores")
+    return dirs
+
+
+def find_core(cfg, core):
+    for d in core_dirs(cfg):
+        p = d / f"{core}_libretro{LIB_EXT}"
+        if p.exists():
+            return str(p)
+    return ""
+
+
+def slug(name):
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+
+
+def game_key(g):
+    return f"{g['system']}:{slug(g['name'])}"
+
+
+def checklist(cfg, g, ncontrollers=None):
+    """[(status, text)] where status is True (ok), False (blocking), None (heads-up)."""
+    s = SYSTEMS[g["system"]]
+    emu_label = EMUS[s["emu"]][0]
+    items = []
+    exe = cfg["paths"].get(s["emu"], "")
+    items.append((emu_ok(exe), f"{emu_label} found" if emu_ok(exe) else f"{emu_label} not found. Open Settings and pick it."))
+    if s.get("core"):
+        ok = bool(find_core(cfg, s["core"]))
+        items.append((ok, f"{s['core_name']} core installed" if ok else
+                      f"{s['core_name']} core missing. In RetroArch: Load Core > Download a Core > {s['core_name']}."))
+    items.append((Path(g["rom"]).exists(), "Game file found" if Path(g["rom"]).exists() else "Game file moved or deleted. Remove and re-add it."))
+    stream_on, can_host, _ = stream_offer(cfg)
+    own = cfg.get("stream_backend", "own") == "own"
+    if s["native"]:
+        items.append((True, "Rollback netplay available" + (" (you click through Dolphin's NetPlay menu)" if s["emu"] == "dolphin" else "")))
+        if own:
+            ok, note = own_host_ready()
+            items.append((True if ok else None, ("Streaming backup on. " if ok else "Optional streaming backup: ") + note))
+        else:
+            items.append((True if stream_on else None, "Parsec backup on" if stream_on else "Parsec ID not set. Optional backup, add it in Settings."))
+    elif own:
+        ok, note = own_host_ready()
+        # Not being able to host is fine: you can still join someone else's stream.
+        items.append((True if ok else None, note))
+    else:
+        items.append((stream_on, "Parsec streaming on" if stream_on else
+                      f"{s['label']} has no netplay, so it needs your Parsec ID in Settings."))
+    if ncontrollers is not None:
+        if ncontrollers >= 2:
+            items.append((True, f"{ncontrollers} controllers detected (Player 1 and Player 2 ready)"))
+        elif ncontrollers == 1:
+            items.append((None, "1 controller detected. Player 2 stays open: a friend can plug in or turn on a controller any time."))
+        else:
+            items.append((None, "No controller detected. Plug one in, or set keyboard keys inside the emulator."))
+    return items
+
+
+_own_cache = {}
+
+
+def own_host_ready(refresh=False):
+    """-> (ok, note). Can THIS computer host the built-in stream? (Linux + GStreamer + encoder + virtual pad)"""
+    if refresh or "v" not in _own_cache:
+        if platform.system() != "Linux":
+            _own_cache["v"] = (False, "Built-in streaming can host from Linux only for now. You can still join a friend's stream.")
+        else:
+            try:
+                import stream_host
+                els = stream_host.available_elements()
+                if els is None:
+                    _own_cache["v"] = (False, "Streaming tools aren't installed. Run: python3 stream_host.py --doctor")
+                elif "webrtcbin" not in els or stream_host.pick_encoder(els)[0] is None:
+                    _own_cache["v"] = (False, "Some streaming parts are missing. Run: python3 stream_host.py --doctor")
+                elif stream_host.uinput_pad.uinput_problem():
+                    _own_cache["v"] = (False, "Virtual controller not allowed yet. Run: python3 stream_host.py --doctor")
+                else:
+                    _own_cache["v"] = (True, "Built-in streaming ready (you can host)")
+            except Exception as e:  # never let a check crash the window
+                _own_cache["v"] = (False, f"Couldn't check streaming tools ({e})")
+    return _own_cache["v"]
+
+
+def stream_offer(cfg):
+    """-> (lane_enabled, can_host, info) for the stream lane under the chosen backend."""
+    if cfg.get("stream_backend", "own") == "own":
+        return True, own_host_ready()[0], {"backend": "own"}
+    pid = cfg["parsec_peer_id"].strip()
+    return bool(pid), True, {"peer_id": pid, "backend": "parsec"}
+
+
+def readiness(cfg, g):
+    """-> (lanes, first_problem)"""
+    items = checklist(cfg, g)
+    for ok, text in items:
+        if ok is False:
+            return [], text
+    s = SYSTEMS[g["system"]]
+    lanes = (["native"] if s["native"] else []) + (["stream"] if stream_offer(cfg)[0] else [])
+    return lanes, ""
+
+
+def write_ra_config(cfg):
+    path = CONFIG_PATH.parent / "retroarch-players.cfg"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(controls.retroarch_config(cfg["slots"]))
+        return str(path)
+    except OSError:
+        return ""
+
+
+def build_cmd(cfg, g, lane, role, peer):
+    """-> ('link', url) or ('run', [argv...])"""
+    s = SYSTEMS[g["system"]]
+    exe, rom = cfg["paths"][s["emu"]], g["rom"]
+    if lane == "stream" and role == "guest":
+        return "link", f"parsec://peer_id={peer.get('peer_id', '')}"
+    kind, argv = _build(cfg, g, s, exe, rom, lane, role, peer)
+    return kind, emu_argv(exe) + argv[1:]
+
+
+def _build(cfg, g, s, exe, rom, lane, role, peer):
+    if s["emu"] == "retroarch":
+        core = find_core(cfg, s["core"])
+        extra = ["--appendconfig", p] if (p := write_ra_config(cfg)) else []
+        if lane == "native":
+            return "run", [exe, "-L", core, rom] + extra + (["--host"] if role == "host" else ["--connect", peer.get("ip", "")])
+        return "run", [exe, "-f", "-L", core, rom] + extra
+    if s["emu"] == "dolphin":
+        return "run", [exe, "-b", "-e", rom] if lane == "native" else [exe, "-e", rom]
+    if s["emu"] == "pcsx2":
+        return "run", [exe, "-batch", "-fullscreen", "--", rom]
+    return "run", [exe, "--no-gui", rom]  # rpcs3
+
+
+# ----------------------------------------------------------------- matchmaking engine (no GUI)
+class Engine:
+    """Search -> match -> launch. emit(state, message, clip=None) reports progress."""
+
+    def __init__(self, get_cfg, emit):
+        self.get_cfg, self.emit = get_cfg, emit
+        self.state, self.task, self.proc = "idle", None, None
+        self.pending_join, self.last_invite = None, None
+        self.stream_proc, self.mm = None, ("127.0.0.1", 7777)
+        self.loop = asyncio.new_event_loop()
+        threading.Thread(target=self.loop.run_forever, daemon=True).start()
+
+    def set(self, state, msg, clip=None):
+        if state != "searching" and self.last_invite:
+            self.last_invite = None
+            self.emit("link", "", None)  # the invite is used up or cancelled
+        self.state = state
+        self.emit(state, msg, clip)
+
+    def toggle(self):
+        self.loop.call_soon_threadsafe(self._toggle)
+
+    def _toggle(self):
+        if self.state == "idle":
+            self.task = self.loop.create_task(self.run())
+        else:
+            self.stop()
+
+    def stop(self):
+        was = self.state
+        self.state = "idle"
+        if self.task and not self.task.done():
+            self.task.cancel()
+        if self.proc and self.proc.returncode is None:
+            try:
+                self.proc.terminate()
+            except ProcessLookupError:
+                pass
+        self.proc = None
+        if self.stream_proc and self.stream_proc.returncode is None:
+            try:
+                self.stream_proc.terminate()
+            except ProcessLookupError:
+                pass
+        self.stream_proc = None
+        self.set("idle", "Search cancelled." if was == "searching" else "Session ended. Press the button to find a new opponent.")
+
+    def join(self, parsed):
+        self.loop.call_soon_threadsafe(self._join, parsed)
+
+    def _join(self, parsed):
+        if self.state == "idle":
+            self.pending_join = parsed
+            self.task = self.loop.create_task(self.run())
+        else:
+            self.emit(self.state, "Finish or cancel what you're doing first, then open the invite again.", None)
+
+    def announce_now(self):
+        if not self.last_invite:
+            return self.emit(self.state, "Start a search first, then you can post your invite.", None)
+        g, link = self.last_invite
+        threading.Thread(target=self._announce, args=(self.get_cfg(), g, link, True), daemon=True).start()
+
+    def _announce(self, cfg, g, link, force=False):
+        results = invites.announce(cfg, g["name"], link, force=force)
+        save_cfg(cfg)
+        good = [n for n, ok, _ in results if ok]
+        bad = [f"{n}: {note}" for n, ok, note in results if not ok]
+        text = ("Posted your invite to " + ", ".join(good) + ". " if good else "") + "; ".join(bad)
+        prefix = f"Looking for an opponent for {g['name']}... " if self.state == "searching" else ""
+        self.emit(self.state, prefix + text, None)
+
+    def share_invite(self, cfg, g, code):
+        link = invites.build_link(cfg, game_key(g), code)
+        self.last_invite = (g, link)
+        self.emit("link", link, link)  # the window shows it and copies it
+        note = "" if invites.link_is_shareable(cfg) else (
+            " (This link only works on your own network until you set a public address in Invites.)")
+        self.emit("searching", f"Looking for an opponent for {g['name']}... Invite link copied.{note}", None)
+        if cfg["invite"]["auto_announce"] and invites.link_is_shareable(cfg):
+            threading.Thread(target=self._announce, args=(cfg, g, link), daemon=True).start()
+
+    async def run(self):
+        cfg = self.get_cfg()
+        join, self.pending_join = self.pending_join, None
+        games = cfg["games"]
+        if join:
+            g = next((x for x in games if game_key(x) == join["game"]), None)
+            if g is None:
+                guess = join["game"].split(":", 1)[1].replace("-", " ").title()
+                return self.set("idle", f"You don't have this game yet. Use Add game and name it \"{guess}\", "
+                                        "then open the invite again.")
+            host, port, code, only = join["host"], int(join["port"]), join["code"], True
+        else:
+            if not games:
+                return self.set("idle", "Add a game first (Add game button).")
+            g = games[min(cfg["last_game"], len(games) - 1)]
+            inv = cfg["invite"]
+            host, port = cfg["server_host"], int(cfg["server_port"])
+            code, only = (invites.new_code() if inv["enabled"] else ""), not inv["open_to_randoms"]
+        lanes, problem = readiness(cfg, g)
+        if not lanes:
+            return self.set("idle", "Can't start yet: " + problem)
+        self.set("searching", f"{'Joining your friend for' if join else 'Looking for an opponent for'} {g['name']}...")
+        _, stream_host_ok, stream_info = stream_offer(cfg)
+        self.mm = (host, port)
+        request = {
+            "v": 1, "op": "search", "game": game_key(g), "lanes": lanes,
+            "info": {"native": {}, "stream": stream_info},
+            "can_host": {"native": True, "stream": stream_host_ok},
+            "client": f"desktop-{platform.system().lower()}",
+        }
+        if code:
+            request["invite"], request["invite_only"] = code, only
+        writer = None
+        try:
+            reader, writer = await asyncio.wait_for(asyncio.open_connection(host, port), 8)
+            writer.write((json.dumps(request) + "\n").encode())
+            await writer.drain()
+            if code and not join:
+                self.share_invite(cfg, g, code)
+            while True:  # skip keep-alive pings until we're matched
+                line = await reader.readline()
+                if not line:
+                    raise ConnectionError("the matchmaker hung up")
+                msg = json.loads(line)
+                if msg.get("op") == "matched":
+                    match = msg
+                    break
+                if msg.get("op") == "error":
+                    raise ConnectionError(msg.get("msg", "the matchmaker refused the request"))
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            return self.set("idle", f"Couldn't reach the matchmaker at {host}:{port} "
+                                    f"({e or type(e).__name__}). Check the address in Settings" + (" or ask for a new invite." if join else "."))
+        finally:
+            if writer:
+                writer.close()
+        await self.play(cfg, g, match)
+
+    async def play(self, cfg, g, match):
+        lane, role, peer = match["lane"], match["role"], match["peer"]
+        s = SYSTEMS[g["system"]]
+        sess = match.get("session") if isinstance(match.get("session"), dict) else None
+        where = "emulator netplay" if lane == "native" else ("built-in stream" if sess else "Parsec stream")
+        other = peer.get("client", "")
+        friend = "Your friend joined from the invite! " if match.get("via") == "invite" else ""
+        self.set("session", f"{friend}Opponent found via {where}! You are the {role}." + (f" (They're on {other}.)" if other.startswith("android") else ""))
+        if lane == "stream" and sess:
+            return await self.play_own_stream(cfg, g, role, sess, friend)
+        kind, what = build_cmd(cfg, g, lane, role, peer)
+        if kind == "link":
+            pid = peer.get("peer_id", "")
+            webbrowser.open(what)
+            return self.set("session", f"Opening Parsec. If it doesn't connect, join peer ID {pid} in Parsec "
+                                       f"(copied to your clipboard).", clip=pid)
+        if lane == "native" and role == "guest":
+            self.set("session", f"Opponent found! Waiting {NATIVE_GUEST_DELAY}s for the host to start...")
+            await asyncio.sleep(NATIVE_GUEST_DELAY)
+        note = ""
+        if s["emu"] == "dolphin" and lane == "native":
+            note = (" In Dolphin: Tools > NetPlay > Host, pick the game and share the code." if role == "host"
+                    else " In Dolphin: Tools > NetPlay > Connect, and enter the host's code.")
+        self.set("session", f"Starting {EMUS[s['emu']][0]}...{note}")
+        try:
+            self.proc = await asyncio.create_subprocess_exec(*what)
+        except OSError as e:
+            return self.set("idle", f"Couldn't start {EMUS[s['emu']][0]}: {e}")
+        self.set("session", f"Playing {g['name']} ({where}).{note}")
+        await self.proc.wait()
+        if self.state == "session":
+            self.set("idle", "Session ended. Press the button to find a new opponent.")
+
+
+    async def play_own_stream(self, cfg, g, role, sess, friend=""):
+        host, port = self.mm
+        web = f"http://{host}:{port + 1}"
+        if role == "guest":
+            url = web + sess.get("play", "")
+            webbrowser.open(url)
+            return self.set("session", f"{friend}Opening the stream in your browser. Plug in a controller first "
+                                       f"(or use the on-screen / keyboard controls). If nothing opens, go to: {url}", clip=url)
+        s = SYSTEMS[g["system"]]
+        _, what = build_cmd(cfg, g, "stream", "host", {})
+        self.set("session", f"{friend}Starting {EMUS[s['emu']][0]} and the stream...")
+        try:
+            self.proc = await asyncio.create_subprocess_exec(*what)
+        except OSError as e:
+            return self.set("idle", f"Couldn't start {EMUS[s['emu']][0]}: {e}")
+        await asyncio.sleep(NATIVE_GUEST_DELAY)   # give the emulator a moment to open its window
+        cmd = [sys.executable, str(Path(__file__).with_name("stream_host.py")), "--server", web,
+               "--key", sess.get("key", ""), "--slot", "2"]
+        try:
+            self.stream_proc = await asyncio.create_subprocess_exec(*cmd)
+        except OSError as e:
+            return self.set("idle", f"Couldn't start the stream: {e}")
+        self.set("session", f"Streaming {g['name']}. If your desktop asks which screen or window to share, "
+                            "pick the game. Your friend is Player 2.")
+        done, _ = await asyncio.wait({asyncio.ensure_future(self.stream_proc.wait()),
+                                      asyncio.ensure_future(self.proc.wait())}, return_when=asyncio.FIRST_COMPLETED)
+        for p in (self.stream_proc, self.proc):
+            if p and p.returncode is None:
+                try:
+                    p.terminate()
+                except ProcessLookupError:
+                    pass
+        self.stream_proc = None
+        if self.state == "session":
+            self.set("idle", "Session ended. Press the button to find a new opponent.")
+
+
+# ----------------------------------------------------------------- controller hotkey
+class Pad(threading.Thread):
+    """Watches game controllers: the hotkey, plus 'press a button to map it'. Needs pygame."""
+
+    def __init__(self, get_cfg, on_fire, on_note):
+        super().__init__(daemon=True)
+        self.get_cfg, self.on_fire, self.on_note = get_cfg, on_fire, on_note
+        self.capture_cb, self.learn_req, self.names = None, None, []
+
+    def capture(self, cb):
+        self.capture_cb = cb
+
+    def learn(self, device, cb):
+        """Call cb(token) with the next button/d-pad/trigger the player presses on controller `device`."""
+        self.learn_req = {"dev": device, "cb": cb, "phase": "release", "base": []}
+
+    def cancel_learn(self):
+        self.learn_req = None
+
+    @staticmethod
+    def read(j):
+        return {"buttons": {b for b in range(j.get_numbuttons()) if j.get_button(b)},
+                "hats": [j.get_hat(h) for h in range(j.get_numhats())],
+                "axes": [j.get_axis(a) for a in range(j.get_numaxes())]}
+
+    def run(self):
+        try:
+            import pygame
+        except ImportError:
+            return self.on_note("Controllers can't be read (pygame is not installed), so the hotkey and button mapping are off.")
+        os.environ.setdefault("SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS", "1")
+        pygame.init()
+        pygame.joystick.init()
+        pads, held_since, fired, best, cap_start = {}, None, False, set(), 0
+        while True:
+            try:
+                pygame.event.pump()
+                if pygame.joystick.get_count() != len(pads):
+                    pads = {i: pygame.joystick.Joystick(i) for i in range(pygame.joystick.get_count())}
+                    self.names = [j.get_name() for j in pads.values()]
+                    self.on_note(f"{len(pads)} controller(s) connected." if pads else "No controller connected.")
+                states = {i: self.read(j) for i, j in pads.items()}
+                sets = [st["buttons"] for st in states.values()]
+                now = time.time()
+                req = self.learn_req
+                if req:
+                    st = states.get(req["dev"])
+                    if st is not None and req["phase"] == "release":
+                        if controls.is_idle(st):
+                            req["base"], req["phase"] = st["axes"], "press"
+                    elif st is not None:
+                        tok = controls.detect_input(st, req["base"])
+                        if tok:
+                            self.learn_req = None
+                            req["cb"](tok)
+                    held_since = None
+                elif self.capture_cb:
+                    cur = max(sets, key=len, default=set())
+                    cap_start = cap_start or now
+                    if len(cur) > len(best):
+                        best = cur
+                    if (best and not cur) or now - cap_start > 8:
+                        cb, self.capture_cb = self.capture_cb, None
+                        cb(sorted(best) or None)
+                        best, cap_start = set(), 0
+                    held_since = None
+                else:
+                    cfg = self.get_cfg()
+                    combo = set(cfg["hotkey"])
+                    down = any(combo <= x for x in sets)
+                    if down and held_since is None:
+                        held_since, fired = now, False
+                    elif not down:
+                        held_since = None
+                    if held_since and not fired and now - held_since >= cfg["hold"]:
+                        fired = True
+                        self.on_fire()
+            except Exception:
+                pass
+            time.sleep(0.02)
+
+
+# ----------------------------------------------------------------- the window
+def start_local_server(port, note):
+    import server as mm
+
+    def go():
+        try:
+            asyncio.run(mm.main(port))
+        except OSError as e:
+            note(f"Couldn't start the matchmaker on this PC: {e}")
+    threading.Thread(target=go, daemon=True).start()
+
+
+def run_gui():
+    import tkinter as tk
+    from tkinter import filedialog, messagebox, simpledialog, ttk
+
+    cfg = load_cfg()
+    first_run = not CONFIG_PATH.exists()
+    autodetect(cfg)
+    save_cfg(cfg)
+
+    root = tk.Tk()
+    root.title("Netplay Matchmaker")
+    root.geometry("470x600")
+    root.minsize(430, 560)
+    msgs = queue.Queue()
+    engine = Engine(lambda: cfg, lambda state, msg, clip=None: msgs.put((state, msg, clip)))
+    pad = Pad(lambda: cfg, engine.toggle, lambda t: msgs.put(("note", t, None)))
+    pad.start()
+    if cfg["run_server"]:
+        start_local_server(int(cfg["server_port"]), lambda t: msgs.put(("idle", t, None)))
+
+    frame = ttk.Frame(root, padding=14)
+    frame.pack(fill="both", expand=True)
+
+    ttk.Label(frame, text="Pick a game", font=("", 11, "bold")).pack(anchor="w")
+    row = ttk.Frame(frame)
+    row.pack(fill="x", pady=(4, 10))
+    game_var = tk.StringVar()
+    combo = ttk.Combobox(row, textvariable=game_var, state="readonly")
+    combo.pack(side="left", fill="x", expand=True)
+    ttk.Button(row, text="Add game...", command=lambda: add_game()).pack(side="left", padx=(6, 0))
+    ttk.Button(row, text="Remove", command=lambda: remove_game()).pack(side="left", padx=(6, 0))
+
+    go_btn = tk.Button(frame, text="Find an opponent", font=("", 14, "bold"), height=2,
+                       bg="#2d7ff9", fg="white", activebackground="#1f63c9", activeforeground="white",
+                       command=engine.toggle)
+    go_btn.pack(fill="x")
+    status = ttk.Label(frame, text="Ready.", wraplength=420, justify="left")
+    status.pack(anchor="w", pady=(10, 4))
+    link_row = ttk.Frame(frame)
+    link_row.pack(fill="x")
+    link_var = tk.StringVar()
+    ttk.Entry(link_row, textvariable=link_var, state="readonly").pack(side="left", fill="x", expand=True)
+    ttk.Button(link_row, text="Copy link", command=lambda: copy_link()).pack(side="left", padx=(6, 0))
+    ttk.Button(link_row, text="Post now", command=lambda: engine.announce_now()).pack(side="left", padx=(6, 0))
+    hint = ttk.Label(frame, text="", foreground="#666", wraplength=420, justify="left")
+    hint.pack(anchor="w", pady=(0, 8))
+
+    ttk.Label(frame, text="Setup check", font=("", 11, "bold")).pack(anchor="w")
+    checks = ttk.Frame(frame)
+    checks.pack(fill="x", pady=(4, 8))
+
+    bottom = ttk.Frame(frame)
+    bottom.pack(fill="x", side="bottom")
+    bottom2 = ttk.Frame(frame)
+    bottom2.pack(fill="x", side="bottom", pady=(0, 6))
+    ttk.Button(bottom2, text="Invites & social...", command=lambda: open_invites()).pack(side="left")
+    ttk.Button(bottom2, text="Join with a link...", command=lambda: join_with_link()).pack(side="left", padx=(6, 0))
+    ttk.Button(bottom, text="Settings...", command=lambda: open_settings()).pack(side="left")
+    ttk.Button(bottom, text="Controllers...", command=lambda: open_controllers()).pack(side="left", padx=(6, 0))
+    hot_lbl = ttk.Label(bottom, text="")
+    hot_lbl.pack(side="right")
+    ttk.Button(bottom, text="Set controller hotkey", command=lambda: set_hotkey()).pack(side="right", padx=6)
+
+    def current():
+        gs = cfg["games"]
+        return gs[min(cfg["last_game"], len(gs) - 1)] if gs else None
+
+    def refresh():
+        names = [f"{g['name']}  ({SYSTEMS[g['system']]['label']})" for g in cfg["games"]]
+        combo["values"] = names
+        if names:
+            cfg["last_game"] = min(cfg["last_game"], len(names) - 1)
+            combo.current(cfg["last_game"])
+        else:
+            game_var.set("")
+        for w in checks.winfo_children():
+            w.destroy()
+        g = current()
+        if g is None:
+            ttk.Label(checks, text="Click 'Add game...' and choose your game file.").pack(anchor="w")
+        else:
+            for ok, text in checklist(cfg, g, len(pad.names)):
+                mark, color = {True: ("OK", "#1a8a3a"), False: ("FIX", "#c62828"), None: ("TIP", "#b26a00")}[ok]
+                r = ttk.Frame(checks)
+                r.pack(fill="x", anchor="w")
+                tk.Label(r, text=mark, fg=color, width=4, font=("", 9, "bold")).pack(side="left")
+                ttk.Label(r, text=text, wraplength=380, justify="left").pack(side="left")
+            hint.config(text=f"Your opponent must add this game with the exact name \"{g['name']}\".")
+        hot_lbl.config(text="Hotkey: buttons " + " + ".join(str(b) for b in cfg["hotkey"]) + f", hold {cfg['hold']:g}s")
+        save_cfg(cfg)
+
+    def on_pick(_e=None):
+        cfg["last_game"] = combo.current()
+        refresh()
+    combo.bind("<<ComboboxSelected>>", on_pick)
+
+    def ask_system(exts_name, options):
+        win = tk.Toplevel(root)
+        win.title("Which system?")
+        win.transient(root)
+        win.grab_set()
+        ttk.Label(win, text=f"What system is {exts_name} for?", padding=10).pack()
+        var = tk.StringVar(value=options[0])
+        for key in options:
+            ttk.Radiobutton(win, text=SYSTEMS[key]["label"], variable=var, value=key).pack(anchor="w", padx=16)
+        out = {}
+        def ok():
+            out["v"] = var.get()
+            win.destroy()
+        ttk.Button(win, text="OK", command=ok).pack(pady=10)
+        root.wait_window(win)
+        return out.get("v")
+
+    def add_game():
+        path = filedialog.askopenfilename(title="Choose your game file")
+        if not path:
+            return
+        ext = Path(path).suffix.lower()
+        options = [k for k, s in SYSTEMS.items() if ext in s["exts"]] or list(SYSTEMS)
+        system = options[0] if len(options) == 1 else ask_system(Path(path).name, options)
+        if not system:
+            return
+        default = re.sub(r"\s*[\(\[].*?[\)\]]", "", Path(path).stem).replace("_", " ").strip()
+        name = simpledialog.askstring(
+            "Game name",
+            "Name this game.\n\nYour opponent has to type the exact same name\nto be matched with you.",
+            initialvalue=default, parent=root)
+        if not name or not name.strip():
+            return
+        cfg["games"].append({"name": name.strip(), "system": system, "rom": path})
+        cfg["last_game"] = len(cfg["games"]) - 1
+        refresh()
+
+    def remove_game():
+        if cfg["games"] and messagebox.askyesno("Remove game", "Remove this game from the list?\n(Your game file is not deleted.)"):
+            del cfg["games"][cfg["last_game"]]
+            cfg["last_game"] = 0
+            refresh()
+
+    def set_hotkey():
+        status.config(text="Hold the controller buttons you want to use together, then let go.")
+        def done(buttons):
+            if buttons:
+                cfg["hotkey"] = buttons
+            msgs.put(("hotkey", "Hotkey saved." if buttons else "No buttons detected. Hotkey unchanged.", None))
+        pad.capture(done)
+
+    def open_settings():
+        win = tk.Toplevel(root)
+        win.title("Settings")
+        win.transient(root)
+        win.grab_set()
+        body = ttk.Frame(win, padding=12)
+        body.pack(fill="both", expand=True)
+        vars_ = {}
+
+        def field(label, key, store, browse=False, folder=False):
+            r = ttk.Frame(body)
+            r.pack(fill="x", pady=3)
+            ttk.Label(r, text=label, width=18).pack(side="left")
+            v = tk.StringVar(value=str(store.get(key, "")))
+            vars_[(id(store), key)] = (store, key, v)
+            ttk.Entry(r, textvariable=v, width=34).pack(side="left", fill="x", expand=True)
+            if browse:
+                def pick():
+                    p = filedialog.askdirectory() if folder else filedialog.askopenfilename()
+                    if p:
+                        v.set(p)
+                ttk.Button(r, text="Browse", command=pick).pack(side="left", padx=(4, 0))
+
+        ttk.Label(body, text="Emulators", font=("", 10, "bold")).pack(anchor="w")
+        for key, (label, _, _) in EMUS.items():
+            field(label, key, cfg["paths"], browse=True)
+        field("RetroArch cores", "cores", cfg["paths"], browse=True, folder=True)
+        ttk.Label(body, text="(cores folder is only needed if the check says a core is missing)",
+                  foreground="#666").pack(anchor="w")
+        ttk.Label(body, text="Online", font=("", 10, "bold")).pack(anchor="w", pady=(10, 0))
+        be = ttk.Frame(body)
+        be.pack(fill="x", pady=3)
+        ttk.Label(be, text="Streaming (PS2/PS3)", width=18).pack(side="left")
+        be_var = tk.StringVar(value="Built-in (recommended)" if cfg.get("stream_backend", "own") == "own" else "Parsec")
+        ttk.Combobox(be, textvariable=be_var, values=["Built-in (recommended)", "Parsec"], state="readonly", width=31).pack(side="left")
+        field("Your Parsec peer ID", "parsec_peer_id", cfg)
+        ttk.Label(body, text="(Parsec ID is only used when Streaming is set to Parsec)", foreground="#666").pack(anchor="w")
+        field("Matchmaker address", "server_host", cfg)
+        field("Matchmaker port", "server_port", cfg)
+        run_var = tk.BooleanVar(value=cfg["run_server"])
+        ttk.Checkbutton(body, text="Run the matchmaker on this PC (only ONE player does this; the other\n"
+                                    "player types this PC's address above)", variable=run_var).pack(anchor="w", pady=6)
+
+        def save():
+            for store, key, v in vars_.values():
+                store[key] = v.get().strip()
+            cfg["run_server"] = run_var.get()
+            cfg["stream_backend"] = "own" if be_var.get().startswith("Built-in") else "parsec"
+            try:
+                cfg["server_port"] = int(cfg["server_port"])
+            except ValueError:
+                cfg["server_port"] = 7777
+            if cfg["run_server"]:
+                cfg["server_host"] = cfg["server_host"] or "127.0.0.1"
+                start_local_server(cfg["server_port"], lambda t: msgs.put(("idle", t, None)))
+            win.destroy()
+            refresh()
+
+        btns = ttk.Frame(body)
+        btns.pack(fill="x", pady=(8, 0))
+        ttk.Button(btns, text="Auto-detect emulators", command=lambda: (autodetect(cfg), win.destroy(), refresh(), open_settings())).pack(side="left")
+        ttk.Button(btns, text="Save", command=save).pack(side="right")
+
+    def show_manual():
+        win = tk.Toplevel(root)
+        win.title("Controller setup manual")
+        txt = tk.Text(win, width=70, height=26, wrap="word", padx=10, pady=10)
+        txt.insert("1.0", MANUAL)
+        txt.config(state="disabled")
+        txt.pack(fill="both", expand=True)
+        bar = ttk.Frame(win, padding=8)
+        bar.pack(fill="x")
+        ttk.Button(bar, text="Open Controllers...", command=lambda: (win.destroy(), open_controllers())).pack(side="left")
+        ttk.Button(bar, text="Close", command=win.destroy).pack(side="right")
+
+    def controller_check(then=None):
+        win = tk.Toplevel(root)
+        win.title("Quick controller check")
+        win.transient(root)
+        win.grab_set()
+        box = ttk.Frame(win, padding=16)
+        box.pack()
+        ttk.Label(box, text="Is your controller setup ready for 2 players?", font=("", 12, "bold")).pack(anchor="w")
+        ttk.Label(box, wraplength=420, justify="left", text=(
+            "Most games here are better with two players. Player 1 and Player 2 are always on, so a "
+            "second person can jump in at any time. Both controllers should be connected before you start.")).pack(anchor="w", pady=8)
+        live = ttk.Label(box, font=("", 10, "bold"))
+        live.pack(anchor="w", pady=(0, 10))
+
+        def tick():
+            if not win.winfo_exists():
+                return
+            n = len(pad.names)
+            live.config(text=f"Controllers detected right now: {n}" + ("  (two found, you're set!)" if n >= 2 else ""))
+            win.after(500, tick)
+        tick()
+
+        def close(manual=False):
+            cfg["controller_check_done"] = True
+            save_cfg(cfg)
+            win.destroy()
+            if manual:
+                show_manual()
+            if then:
+                then()
+        ttk.Button(box, text="Yes, it's ready", command=close).pack(fill="x", pady=2)
+        ttk.Button(box, text="No, show me how to set it up", command=lambda: close(True)).pack(fill="x", pady=2)
+        ttk.Button(box, text="Skip for now", command=close).pack(fill="x", pady=2)
+
+    def map_slot(i, after):
+        dev = controls.device_for(cfg["slots"], i)
+        if dev >= len(pad.names):
+            messagebox.showinfo("No controller", f"Player {i + 1} has no controller connected yet.\n"
+                                "Plug it in or turn it on, then try again.")
+            return
+        win = tk.Toplevel(root)
+        win.title(f"Map Player {i + 1}")
+        win.transient(root)
+        win.grab_set()
+        prompt = tk.StringVar()
+        ttk.Label(win, textvariable=prompt, wraplength=380, justify="left", padding=16, font=("", 11)).pack()
+        new, idx = {}, [0]
+
+        def ask():
+            if idx[0] >= len(controls.ACTIONS):
+                cfg["slots"][i]["binds"] = new or None
+                win.destroy()
+                save_cfg(cfg)
+                return after()
+            _, label = controls.ACTIONS[idx[0]]
+            prompt.set(f"Player {i + 1}: press {label} on controller {dev + 1}.   ({idx[0] + 1} of {len(controls.ACTIONS)})")
+            pad.learn(dev, lambda tok: msgs.put(("call", "", lambda: got(tok))))
+
+        def got(tok):
+            if win.winfo_exists():
+                new[controls.ACTIONS[idx[0]][0]] = tok
+                idx[0] += 1
+                ask()
+
+        def skip():
+            pad.cancel_learn()
+            idx[0] += 1
+            ask()
+
+        def cancel():
+            pad.cancel_learn()
+            win.destroy()
+        bar = ttk.Frame(win, padding=(16, 0, 16, 16))
+        bar.pack(fill="x")
+        ttk.Button(bar, text="Skip this button", command=skip).pack(side="left")
+        ttk.Button(bar, text="Cancel", command=cancel).pack(side="right")
+        ask()
+
+    def open_controllers():
+        win = tk.Toplevel(root)
+        win.title("Controllers")
+        win.transient(root)
+        body = ttk.Frame(win, padding=12)
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, text="Players", font=("", 11, "bold")).pack(anchor="w")
+        ttk.Label(body, wraplength=520, justify="left", text=(
+            "Player 1 and Player 2 are always on, so someone can pick up a controller and join at any time. "
+            "Tick Player 3 or 4 for bigger groups. Map one controller, then Copy and Paste its layout to the rest.")).pack(anchor="w", pady=(0, 8))
+        grid = ttk.Frame(body)
+        grid.pack(fill="x")
+        clip = {"i": None}
+
+        def draw():
+            for w in grid.winfo_children():
+                w.destroy()
+            slots = cfg["slots"]
+            devs = ["Auto"] + [f"Controller {k + 1}: {n}" for k, n in enumerate(pad.names)]
+            for i, sl in enumerate(slots):
+                r = ttk.Frame(grid)
+                r.pack(fill="x", pady=3)
+                if i < controls.ALWAYS_ON:
+                    ttk.Label(r, text=f"Player {i + 1}  (always on)", width=22).pack(side="left")
+                else:
+                    v = tk.BooleanVar(value=sl["enabled"])
+                    ttk.Checkbutton(r, text=f"Player {i + 1}", variable=v, width=20,
+                                    command=lambda i=i, v=v: (controls.set_enabled(cfg["slots"], i, v.get()), save_cfg(cfg), draw())).pack(side="left")
+                cb = ttk.Combobox(r, values=devs, state="readonly", width=26)
+                cb.current(0 if sl["device"] is None else min(sl["device"] + 1, len(devs) - 1))
+                cb.pack(side="left")
+                cb.bind("<<ComboboxSelected>>", lambda e, i=i, cb=cb: (cfg["slots"][i].update(device=None if cb.current() == 0 else cb.current() - 1), save_cfg(cfg), draw()))
+                on = sl["enabled"]
+                ttk.Button(r, text="Map...", command=lambda i=i: map_slot(i, draw)).pack(side="left", padx=(6, 0))
+                ttk.Button(r, text="Copy", command=lambda i=i: (clip.update(i=i), draw())).pack(side="left", padx=(4, 0))
+                ttk.Button(r, text="Paste", state=("normal" if clip["i"] is not None and clip["i"] != i and on else "disabled"),
+                           command=lambda i=i: (controls.copy_binds(cfg["slots"], clip["i"], i), save_cfg(cfg), draw())).pack(side="left", padx=(4, 0))
+                if on:
+                    here = controls.ready(slots, i, len(pad.names))
+                    tk.Label(r, text="ready" if here else "waiting...", fg="#1a8a3a" if here else "#b26a00", width=9).pack(side="left")
+                    if sl["binds"]:
+                        ttk.Label(r, text="custom").pack(side="left")
+            note = "Copied Player %d's layout. Click Paste on the player to give it to." % (clip["i"] + 1) if clip["i"] is not None else \
+                "Layouts that aren't mapped use your emulator's automatic controller detection."
+            ttk.Label(grid, text=note, foreground="#666", wraplength=520, justify="left").pack(anchor="w", pady=(8, 0))
+        draw()
+        bar = ttk.Frame(body)
+        bar.pack(fill="x", pady=(10, 0))
+        ttk.Button(bar, text="Copy Player 1 to everyone", command=lambda: (controls.copy_to_all(cfg["slots"], 0), save_cfg(cfg), draw())).pack(side="left")
+        ttk.Button(bar, text="Reset all layouts", command=lambda: ([sl.update(binds=None) for sl in cfg["slots"]], save_cfg(cfg), draw())).pack(side="left", padx=6)
+        ttk.Button(bar, text="Setup manual", command=show_manual).pack(side="right")
+        seen = [len(pad.names)]
+
+        def watch():  # redraw only when a controller is plugged in or removed
+            if win.winfo_exists():
+                if len(pad.names) != seen[0]:
+                    seen[0] = len(pad.names)
+                    draw()
+                win.after(700, watch)
+        watch()
+
+    def copy_link():
+        if link_var.get():
+            root.clipboard_clear()
+            root.clipboard_append(link_var.get())
+            status.config(text="Invite link copied. Paste it anywhere to invite people.")
+
+    def join_with_link(text=None):
+        text = text or simpledialog.askstring("Join with a link", "Paste the invite link your friend sent:", parent=root)
+        if not text:
+            return
+        parsed = invites.parse_link(text)
+        if not parsed:
+            messagebox.showinfo("Invite link", "That doesn't look like a Netplay Matchmaker invite link.")
+            return
+        engine.join(parsed)
+
+    def open_invites():
+        win = tk.Toplevel(root)
+        win.title("Invites & social")
+        win.transient(root)
+        win.grab_set()
+        body = ttk.Frame(win, padding=12)
+        body.pack(fill="both", expand=True)
+        texts, flags = [], []
+
+        def field(label, store, key, secret=False):
+            r = ttk.Frame(body)
+            r.pack(fill="x", pady=3)
+            ttk.Label(r, text=label, width=26).pack(side="left")
+            v = tk.StringVar(value=str(store.get(key, "")))
+            ttk.Entry(r, textvariable=v, width=34, show="*" if secret else "").pack(side="left", fill="x", expand=True)
+            texts.append((store, key, v))
+
+        def flag(label, store, key):
+            v = tk.BooleanVar(value=bool(store.get(key)))
+            ttk.Checkbutton(body, text=label, variable=v).pack(anchor="w", pady=1)
+            flags.append((store, key, v))
+
+        def note(text):
+            ttk.Label(body, text=text, foreground="#666", wraplength=470, justify="left").pack(anchor="w", pady=(0, 6))
+
+        ttk.Label(body, text="Invite link", font=("", 10, "bold")).pack(anchor="w")
+        flag("Make an invite link when I start searching", cfg["invite"], "enabled")
+        flag("Also let random players match me (untick for friends only)", cfg["invite"], "open_to_randoms")
+        field("Public address for the link", cfg["invite"], "host")
+        note("Friends open the link, so it must use an address they can reach (a domain name or your public IP). "
+             "Anyone with the link can see that address. Leave blank to use the matchmaker address from Settings.")
+        ttk.Label(body, text="Post my invite for me (optional)", font=("", 10, "bold")).pack(anchor="w", pady=(8, 0))
+        note("Connect a place to post. Only your invite link and the message below are ever sent, never your files, "
+             "settings or controllers. The secrets are saved only on this device. Anyone who has them can post as you, "
+             "so don't share them. Apps like X, Instagram and Facebook don't allow this kind of posting: use Copy link instead.")
+        field("Discord webhook address", cfg["social"], "discord_webhook", secret=True)
+        field("Telegram bot token", cfg["social"], "telegram_token", secret=True)
+        field("Telegram chat id", cfg["social"], "telegram_chat")
+        flag("Post automatically when I start searching (off until you tick this)", cfg["invite"], "auto_announce")
+        field("Minutes between posts", cfg["invite"], "cooldown_min")
+        field("Message ({game} and {link})", cfg["invite"], "template")
+
+        def apply():
+            for store, key, v in texts:
+                store[key] = v.get().strip()
+            for store, key, v in flags:
+                store[key] = v.get()
+            try:
+                cfg["invite"]["cooldown_min"] = max(1, int(cfg["invite"]["cooldown_min"]))
+            except (TypeError, ValueError):
+                cfg["invite"]["cooldown_min"] = 15
+            save_cfg(cfg)
+
+        def test_post():
+            apply()
+            sample = invites.build_link(cfg, "test:test-game", invites.new_code())
+            status.config(text="Sending a test post...")
+            def work():
+                res = invites.announce(cfg, "a test game", sample, force=True)
+                save_cfg(cfg)
+                msgs.put(("note", "Test post: " + "; ".join(f"{n}: {'sent' if ok else note_}" for n, ok, note_ in res), None))
+            threading.Thread(target=work, daemon=True).start()
+
+        bar = ttk.Frame(body)
+        bar.pack(fill="x", pady=(10, 0))
+        ttk.Button(bar, text="Send a test post", command=test_post).pack(side="left")
+        ttk.Button(bar, text="Save", command=lambda: (apply(), win.destroy(), refresh())).pack(side="right")
+
+    colors = {"idle": "#2d7ff9", "searching": "#c77700", "session": "#1a8a3a"}
+    labels = {"idle": "Find an opponent", "searching": "Cancel search", "session": "End session"}
+
+    def pump():
+        try:
+            while True:
+                state, text, clip = msgs.get_nowait()
+                if state == "call":
+                    clip()
+                    continue
+                if state == "link":
+                    link_var.set(text)
+                    if text:
+                        root.clipboard_clear()
+                        root.clipboard_append(text)
+                    continue
+                if state in colors:
+                    go_btn.config(text=labels[state], bg=colors[state], activebackground=colors[state])
+                if clip:
+                    root.clipboard_clear()
+                    root.clipboard_append(clip)
+                if state == "hotkey":
+                    refresh()
+                if state == "note":
+                    refresh()
+                    hint.config(text=text)
+                else:
+                    status.config(text=text)
+        except queue.Empty:
+            pass
+        root.after(120, pump)
+
+    refresh()
+    pump()
+    given = [a for a in sys.argv[1:] if a.startswith("netplay://") or "/join?" in a]
+    if given:
+        root.after(800, lambda: join_with_link(given[0]))
+    if not cfg["controller_check_done"]:
+        root.after(300, lambda: controller_check(then=open_settings if first_run else None))
+    elif first_run:
+        root.after(300, open_settings)
+    root.mainloop()
+    save_cfg(cfg)
+
+
+if __name__ == "__main__":
+    run_gui()

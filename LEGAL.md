@@ -60,7 +60,7 @@ These keep Retro-Netplay as private as possible from day one.
 
 ## 7. Release checklist
 
-- [ ] LICENSE (GPL-3.0) and THIRD_PARTY_NOTICES in the repo and in every build
+- [x] LICENSE (GPL-3.0) added; [ ] THIRD_PARTY_NOTICES in the repo and in every build
 - [ ] Source code available for every released binary
 - [ ] No BIOS, firmware or game files anywhere in the repo, builds or downloads
 - [ ] Privacy Policy and Terms of Use published and linked in the app
@@ -113,4 +113,4 @@ Running a public server makes you responsible for it.
 | NOTICE.md | licences, trademarks, warranty |
 | SECURITY.md | how to report vulnerabilities |
 
-**Open decision for the owner:** choose the project's own licence (GPL-3.0 recommended in section 1) and add a `LICENSE` file. Until then the code is all rights reserved and others cannot legally reuse it.
+**Licence:** Retro-Netplay is licensed under GPL-3.0 (see LICENSE). Keep THIRD_PARTY notices current and offer source for every released binary.

@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Android 11+ hides other apps unless we ask to see them. -->
+    <queries>
+        <package android:name="com.retroarch" />
+        <package android:name="com.retroarch.aarch64" />
+        <package android:name="com.retroarch.ra32" />
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="parsec" />
+        </intent>
+    </queries>
+
+    <application
+        android:label="Netplay Matchmaker"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- netplay://join?... links from the invite page -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="netplay" android:host="join" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

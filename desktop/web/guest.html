@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>Netplay stream</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #000; color: #e8e8e8; font: 15px/1.4 system-ui, sans-serif;
+    overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; }
+  video { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+  #msg { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 14px; text-align: center; padding: 24px; background: rgba(0,0,0,.72); z-index: 5; }
+  #msg.hide { display: none; }
+  #msg button { font: inherit; font-weight: 700; padding: 14px 28px; border: 0; border-radius: 10px;
+    background: #2d7ff9; color: #fff; }
+  #hud { position: fixed; top: 6px; left: 6px; z-index: 6; font: 12px/1.35 ui-monospace, monospace; white-space: pre;
+    background: rgba(0,0,0,.6); padding: 6px 8px; border-radius: 6px; display: none; pointer-events: none; }
+  #pill { position: fixed; top: 6px; right: 8px; z-index: 6; font-size: 12px; background: rgba(0,0,0,.5);
+    padding: 3px 10px; border-radius: 99px; }
+  #snd { position: fixed; bottom: 8px; right: 8px; z-index: 7; display: none; font: 13px system-ui; padding: 8px 14px;
+    border: 0; border-radius: 99px; background: #2d7ff9; color: #fff; }
+  #pad { position: fixed; inset: auto 0 0 0; height: 46%; z-index: 4; display: none; }
+  #pad .b { position: absolute; width: 17vmin; height: 17vmin; min-width: 52px; min-height: 52px; border-radius: 50%;
+    background: rgba(255,255,255,.14); border: 2px solid rgba(255,255,255,.35); display: flex; align-items: center;
+    justify-content: center; font-weight: 700; font-size: 16px; }
+  #pad .b.on { background: rgba(45,127,249,.6); }
+  #pad .sm { width: 13vmin; height: 7vmin; border-radius: 99px; font-size: 12px; min-width: 56px; min-height: 30px; }
+</style>
+</head>
+<body>
+<video id="v" autoplay muted playsinline></video>
+<div id="pill">connecting…</div>
+<div id="hud"></div>
+<div id="pad"></div>
+<button id="snd">Tap for sound</button>
+<div id="msg"><div id="mt">Connecting to your friend's game…</div><button id="go" style="display:none">Tap to play</button></div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const KEY = new URLSearchParams(location.search).get("t") || "";
+const video = $("v"), pill = $("pill"), hud = $("hud");
+const state = { host: null, pc: null, pad: null, ctl: null, slot: 0, rtt: null, stats: {}, packets: 0, ended: false, hudOn: false };
+window.__netplay = state;   // handy for tests and for debugging in the browser console
+
+function say(text, button) {
+  $("mt").textContent = text;
+  $("go").style.display = button ? "" : "none";
+  $("msg").classList.toggle("hide", !text);
+}
+function pillText(t) { pill.textContent = t; }
+
+// ------------------------------------------------------------------ signaling (HTTP long-poll)
+async function api(path, opts) {
+  const r = await fetch(path + (path.includes("?") ? "&" : "?") + "t=" + encodeURIComponent(KEY), opts);
+  if (r.status === 404) throw Object.assign(new Error("ended"), { ended: true });
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return r.json();
+}
+const post = (msg) => api("/sig", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(msg) });
+
+async function signalLoop() {
+  const queued = [];
+  while (!state.ended) {
+    let res;
+    try { res = await api("/sig?wait=20"); }
+    catch (e) {
+      if (e.ended) return finish("The stream ended.");
+      await new Promise((r) => setTimeout(r, 800)); continue;
+    }
+    for (const m of res.msgs) {
+      try { await onSignal(m, queued); } catch (e) { console.warn("signal error", e); }
+    }
+    if (res.closed && !res.msgs.length) return finish("The stream ended.");
+  }
+}
+
+async function onSignal(m, queued) {
+  const pc = state.pc;
+  if (m.type === "offer") {
+    await pc.setRemoteDescription({ type: "offer", sdp: m.sdp });
+    for (const c of queued.splice(0)) await pc.addIceCandidate(c).catch(() => {});
+    await pc.setLocalDescription(await pc.createAnswer());
+    await post({ type: "answer", sdp: pc.localDescription.sdp });
+  } else if (m.type === "ice") {
+    const c = { candidate: m.candidate, sdpMLineIndex: m.sdpMLineIndex ?? 0 };
+    if (pc.remoteDescription) await pc.addIceCandidate(c).catch(() => {}); else queued.push(c);
+  } else if (m.type === "bye") {
+    finish("Your friend ended the session.");
+  }
+}
+
+function finish(text) {
+  if (state.ended) return;
+  state.ended = true;
+  try { state.pc && state.pc.close(); } catch (e) {}
+  say(text); pillText("ended");
+}
+
+// ------------------------------------------------------------------ WebRTC
+async function start() {
+  if (!KEY) return say("This link is missing its session code.");
+  let cfg;
+  try { cfg = await api("/cfg"); } catch (e) { return say(e.ended ? "This stream link has ended." : "Couldn't reach the matchmaker."); }
+  const pc = state.pc = new RTCPeerConnection({ iceServers: cfg.iceServers, bundlePolicy: "max-bundle" });
+  pc.onicecandidate = (e) => { if (e.candidate) post({ type: "ice", candidate: e.candidate.candidate, sdpMLineIndex: e.candidate.sdpMLineIndex }).catch(() => {}); };
+  pc.onconnectionstatechange = () => {
+    pillText(pc.connectionState);
+    if (pc.connectionState === "failed") say("Couldn't connect. A strict router may be blocking the stream.");
+    if (pc.connectionState === "disconnected") pillText("reconnecting…");
+  };
+  pc.ontrack = (e) => {
+    if (video.srcObject !== e.streams[0]) video.srcObject = e.streams[0];
+    // Ask the browser to show frames the moment they are decoded instead of smoothing them out.
+    try { e.receiver.jitterBufferTarget = 0; } catch (_) {}
+    try { e.receiver.playoutDelayHint = 0; } catch (_) {}
+    if (e.track.kind === "video") {
+      video.play().catch(() => {});
+      say("");
+    }
+  };
+  pc.ondatachannel = (e) => {
+    const ch = e.channel;
+    if (ch.label === "pad") { ch.binaryType = "arraybuffer"; state.pad = ch; }
+    if (ch.label === "ctl") { state.ctl = ch; ch.onmessage = onCtl; ch.onopen = () => ctlSend({ t: "hi", ua: navigator.userAgent.slice(0, 80) }); }
+  };
+  signalLoop();
+  await post({ type: "hello" });
+  setInterval(pingLoop, 1000);
+  setInterval(statsLoop, 1000);
+}
+
+function ctlSend(o) { if (state.ctl && state.ctl.readyState === "open") state.ctl.send(JSON.stringify(o)); }
+function onCtl(e) {
+  let m; try { m = JSON.parse(e.data); } catch (_) { return; }
+  if (m.t === "pong") state.rtt = performance.now() - m.ts;
+  else if (m.t === "slot") { state.slot = m.n; pillText("Player " + m.n); }
+  else if (m.t === "host" && m.s && typeof m.s === "object") state.host = m.s;
+}
+function pingLoop() { ctlSend({ t: "ping", ts: performance.now() }); }
+
+// ------------------------------------------------------------------ stats
+let prev = null;
+async function statsLoop() {
+  if (!state.pc || state.ended) return;
+  const rep = await state.pc.getStats();
+  let v = null, pair = null;
+  rep.forEach((s) => {
+    if (s.type === "inbound-rtp" && (s.kind === "video" || s.mediaType === "video")) v = s;
+    if (s.type === "candidate-pair" && s.state === "succeeded" && s.nominated) pair = s;
+  });
+  if (!v) return;
+  const now = performance.now();
+  const cur = { t: now, bytes: v.bytesReceived, dec: v.framesDecoded, dt: v.totalDecodeTime, jb: v.jitterBufferDelay, jn: v.jitterBufferEmittedCount };
+  const st = state.stats;
+  if (prev) {
+    const secs = (cur.t - prev.t) / 1000, df = cur.dec - prev.dec, jn = cur.jn - prev.jn;
+    st.kbps = Math.round(((cur.bytes - prev.bytes) * 8) / secs / 1000);
+    st.fps = Math.round(df / secs);
+    st.decodeMs = df > 0 ? +(((cur.dt - prev.dt) / df) * 1000).toFixed(1) : null;
+    st.jitterBufMs = jn > 0 ? +(((cur.jb - prev.jb) / jn) * 1000).toFixed(1) : null;
+  }
+  prev = cur;
+  st.lost = v.packetsLost; st.dropped = v.framesDropped; st.w = v.frameWidth; st.h = v.frameHeight;
+  st.rttMs = state.rtt !== null ? +state.rtt.toFixed(1) : (pair && pair.currentRoundTripTime ? +(pair.currentRoundTripTime * 1000).toFixed(1) : null);
+  st.addedMs = (st.rttMs !== null && st.jitterBufMs !== null && st.decodeMs !== null) ? +(st.rttMs / 2 + st.jitterBufMs + st.decodeMs).toFixed(1) : null;
+  ctlSend({ t: "stats", s: st });
+  if (state.hudOn) {
+    hud.textContent = `${st.w}x${st.h} @ ${st.fps ?? "?"} fps  ${st.kbps ?? "?"} kbps\n` +
+      `round trip ${st.rttMs ?? "?"} ms\n` +
+      `jitter buffer ${st.jitterBufMs ?? "?"} ms   decode ${st.decodeMs ?? "?"} ms\n` +
+      `lost ${st.lost}   dropped ${st.dropped}   inputs sent ${state.packets}\n` +
+      `added by network+playback ≈ ${st.addedMs ?? "?"} ms` + hostLines(st);
+  }
+}
+function hostLines(st) {
+  const h = state.host;
+  if (!h) return "\nhost timing: not available";
+  const n = (v) => (typeof v === "number" ? v.toFixed(1) : "?");
+  const total = typeof h.totalMs === "number" && typeof st.addedMs === "number" ? n(h.totalMs + (h.captureAgeMs || 0) + st.addedMs) : "?";
+  return `\nhost: capture age ${n(h.captureAgeMs)}  convert ${n(h.convertMs)}  encode ${n(h.encodeMs)} (p95 ${n(h.encodeP95)})  pack ${n(h.payMs)} ms` +
+    `\nestimated total delay ≈ ${total} ms (not counting the game itself or the screens)`;
+}
+function toggleHud() { state.hudOn = !state.hudOn; hud.style.display = state.hudOn ? "block" : "none"; }
+addEventListener("keydown", (e) => { if (e.key === "F2" || (e.key === "s" && e.ctrlKey)) { e.preventDefault(); toggleHud(); } });
+pill.addEventListener("click", toggleHud);
+
+// ------------------------------------------------------------------ input
+// Packet (16 bytes, little endian): ver u8, seq u8, buttons u32, lx ly rx ry i16, lt rt u8.
+// Button bit n = W3C "standard gamepad" button n (0 A, 1 B, 2 X, 3 Y, 4 LB, 5 RB, 8 Back, 9 Start,
+// 10 L3, 11 R3, 12-15 d-pad up/down/left/right, 16 Guide).
+let seq = 0, lastKey = "", lastSent = 0;
+const touch = { buttons: 0, ax: [0, 0, 0, 0] };
+const keys = { buttons: 0, ax: [0, 0, 0, 0], held: new Set() };
+
+function dead(v) { return Math.abs(v) < 0.1 ? 0 : v; }
+function readInput() {
+  let buttons = 0, ax = [0, 0, 0, 0], lt = 0, rt = 0, any = false;
+  const pads = (navigator.getGamepads ? Array.from(navigator.getGamepads()) : []).filter(Boolean);
+  const gp = pads.find((p) => p.mapping === "standard") || pads[0];
+  if (gp) {
+    any = true;
+    gp.buttons.forEach((b, i) => { if (b.pressed && i < 17 && i !== 6 && i !== 7) buttons |= 1 << i; });
+    lt = Math.round((gp.buttons[6] ? gp.buttons[6].value : 0) * 255);
+    rt = Math.round((gp.buttons[7] ? gp.buttons[7].value : 0) * 255);
+    ax = [0, 1, 2, 3].map((i) => dead(gp.axes[i] || 0));
+  }
+  buttons |= touch.buttons | keys.buttons;
+  for (let i = 0; i < 4; i++) { if (Math.abs(keys.ax[i]) > Math.abs(ax[i])) ax[i] = keys.ax[i]; }
+  if (buttons & (1 << 6)) lt = 255;
+  if (buttons & (1 << 7)) rt = 255;
+  return { buttons: buttons >>> 0, ax, lt, rt, any };
+}
+function sendInput(force) {
+  const ch = state.pad;
+  if (!ch || ch.readyState !== "open") return;
+  const s = readInput();
+  const sig = s.buttons + "," + s.ax.join(",") + "," + s.lt + "," + s.rt;
+  const now = performance.now();
+  if (!force && sig === lastKey && now - lastSent < 50) return;   // unchanged: send a heartbeat every 50 ms
+  lastKey = sig; lastSent = now;
+  const buf = new ArrayBuffer(16), dv = new DataView(buf);
+  dv.setUint8(0, 1); dv.setUint8(1, seq = (seq + 1) & 255); dv.setUint32(2, s.buttons, true);
+  s.ax.forEach((a, i) => dv.setInt16(6 + i * 2, Math.max(-32767, Math.min(32767, Math.round(a * 32767))), true));
+  dv.setUint8(14, s.lt); dv.setUint8(15, s.rt);
+  ch.send(buf); state.packets++;
+}
+setInterval(() => sendInput(false), 4);
+
+// keyboard fallback for computers without a controller
+const KEYMAP = { z: 0, x: 1, a: 2, s: 3, q: 4, w: 5, Shift: 8, Enter: 9, ArrowUp: 12, ArrowDown: 13, ArrowLeft: 14, ArrowRight: 15 };
+function keyRefresh() {
+  let b = 0; keys.held.forEach((k) => { if (k in KEYMAP) b |= 1 << KEYMAP[k]; });
+  keys.buttons = b;
+}
+addEventListener("keydown", (e) => { if (e.key in KEYMAP) { keys.held.add(e.key); keyRefresh(); e.preventDefault(); } });
+addEventListener("keyup", (e) => { keys.held.delete(e.key); keyRefresh(); });
+
+// on-screen controller for phones (shown when the device has a touch screen)
+const LAYOUT = [
+  // [label, bit, left%, top%, extra class]
+  ["▲", 12, 14, 8, ""], ["▼", 13, 14, 62, ""], ["◀", 14, 3, 35, ""], ["▶", 15, 25, 35, ""],
+  ["Y", 3, 80, 8, ""], ["A", 0, 80, 62, ""], ["X", 2, 69, 35, ""], ["B", 1, 91, 35, ""],
+  ["L", 4, 3, -14, "sm"], ["R", 5, 89, -14, "sm"],
+  ["Select", 8, 36, 72, "sm"], ["Start", 9, 52, 72, "sm"],
+];
+function buildPad() {
+  const root = $("pad"), down = new Map();
+  LAYOUT.forEach(([label, bit, l, t, cls]) => {
+    const d = document.createElement("div");
+    d.className = "b " + cls; d.textContent = label; d.style.left = l + "%"; d.style.top = t + "%";
+    d.dataset.bit = bit; root.appendChild(d);
+  });
+  const recompute = () => {
+    let b = 0; down.forEach((bit) => { b |= 1 << bit; });
+    touch.buttons = b;
+    root.querySelectorAll(".b").forEach((el) => el.classList.toggle("on", !!(b & (1 << el.dataset.bit))));
+    sendInput(true);
+  };
+  const hit = (e) => { const el = document.elementFromPoint(e.clientX, e.clientY); return el && el.dataset && el.dataset.bit ? +el.dataset.bit : null; };
+  root.addEventListener("pointerdown", (e) => { const b = hit(e); if (b !== null) { down.set(e.pointerId, b); root.setPointerCapture(e.pointerId); recompute(); } e.preventDefault(); });
+  root.addEventListener("pointermove", (e) => { if (!down.has(e.pointerId)) return; const b = hit(e); if (b === null) down.delete(e.pointerId); else down.set(e.pointerId, b); recompute(); });
+  const up = (e) => { down.delete(e.pointerId); recompute(); };
+  root.addEventListener("pointerup", up); root.addEventListener("pointercancel", up);
+  if (navigator.maxTouchPoints > 0) root.style.display = "block";
+}
+buildPad();
+
+$("go").addEventListener("click", () => { video.muted = false; video.play().catch(() => {}); say(""); });
+// browsers only allow sound after a tap, so offer a small button once video is playing
+video.addEventListener("playing", () => { if (video.muted) $("snd").style.display = "block"; }, { once: true });
+$("snd").addEventListener("click", () => { video.muted = false; $("snd").style.display = "none"; });
+start();
+</script>
+</body>
+</html>

@@ -1,7 +1,7 @@
 # Notices and licenses
 
 ## This project
-No license has been chosen for Retro-Netplay's own code yet, so all rights are reserved. LEGAL.md recommends GPL-3.0 because the emulators it works with are GPL. The owner should pick one and add a `LICENSE` file before others use or modify the code.
+Retro-Netplay's own code is licensed under the GNU General Public License, version 3 (GPL-3.0). See LICENSE. You may use, change and share it under those terms; if you distribute it, you must make the source available under the same license.
 
 ## Provided "as is"
 The software has no warranty. Use it at your own risk. Streaming and virtual controllers can misbehave; save your games.

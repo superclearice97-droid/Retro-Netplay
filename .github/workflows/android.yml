@@ -29,4 +29,4 @@ jobs:
         run: |
           cp android/app/build/outputs/apk/debug/app-debug.apk Retro-Netplay.apk
           gh release delete latest --yes --cleanup-tag || true
-          gh release create latest Retro-Netplay.apk --title "Retro-Netplay test build" --notes "Early test build (debug-signed). Install on Android and open it. Built from commit ${GITHUB_SHA::7}." --prerelease
+          gh release create latest Retro-Netplay.apk --title "Retro-Netplay test build" --notes "Early test build (debug-signed). Install on Android and open it. Built from commit ${GITHUB_SHA::7}."

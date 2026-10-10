@@ -1,7 +1,7 @@
 package net.netplay.app;
 
 import android.app.Activity;
-import android.app.AlertDialog;
+import android.app.Dialog;
 import android.content.ActivityNotFoundException;
 import android.content.ClipData;
 import android.content.ClipboardManager;
@@ -12,15 +12,12 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Bundle;
+import android.view.Gravity;
 import android.view.View;
-import android.widget.AdapterView;
-import android.widget.ArrayAdapter;
-import android.widget.Button;
-import android.widget.CheckBox;
+import android.view.ViewGroup;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
-import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -35,18 +32,19 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/** One screen: pick a game, tap the big button, get matched with a desktop or phone player. */
+/** One screen: see your setup at a glance, pick a game, press the big button, get matched. */
 public class MainActivity extends Activity {
     private static final String[] RETROARCH_PACKAGES = {"com.retroarch.aarch64", "com.retroarch", "com.retroarch.ra32"};
 
     private SharedPreferences prefs;
     private final List<Map<String, Object>> games = new ArrayList<>();
-    private Spinner gameSpinner;
-    private Button goButton;
-    private TextView status, checks;
+    private int selected = 0;
+    private InkHero hero;
+    private TextView gameName, gameSystem;
+    private InkButton goButton, shareButton;
+    private TextView status, linkView;
+    private final String[] checkHelp = {"", "", "", ""};
     private MatchClient running;   // non-null while searching
-    private TextView linkView;
-    private Button shareButton;
     private String currentLink = "";
     private String currentGameName = "";
 
@@ -55,6 +53,7 @@ public class MainActivity extends Activity {
         super.onCreate(b);
         prefs = getSharedPreferences("nm", Context.MODE_PRIVATE);
         loadGames();
+        selected = Math.min(prefs.getInt("last_game", 0), Math.max(0, games.size() - 1));
         buildUi();
         refresh();
         if (prefs.getString("server_host", "").isEmpty()) {
@@ -77,112 +76,160 @@ public class MainActivity extends Activity {
     }
 
     // ------------------------------------------------------------ UI
-    private int dp(int v) { return (int) (v * getResources().getDisplayMetrics().density); }
+    private int dp(int v) { return Ink.dp(this, v); }
+
+    private LinearLayout.LayoutParams fill(int top) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(top);
+        return lp;
+    }
+
+    private LinearLayout.LayoutParams half(int left) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        lp.leftMargin = dp(left);
+        return lp;
+    }
 
     private void buildUi() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(16), dp(24), dp(16), dp(16));
         ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.setBackgroundColor(Ink.PAPER);
         scroll.addView(root);
         setContentView(scroll);
 
-        TextView title = new TextView(this);
-        title.setText("Netplay Matchmaker");
-        title.setTextSize(22);
-        root.addView(title);
+        hero = new InkHero(this);
+        hero.setListener(i -> explainCheck(i));
+        root.addView(hero, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.VERTICAL);
+        body.setPadding(dp(20), dp(8), dp(20), dp(24));
+        root.addView(body, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        body.addView(Ink.caption(this, "Game"));
+        LinearLayout pick = new LinearLayout(this);
+        pick.setOrientation(LinearLayout.HORIZONTAL);
+        pick.setGravity(Gravity.CENTER_VERTICAL);
+        pick.setFocusable(true);
+        pick.setClickable(true);
+        pick.setMinimumHeight(dp(60));
+        pick.setPadding(dp(14), dp(8), dp(10), dp(8));
+        pick.setBackground(Ink.surface(this, false));
+        LinearLayout names = new LinearLayout(this);
+        names.setOrientation(LinearLayout.VERTICAL);
+        gameName = Ink.text(this, "", 16.5f, true, Ink.INK);
+        gameSystem = Ink.text(this, "", 13, false, Ink.INK_SOFT);
+        names.addView(gameName);
+        names.addView(gameSystem);
+        pick.addView(names, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        pick.addView(new IconView(this, Icons.CHEVRON, Ink.INK), new LinearLayout.LayoutParams(dp(24), dp(24)));
+        pick.setOnClickListener(v -> chooseGame());
+        LinearLayout.LayoutParams plp = fill(6);
+        body.addView(pick, plp);
 
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
-        gameSpinner = new Spinner(this);
-        row.addView(gameSpinner, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        Button add = new Button(this);
-        add.setText("Add");
-        add.setOnClickListener(v -> addGame());
-        row.addView(add);
-        Button remove = new Button(this);
-        remove.setText("Remove");
-        remove.setOnClickListener(v -> removeGame());
-        row.addView(remove);
-        root.addView(row);
-        gameSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override public void onItemSelected(AdapterView<?> parent, View view, int pos, long id) { refreshChecks(); }
-            @Override public void onNothingSelected(AdapterView<?> parent) { }
-        });
+        InkButton add = new InkButton(this, Icons.PLUS, "Add game", false);
+        add.onPress(this::addGame);
+        InkButton remove = new InkButton(this, Icons.TRASH, "Remove", false);
+        remove.onPress(this::removeGame);
+        row.addView(add, half(0));
+        row.addView(remove, half(10));
+        body.addView(row, fill(10));
 
-        goButton = new Button(this);
-        goButton.setText("Find an opponent");
-        goButton.setTextSize(18);
-        goButton.setPadding(dp(8), dp(20), dp(8), dp(20));
-        goButton.setOnClickListener(v -> { if (running != null) running.cancel(); else search(null); });
-        root.addView(goButton);
+        goButton = new InkButton(this, Icons.SEARCH, "Find an opponent", true);
+        goButton.setMinimumHeight(dp(68));
+        goButton.onPress(() -> { if (running != null) running.cancel(); else search(null); });
+        body.addView(goButton, fill(22));
 
-        status = new TextView(this);
-        status.setTextSize(16);
-        status.setPadding(0, dp(16), 0, dp(8));
-        root.addView(status);
+        status = Ink.text(this, "", 15, false, Ink.INK);
+        status.setPadding(0, dp(14), 0, dp(4));
+        body.addView(status, fill(0));
 
-        linkView = new TextView(this);
+        linkView = Ink.text(this, "", 12.5f, false, Ink.INK_SOFT);
         linkView.setVisibility(View.GONE);
-        root.addView(linkView);
-        shareButton = new Button(this);
-        shareButton.setText("Share invite link");
+        linkView.setTextIsSelectable(true);
+        body.addView(linkView, fill(4));
+        shareButton = new InkButton(this, Icons.SHARE, "Share invite link", false);
         shareButton.setVisibility(View.GONE);
-        shareButton.setOnClickListener(v -> shareLink());
-        root.addView(shareButton);
+        shareButton.onPress(this::shareLink);
+        body.addView(shareButton, fill(8));
 
-        checks = new TextView(this);
-        checks.setPadding(0, 0, 0, dp(16));
-        root.addView(checks);
-
-        Button join = new Button(this);
-        join.setText("Join with a link");
-        join.setOnClickListener(v -> askForLink());
-        root.addView(join);
-
-        Button settings = new Button(this);
-        settings.setText("Settings");
-        settings.setOnClickListener(v -> openSettings());
-        root.addView(settings);
+        LinearLayout bottom = new LinearLayout(this);
+        bottom.setOrientation(LinearLayout.HORIZONTAL);
+        InkButton join = new InkButton(this, Icons.LINK, "Join a link", false);
+        join.onPress(this::askForLink);
+        InkButton settings = new InkButton(this, Icons.GEAR, "Settings", false);
+        settings.onPress(this::openSettings);
+        bottom.addView(join, half(0));
+        bottom.addView(settings, half(10));
+        body.addView(bottom, fill(26));
     }
 
     private void refresh() {
-        List<String> names = new ArrayList<>();
-        for (Map<String, Object> g : games) {
-            names.add(g.get("name") + "  (" + Games.SYSTEMS.get((String) g.get("system")).label + ")");
+        Map<String, Object> g = currentGame();
+        if (g == null) {
+            gameName.setText("No game yet");
+            gameSystem.setText("Tap Add game");
+        } else {
+            gameName.setText((String) g.get("name"));
+            gameSystem.setText(Games.SYSTEMS.get((String) g.get("system")).label);
         }
-        ArrayAdapter<String> ad = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, names);
-        ad.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        gameSpinner.setAdapter(ad);
-        int sel = Math.min(prefs.getInt("last_game", 0), Math.max(0, names.size() - 1));
-        if (!names.isEmpty()) gameSpinner.setSelection(sel);
         refreshChecks();
     }
 
     private Map<String, Object> currentGame() {
-        int i = gameSpinner.getSelectedItemPosition();
-        return (i >= 0 && i < games.size()) ? games.get(i) : null;
+        return (selected >= 0 && selected < games.size()) ? games.get(selected) : null;
     }
 
     private void refreshChecks() {
         Map<String, Object> g = currentGame();
-        StringBuilder sb = new StringBuilder();
+        String[] note = new String[4];
+        int[] st = new int[4];
+        boolean server = !prefs.getString("server_host", "").isEmpty();
+        st[0] = server ? InkHero.READY : InkHero.ATTENTION;
+        note[0] = server ? "set" : "not set";
+        checkHelp[0] = server ? "The matchmaker address is set. It is where players find each other."
+                : "Open Settings and enter the matchmaker address your friend gave you.";
+        boolean parsec = prefs.getBoolean("use_parsec", false);
+        st[3] = InkHero.READY;
+        note[3] = parsec ? "Parsec" : "built in";
+        checkHelp[3] = parsec ? "Parsec: you can join another player's stream. A phone can't host one."
+                : "Built-in streaming: when you match, the other player's game opens in your browser and your touch controls play it.";
         if (g == null) {
-            sb.append("Tap Add and enter a game. Your opponent must add the same game with the exact same name.");
+            st[1] = InkHero.ATTENTION; note[1] = "add one";
+            checkHelp[1] = "Tap Add game and enter a game. Your opponent must add the same game with the exact same name.";
+            st[2] = InkHero.UNKNOWN; note[2] = "-";
+            checkHelp[2] = "Pick a game first.";
         } else {
             Games.Sys sys = Games.SYSTEMS.get((String) g.get("system"));
-            prefs.edit().putInt("last_game", gameSpinner.getSelectedItemPosition()).apply();
+            prefs.edit().putInt("last_game", selected).apply();
+            boolean hasRom = !((String) g.get("rom")).isEmpty();
+            String again = "\nYour opponent must add this game as \"" + g.get("name") + "\".";
             if (sys.hasNative()) {
-                sb.append(retroArchPackage() != null ? "OK  RetroArch found\n"
-                        : "TIP  RetroArch isn't installed. Install it for rollback netplay. Streaming still works.\n");
-                sb.append(((String) g.get("rom")).isEmpty() ? "TIP  No game file set. Netplay needs one; streaming doesn't.\n" : "OK  Game file set\n");
+                st[1] = hasRom ? InkHero.READY : InkHero.UNKNOWN;
+                note[1] = hasRom ? "file set" : "no file";
+                checkHelp[1] = (hasRom ? "The game file is set." : "No game file is set. Netplay needs one; streaming doesn't.") + again;
+                boolean ra = retroArchPackage() != null;
+                st[2] = ra ? InkHero.READY : InkHero.ATTENTION;
+                note[2] = ra ? "RetroArch" : "install";
+                checkHelp[2] = ra ? "RetroArch is installed." : "RetroArch isn't installed. Install it for rollback netplay. Streaming still works.";
             } else {
-                sb.append("OK  " + sys.label + " games play by joining someone's Parsec stream.\n");
+                st[1] = InkHero.READY; note[1] = "stream";
+                checkHelp[1] = sys.label + " games play by joining someone's stream." + again;
+                st[2] = InkHero.UNKNOWN; note[2] = "not needed";
+                checkHelp[2] = "No emulator is needed on this phone for " + sys.label + ".";
             }
-            sb.append("OK  Parsec: you can join another player's stream (a phone can't host one).\n");
-            sb.append("Your opponent must add this game as \"" + g.get("name") + "\".");
         }
-        checks.setText(sb.toString());
+        hero.setChecks(new String[]{"Server", "Game", "Emulator", "Stream"}, note, st);
+    }
+
+    private void explainCheck(int i) {
+        TextView t = Ink.text(this, checkHelp[i], 14.5f, false, Ink.INK);
+        String[] titles = {"Server", "Game", "Emulator", "Stream"};
+        Ink.sheet(this, titles[i], t, i == 0 ? "Settings" : "OK", i == 0 ? this::openSettings : null, i == 0 ? "Close" : null).show();
     }
 
     // ------------------------------------------------------------ games
@@ -197,97 +244,119 @@ public class MainActivity extends Activity {
 
     private void saveGames() { prefs.edit().putString("games", Json.stringify(games)).apply(); }
 
+    private void chooseGame() {
+        if (games.isEmpty()) { addGame(); return; }
+        final LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        final Dialog[] dlg = new Dialog[1];
+        for (int i = 0; i < games.size(); i++) {
+            final int idx = i;
+            Map<String, Object> g = games.get(i);
+            TextView row = Ink.text(this, g.get("name") + "\n" + Games.SYSTEMS.get((String) g.get("system")).label, 15, i == selected, Ink.INK);
+            row.setPadding(dp(14), dp(10), dp(14), dp(10));
+            row.setMinimumHeight(dp(56));
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setFocusable(true);
+            row.setClickable(true);
+            row.setBackground(Ink.surface(this, false));
+            row.setOnClickListener(v -> { selected = idx; dlg[0].dismiss(); refresh(); });
+            list.addView(row, fill(idx == 0 ? 0 : 8));
+        }
+        dlg[0] = Ink.sheet(this, "Choose a game", list, null, null, "Close");
+        dlg[0].show();
+    }
+
     private void addGame() {
-        LinearLayout box = new LinearLayout(this);
+        final LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(20), dp(8), dp(20), 0);
-        final EditText name = new EditText(this);
-        name.setHint("Game name (your opponent types the same)");
+        final EditText name = Ink.field(this, "Game name (your opponent types the same)", "");
         box.addView(name);
-        final Spinner sys = new Spinner(this);
-        ArrayAdapter<Games.Sys> ad = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, new ArrayList<>(Games.SYSTEMS.values()));
-        ad.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        sys.setAdapter(ad);
-        box.addView(sys);
-        final EditText rom = new EditText(this);
-        rom.setHint("Game file path, e.g. /storage/emulated/0/ROMs/game.gba (blank for PS2/PS3)");
-        box.addView(rom);
-        new AlertDialog.Builder(this).setTitle("Add game").setView(box)
-                .setPositiveButton("Add", (d, w) -> {
-                    String n = name.getText().toString().trim();
-                    if (n.isEmpty()) return;
-                    Map<String, Object> g = new LinkedHashMap<>();
-                    g.put("name", n);
-                    g.put("system", ((Games.Sys) sys.getSelectedItem()).id);
-                    g.put("rom", rom.getText().toString().trim());
-                    games.add(g);
-                    saveGames();
-                    refresh();
-                    gameSpinner.setSelection(games.size() - 1);
-                })
-                .setNegativeButton("Cancel", null).show();
+        box.addView(Ink.caption(this, "System"), fill(14));
+        final List<Games.Sys> systems = new ArrayList<>(Games.SYSTEMS.values());
+        final int[] pickedSys = {0};
+        final List<TextView> chips = new ArrayList<>();
+        for (int i = 0; i < systems.size(); i++) {
+            final int idx = i;
+            TextView chip = Ink.text(this, systems.get(i).label, 14, false, Ink.INK);
+            chip.setPadding(dp(14), dp(10), dp(14), dp(10));
+            chip.setMinimumHeight(dp(48));
+            chip.setGravity(Gravity.CENTER_VERTICAL);
+            chip.setFocusable(true);
+            chip.setClickable(true);
+            chips.add(chip);
+            chip.setOnClickListener(v -> {
+                pickedSys[0] = idx;
+                for (int k = 0; k < chips.size(); k++) {
+                    boolean on = k == idx;
+                    chips.get(k).setBackground(Ink.surface(this, on));
+                    chips.get(k).setTextColor(on ? Ink.PAPER : Ink.INK);
+                }
+            });
+            box.addView(chip, fill(6));
+        }
+        chips.get(0).performClick();
+        final EditText rom = Ink.field(this, "Game file, e.g. /storage/emulated/0/ROMs/game.gba (blank for PS2/PS3)", "");
+        box.addView(Ink.caption(this, "Game file"), fill(14));
+        box.addView(rom, fill(6));
+        Ink.sheet(this, "Add a game", box, "Add", () -> {
+            String n = name.getText().toString().trim();
+            if (n.isEmpty()) return;
+            Map<String, Object> g = new LinkedHashMap<>();
+            g.put("name", n);
+            g.put("system", systems.get(pickedSys[0]).id);
+            g.put("rom", rom.getText().toString().trim());
+            games.add(g);
+            saveGames();
+            selected = games.size() - 1;
+            refresh();
+        }, "Cancel").show();
     }
 
     private void removeGame() {
-        int i = gameSpinner.getSelectedItemPosition();
-        if (i >= 0 && i < games.size()) {
-            games.remove(i);
+        if (selected >= 0 && selected < games.size()) {
+            games.remove(selected);
             saveGames();
+            selected = Math.max(0, Math.min(selected, games.size() - 1));
             refresh();
         }
     }
 
     // ------------------------------------------------------------ settings
     private void openSettings() {
-        LinearLayout box = new LinearLayout(this);
+        final LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(20), dp(8), dp(20), 0);
-        final EditText host = new EditText(this);
-        host.setHint("Matchmaker address");
-        host.setText(prefs.getString("server_host", ""));
-        box.addView(host);
-        final EditText port = new EditText(this);
-        port.setHint("Port (default 7777)");
-        port.setText(String.valueOf(prefs.getInt("server_port", 7777)));
-        box.addView(port);
-        final CheckBox canHost = new CheckBox(this);
-        canHost.setText("I can host netplay (home Wi-Fi, RetroArch port 55435 open)");
-        canHost.setChecked(prefs.getBoolean("can_host", false));
-        box.addView(canHost);
-        final EditText inviteHost = new EditText(this);
-        inviteHost.setHint("Public address for invite links (blank = same as above)");
-        inviteHost.setText(prefs.getString("invite_host", ""));
-        box.addView(inviteHost);
-        final CheckBox inviteOn = new CheckBox(this);
-        inviteOn.setText("Make an invite link when I search");
-        inviteOn.setChecked(prefs.getBoolean("invite_on", true));
-        box.addView(inviteOn);
-        final CheckBox randoms = new CheckBox(this);
-        randoms.setText("Also let random players match me");
-        randoms.setChecked(prefs.getBoolean("invite_randoms", true));
-        box.addView(randoms);
-        final CheckBox autoShare = new CheckBox(this);
-        autoShare.setText("Open the share sheet when I search");
-        autoShare.setChecked(prefs.getBoolean("auto_share", true));
-        box.addView(autoShare);
-        final CheckBox useParsec = new CheckBox(this);
-        useParsec.setText("Use Parsec instead of built-in streaming (PS2/PS3)");
-        useParsec.setChecked(prefs.getBoolean("use_parsec", false));
-        box.addView(useParsec);
-        new AlertDialog.Builder(this).setTitle("Settings").setView(box)
-                .setPositiveButton("Save", (d, w) -> {
-                    int p = 7777;
-                    try { p = Integer.parseInt(port.getText().toString().trim()); } catch (NumberFormatException ignored) { }
-                    prefs.edit().putString("server_host", host.getText().toString().trim())
-                            .putInt("server_port", p).putBoolean("can_host", canHost.isChecked())
-                            .putString("invite_host", inviteHost.getText().toString().trim())
-                            .putBoolean("invite_on", inviteOn.isChecked())
-                            .putBoolean("invite_randoms", randoms.isChecked())
-                            .putBoolean("use_parsec", useParsec.isChecked())
-                            .putBoolean("auto_share", autoShare.isChecked()).apply();
-                    status.setText("Settings saved.");
-                })
-                .setNegativeButton("Cancel", null).show();
+        box.addView(Ink.caption(this, "Matchmaker address"));
+        final EditText host = Ink.field(this, "for example 203.0.113.5", prefs.getString("server_host", ""));
+        box.addView(host, fill(6));
+        box.addView(Ink.caption(this, "Port"), fill(12));
+        final EditText port = Ink.field(this, "7777", String.valueOf(prefs.getInt("server_port", 7777)));
+        box.addView(port, fill(6));
+        box.addView(Ink.caption(this, "Public address for invite links"), fill(12));
+        final EditText inviteHost = Ink.field(this, "blank = same as above", prefs.getString("invite_host", ""));
+        box.addView(inviteHost, fill(6));
+        final InkCheck canHost = new InkCheck(this, "I can host netplay (home Wi-Fi, RetroArch port 55435 open)", prefs.getBoolean("can_host", false));
+        final InkCheck inviteOn = new InkCheck(this, "Make an invite link when I search", prefs.getBoolean("invite_on", true));
+        final InkCheck randoms = new InkCheck(this, "Also let random players match me", prefs.getBoolean("invite_randoms", true));
+        final InkCheck autoShare = new InkCheck(this, "Open the share sheet when I search", prefs.getBoolean("auto_share", true));
+        final InkCheck useParsec = new InkCheck(this, "Use Parsec instead of built-in streaming (PS2/PS3)", prefs.getBoolean("use_parsec", false));
+        box.addView(canHost, fill(14));
+        box.addView(inviteOn, fill(2));
+        box.addView(randoms, fill(2));
+        box.addView(autoShare, fill(2));
+        box.addView(useParsec, fill(2));
+        Ink.sheet(this, "Settings", box, "Save", () -> {
+            int p = 7777;
+            try { p = Integer.parseInt(port.getText().toString().trim()); } catch (NumberFormatException ignored) { }
+            prefs.edit().putString("server_host", host.getText().toString().trim())
+                    .putInt("server_port", p).putBoolean("can_host", canHost.isOn())
+                    .putString("invite_host", inviteHost.getText().toString().trim())
+                    .putBoolean("invite_on", inviteOn.isOn())
+                    .putBoolean("invite_randoms", randoms.isOn())
+                    .putBoolean("use_parsec", useParsec.isOn())
+                    .putBoolean("auto_share", autoShare.isOn()).apply();
+            status.setText("Settings saved.");
+            refreshChecks();
+        }, "Cancel").show();
     }
 
     // ------------------------------------------------------------ searching
@@ -333,7 +402,9 @@ public class MainActivity extends Activity {
         final String key = Games.key(sys.id, (String) g.get("name"));
         final MatchClient mc = new MatchClient();
         running = mc;
-        goButton.setText("Cancel search");
+        goButton.set(Icons.SEARCH, "Cancel search");
+        goButton.icon().loop(true);
+        hero.setSearching(true);
         status.setText((join != null ? "Joining your friend for " : "Looking for an opponent for ") + g.get("name") + "...");
         if (join == null && !code.isEmpty()) {
             String linkHost = prefs.getString("invite_host", "").trim();
@@ -364,6 +435,7 @@ public class MainActivity extends Activity {
         linkView.setText(link);
         linkView.setVisibility(View.VISIBLE);
         shareButton.setVisibility(View.VISIBLE);
+        shareButton.icon().play();
         ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
         cm.setPrimaryClip(ClipData.newPlainText("netplay invite", link));
         status.setText(status.getText() + " Invite link copied."
@@ -381,11 +453,8 @@ public class MainActivity extends Activity {
     }
 
     private void askForLink() {
-        final EditText box = new EditText(this);
-        box.setHint("Paste the invite link");
-        new AlertDialog.Builder(this).setTitle("Join with a link").setView(box)
-                .setPositiveButton("Join", (d, w) -> joinWithLink(box.getText().toString()))
-                .setNegativeButton("Cancel", null).show();
+        final EditText box = Ink.field(this, "Paste the invite link", "");
+        Ink.sheet(this, "Join with a link", box, "Join", () -> joinWithLink(box.getText().toString()), "Cancel").show();
     }
 
     private void joinWithLink(String text) {
@@ -396,7 +465,9 @@ public class MainActivity extends Activity {
 
     private void finishSearch(String message) {
         running = null;
-        goButton.setText("Find an opponent");
+        goButton.icon().loop(false);
+        goButton.set(Icons.SEARCH, "Find an opponent");
+        hero.setSearching(false);
         status.setText(message);
         currentLink = "";
         linkView.setVisibility(View.GONE);

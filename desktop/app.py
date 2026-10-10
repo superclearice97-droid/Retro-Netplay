@@ -20,6 +20,7 @@ import webbrowser
 from pathlib import Path
 
 import controls
+import ink
 import invites
 import secretbox
 
@@ -682,9 +683,10 @@ def run_gui():
     save_cfg(cfg)
 
     root = tk.Tk()
-    root.title("Netplay Matchmaker")
-    root.geometry("470x600")
-    root.minsize(430, 560)
+    root.title("Retro-Netplay")
+    root.geometry("500x860")
+    root.minsize(500, 780)
+    fam = ink.apply_theme(root)
     msgs = queue.Queue()
     engine = Engine(lambda: cfg, lambda state, msg, clip=None: msgs.put((state, msg, clip)))
     pad = Pad(lambda: cfg, engine.toggle, lambda t: msgs.put(("note", t, None)))
@@ -692,10 +694,42 @@ def run_gui():
     if cfg["run_server"]:
         start_local_server(int(cfg["server_port"]), lambda t: msgs.put(("idle", t, None)))
 
-    frame = ttk.Frame(root, padding=14)
+    # ---- hero: ink controller with four live heat squares (emulator, game, online, controllers)
+    HW, HH = 500, 250
+    hero = tk.Canvas(root, width=HW, height=HH, bg=ink.PAPER, highlightthickness=0)
+    hero.pack(fill="x")
+    ink.draw_hero(hero, HW, HH, fam)
+    spots = [(0.19, 0.34, 3, "Emulator"), (0.80, 0.24, 3, "Game"), (0.77, 0.70, 4, "Online"), (0.23, 0.78, 3, "Controllers")]
+    heats = [ink.Heat(tk, zoom=z, seed=i + 1) for i, (_x, _y, z, _n) in enumerate(spots)]
+    sq_state = {"states": [ink.UNKNOWN] * 4, "notes": [""] * 4, "clock": 0.0, "searching": False}
+
+    def draw_squares():
+        hero.delete("sq")
+        for i, (fx, fy, z, name) in enumerate(spots):
+            img = heats[i].paint(sq_state["states"][i], sq_state["clock"], i, sq_state["searching"])
+            x, y = fx * HW, fy * HH
+            hero.create_line(x, y, HW * 0.52, HH * 0.5, fill="#f4f3ef", tags="sq")
+        for i, (fx, fy, z, name) in enumerate(spots):
+            x, y = fx * HW, fy * HH
+            hero.create_image(x, y, image=heats[i].image, tags="sq")
+            half = heats[i].N * z / 2
+            note = sq_state["notes"][i]
+            tw = max(len(name), len(note)) * 8 + 12
+            left = x + half + 4 if fx < 0.5 else x - half - 4 - tw
+            hero.create_rectangle(left, y - half, left + tw, y - half + 38, fill=ink.PAPER, outline="", tags="sq")
+            hero.create_text(left + 6, y - half + 4, anchor="nw", text=name.upper(), font=(fam, 9, "bold"), fill=ink.INK, tags="sq")
+            hero.create_text(left + 6, y - half + 21, anchor="nw", text=note, font=(fam, 9), fill=ink.SOFT, tags="sq")
+
+    def tick():
+        if sq_state["searching"]:
+            sq_state["clock"] += 0.09
+            draw_squares()
+        root.after(90, tick)
+
+    frame = ttk.Frame(root, padding=(18, 12, 18, 14))
     frame.pack(fill="both", expand=True)
 
-    ttk.Label(frame, text="Pick a game", font=("", 11, "bold")).pack(anchor="w")
+    ttk.Label(frame, text="GAME", font=(fam, 9, "bold")).pack(anchor="w")
     row = ttk.Frame(frame)
     row.pack(fill="x", pady=(4, 10))
     game_var = tk.StringVar()
@@ -704,11 +738,9 @@ def run_gui():
     ttk.Button(row, text="Add game...", command=lambda: add_game()).pack(side="left", padx=(6, 0))
     ttk.Button(row, text="Remove", command=lambda: remove_game()).pack(side="left", padx=(6, 0))
 
-    go_btn = tk.Button(frame, text="Find an opponent", font=("", 14, "bold"), height=2,
-                       bg="#2d7ff9", fg="white", activebackground="#1f63c9", activeforeground="white",
-                       command=engine.toggle)
+    go_btn = ink.InkButton(tk, frame, "Find an opponent", "search", lambda: engine.toggle(), fam)
     go_btn.pack(fill="x")
-    status = ttk.Label(frame, text="Ready.", wraplength=420, justify="left")
+    status = ttk.Label(frame, text="Ready.", wraplength=460, justify="left")
     status.pack(anchor="w", pady=(10, 4))
     link_row = ttk.Frame(frame)
     link_row.pack(fill="x")
@@ -716,10 +748,10 @@ def run_gui():
     ttk.Entry(link_row, textvariable=link_var, state="readonly").pack(side="left", fill="x", expand=True)
     ttk.Button(link_row, text="Copy link", command=lambda: copy_link()).pack(side="left", padx=(6, 0))
     ttk.Button(link_row, text="Post now", command=lambda: engine.announce_now()).pack(side="left", padx=(6, 0))
-    hint = ttk.Label(frame, text="", foreground="#666", wraplength=420, justify="left")
+    hint = ttk.Label(frame, text="", foreground=ink.SOFT, wraplength=460, justify="left")
     hint.pack(anchor="w", pady=(0, 8))
 
-    ttk.Label(frame, text="Setup check", font=("", 11, "bold")).pack(anchor="w")
+    ttk.Label(frame, text="SETUP CHECK", font=(fam, 9, "bold")).pack(anchor="w")
     checks = ttk.Frame(frame)
     checks.pack(fill="x", pady=(4, 8))
 
@@ -754,14 +786,35 @@ def run_gui():
             ttk.Label(checks, text="Click 'Add game...' and choose your game file.").pack(anchor="w")
         else:
             for ok, text in checklist(cfg, g, len(pad.names)):
-                mark, color = {True: ("OK", "#1a8a3a"), False: ("FIX", "#c62828"), None: ("TIP", "#b26a00")}[ok]
+                mark, tone = {True: ("OK", 0.30), False: ("FIX", 0.86), None: ("TIP", 0.62)}[ok]
                 r = ttk.Frame(checks)
-                r.pack(fill="x", anchor="w")
-                tk.Label(r, text=mark, fg=color, width=4, font=("", 9, "bold")).pack(side="left")
-                ttk.Label(r, text=text, wraplength=380, justify="left").pack(side="left")
+                r.pack(fill="x", anchor="w", pady=1)
+                tk.Label(r, text=mark, bg=ink.spectrum(tone), fg=ink.INK, width=4, font=(fam, 9, "bold")).pack(side="left", padx=(0, 8))
+                ttk.Label(r, text=text, wraplength=400, justify="left").pack(side="left")
             hint.config(text=f"Your opponent must add this game with the exact name \"{g['name']}\".")
+        update_squares(g)
         hot_lbl.config(text="Hotkey: buttons " + " + ".join(str(b) for b in cfg["hotkey"]) + f", hold {cfg['hold']:g}s")
         save_cfg(cfg)
+
+    def update_squares(g):
+        st, nt = [ink.UNKNOWN] * 4, [""] * 4
+        if g is not None:
+            sysd = SYSTEMS[g["system"]]
+            exe = cfg["paths"].get(sysd["emu"], "")
+            if emu_ok(exe):
+                st[0], nt[0] = ink.READY, "found"
+            else:
+                st[0], nt[0] = ink.ATTENTION, "not found"
+            have = Path(g["rom"]).exists()
+            st[1], nt[1] = (ink.READY, "file found") if have else (ink.ATTENTION, "no file")
+        else:
+            st[1], nt[1] = ink.ATTENTION, "add one"
+        online = bool(cfg.get("run_server")) or str(cfg.get("server_host", "")).strip() not in ("", "127.0.0.1", "localhost")
+        st[2], nt[2] = (ink.READY, "set") if online else (ink.ATTENTION, "not set")
+        n = len(pad.names)
+        st[3], nt[3] = (ink.READY, "%d ready" % n) if n >= 2 else ((ink.UNKNOWN, "1 found") if n == 1 else (ink.ATTENTION, "none"))
+        sq_state["states"], sq_state["notes"] = st, nt
+        draw_squares()
 
     def on_pick(_e=None):
         cfg["last_game"] = combo.current()
@@ -1117,7 +1170,7 @@ def run_gui():
         ttk.Button(bar, text="Send a test post", command=test_post).pack(side="left")
         ttk.Button(bar, text="Save", command=lambda: (apply(), win.destroy(), refresh())).pack(side="right")
 
-    colors = {"idle": "#2d7ff9", "searching": "#c77700", "session": "#1a8a3a"}
+    colors = {"idle": "search", "searching": "search", "session": "close"}
     labels = {"idle": "Find an opponent", "searching": "Cancel search", "session": "End session"}
 
     def pump():
@@ -1134,7 +1187,10 @@ def run_gui():
                         root.clipboard_append(text)
                     continue
                 if state in colors:
-                    go_btn.config(text=labels[state], bg=colors[state], activebackground=colors[state])
+                    go_btn.set(labels[state], colors[state], loop=(state == "searching"))
+                    sq_state["searching"] = state == "searching"
+                    if not sq_state["searching"]:
+                        draw_squares()
                 if clip:
                     root.clipboard_clear()
                     root.clipboard_append(clip)
@@ -1151,6 +1207,7 @@ def run_gui():
 
     refresh()
     pump()
+    tick()
     given = [a for a in sys.argv[1:] if a.startswith("netplay://") or "/join?" in a]
     if given:
         root.after(800, lambda: join_with_link(given[0]))

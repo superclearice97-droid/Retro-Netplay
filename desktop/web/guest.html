@@ -5,36 +5,52 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
 <title>Netplay stream</title>
 <style>
-  :root { color-scheme: dark; }
-  html, body { margin: 0; height: 100%; background: #000; color: #e8e8e8; font: 15px/1.4 system-ui, sans-serif;
+  :root { color-scheme: light; --paper: #e4e3df; --ink: #141414; --soft: #4a4a48; --hair: rgba(20,20,20,.6);
+    --mono: ui-monospace, "DejaVu Sans Mono", "SF Mono", Menlo, Consolas, monospace; }
+  html, body { margin: 0; height: 100%; background: #000; color: var(--ink); font: 15px/1.45 var(--mono);
     overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; }
   video { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
-  #msg { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 14px; text-align: center; padding: 24px; background: rgba(0,0,0,.72); z-index: 5; }
+  /* connecting / ended screen: paper with the ink controller */
+  #msg { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: stretch; justify-content: flex-end;
+    background: var(--paper); z-index: 5; }
   #msg.hide { display: none; }
-  #msg button { font: inherit; font-weight: 700; padding: 14px 28px; border: 0; border-radius: 10px;
-    background: #2d7ff9; color: #fff; }
-  #hud { position: fixed; top: 6px; left: 6px; z-index: 6; font: 12px/1.35 ui-monospace, monospace; white-space: pre;
-    background: rgba(0,0,0,.6); padding: 6px 8px; border-radius: 6px; display: none; pointer-events: none; }
-  #pill { position: fixed; top: 6px; right: 8px; z-index: 6; font-size: 12px; background: rgba(0,0,0,.5);
-    padding: 3px 10px; border-radius: 99px; }
-  #snd { position: fixed; bottom: 8px; right: 8px; z-index: 7; display: none; font: 13px system-ui; padding: 8px 14px;
-    border: 0; border-radius: 99px; background: #2d7ff9; color: #fff; }
+  #hero { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #msgbox { position: relative; padding: 20px 22px calc(26px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 14px; }
+  #mt { font-size: 16px; max-width: 34em; }
+  #bar { display: flex; align-items: flex-end; }
+  #msg button, #snd { font: inherit; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; padding: 16px 22px; border: 2px solid var(--ink);
+    background: var(--ink); color: var(--paper); border-radius: 0; min-height: 52px; }
+  #msg button:focus-visible, #snd:focus-visible { outline: 3px solid #66f2b0; outline-offset: 2px; }
+  #tag { position: absolute; left: 22px; top: 22px; margin: 0; font-size: 13.5px; letter-spacing: .06em; text-transform: uppercase; line-height: 1.5; }
+  #foot { margin: 0 0 0 auto; font-size: 13.5px; letter-spacing: .06em; text-transform: uppercase; }
+  #wait { height: 34px; width: 34px; align-self: flex-start; image-rendering: pixelated; border: 1px solid var(--paper); outline: 1px solid var(--hair); }
+  /* in-stream chrome: small paper chips over the picture */
+  #hud { position: fixed; top: 44px; left: 8px; z-index: 6; font: 12px/1.4 var(--mono); white-space: pre; background: rgba(228,227,223,.94);
+    color: var(--ink); padding: 8px 10px; display: none; pointer-events: none; max-width: calc(100vw - 16px); overflow: hidden; }
+  #heat { position: fixed; top: 8px; left: 8px; z-index: 6; display: none; gap: 6px; pointer-events: none; }
+  #heat span { display: flex; align-items: center; gap: 6px; background: rgba(228,227,223,.94); padding: 3px 8px 3px 3px; font-size: 12px; }
+  #heat i { width: 18px; height: 18px; display: block; outline: 1px solid rgba(20,20,20,.5); }
+  #pill { position: fixed; top: 8px; right: 8px; z-index: 6; font-size: 12px; letter-spacing: .06em; text-transform: uppercase;
+    background: rgba(228,227,223,.94); padding: 6px 10px; border: 0; min-height: 28px; cursor: pointer; }
+  #snd { position: fixed; bottom: 8px; right: 8px; z-index: 7; display: none; font-size: 13px; padding: 10px 16px; min-height: 44px; }
   #pad { position: fixed; inset: auto 0 0 0; height: 46%; z-index: 4; display: none; }
-  #pad .b { position: absolute; width: 17vmin; height: 17vmin; min-width: 52px; min-height: 52px; border-radius: 50%;
-    background: rgba(255,255,255,.14); border: 2px solid rgba(255,255,255,.35); display: flex; align-items: center;
-    justify-content: center; font-weight: 700; font-size: 16px; }
-  #pad .b.on { background: rgba(45,127,249,.6); }
-  #pad .sm { width: 13vmin; height: 7vmin; border-radius: 99px; font-size: 12px; min-width: 56px; min-height: 30px; }
+  #pad .b { position: absolute; width: 17vmin; height: 17vmin; min-width: 52px; min-height: 52px; border-radius: 0;
+    background: rgba(228,227,223,.14); border: 1.5px solid rgba(228,227,223,.75); display: flex; align-items: center;
+    justify-content: center; font-weight: 700; font-size: 16px; color: var(--paper); transition: background .08s; }
+  #pad .b.on { background: #66f2b0; border-color: #66f2b0; color: var(--ink); }
+  #pad .sm { width: 13vmin; height: 7vmin; font-size: 12px; min-width: 56px; min-height: 30px; letter-spacing: .04em; }
+  @media (prefers-reduced-motion: reduce) { #pad .b { transition: none; } }
 </style>
 </head>
 <body>
 <video id="v" autoplay muted playsinline></video>
-<div id="pill">connecting…</div>
+<button id="pill">connecting…</button>
 <div id="hud"></div>
 <div id="pad"></div>
 <button id="snd">Tap for sound</button>
-<div id="msg"><div id="mt">Connecting to your friend's game…</div><button id="go" style="display:none">Tap to play</button></div>
+<div id="heat"></div>
+<div id="msg"><canvas id="hero"></canvas><p id="tag">Play together,<br>from anywhere.</p>
+  <div id="msgbox"><div id="bar"><canvas id="wait" width="34" height="34" aria-hidden="true"></canvas><p id="foot">Retro &times; Netplay</p></div><div id="mt">Connecting to your friend's game…</div><button id="go" style="display:none">Tap to play</button></div></div>
 
 <script>
 "use strict";
@@ -50,6 +66,78 @@ function say(text, button) {
   $("msg").classList.toggle("hide", !text);
 }
 function pillText(t) { pill.textContent = t; }
+
+
+// ------------------------------------------------------------------ look: ink on paper, heat squares
+const PAD_ICON = [[[7.0,7.5],[8.25,7.28],[9.5,7.12],[10.75,7.03],[12.0,7.0],[13.25,7.03],[14.5,7.12],[15.75,7.28],[17.0,7.5],[17.0,7.5],[18.05,7.95],[18.94,8.56],[19.67,9.33],[20.25,10.25],[20.67,11.33],[20.94,12.56],[21.05,13.95],[21.0,15.5],[21.0,15.5],[20.84,16.18],[20.62,16.72],[20.34,17.12],[20.0,17.38],[19.59,17.49],[19.12,17.47],[18.59,17.3],[18.0,17.0],[18.0,17.0],[17.62,16.63],[17.25,16.28],[16.88,15.95],[16.5,15.62],[16.12,15.32],[15.75,15.03],[15.38,14.76],[15.0,14.5],[9.0,14.5],[9.0,14.5],[8.62,14.76],[8.25,15.03],[7.88,15.32],[7.5,15.62],[7.12,15.95],[6.75,16.28],[6.38,16.63],[6.0,17.0],[6.0,17.0],[5.41,17.3],[4.88,17.47],[4.41,17.49],[4.0,17.38],[3.66,17.12],[3.38,16.72],[3.16,16.18],[3.0,15.5],[3.0,15.5],[2.95,13.95],[3.06,12.56],[3.33,11.33],[3.75,10.25],[4.33,9.33],[5.06,8.56],[5.95,7.95],[7.0,7.5]],[[8.0,9.5],[8.0,13.0]],[[6.3,11.2],[9.7,11.2]],[[15.2,9.3],[15.38,9.32],[15.54,9.37],[15.7,9.45],[15.84,9.56],[15.95,9.7],[16.03,9.86],[16.08,10.02],[16.1,10.2],[16.08,10.38],[16.03,10.54],[15.95,10.7],[15.84,10.84],[15.7,10.95],[15.54,11.03],[15.38,11.08],[15.2,11.1],[15.02,11.08],[14.86,11.03],[14.7,10.95],[14.56,10.84],[14.45,10.7],[14.37,10.54],[14.32,10.38],[14.3,10.2],[14.32,10.02],[14.37,9.86],[14.45,9.7],[14.56,9.56],[14.7,9.45],[14.86,9.37],[15.02,9.32],[15.2,9.3]],[[17.6,11.5],[17.78,11.52],[17.94,11.57],[18.1,11.65],[18.24,11.76],[18.35,11.9],[18.43,12.06],[18.48,12.22],[18.5,12.4],[18.48,12.58],[18.43,12.74],[18.35,12.9],[18.24,13.04],[18.1,13.15],[17.94,13.23],[17.78,13.28],[17.6,13.3],[17.42,13.28],[17.26,13.23],[17.1,13.15],[16.96,13.04],[16.85,12.9],[16.77,12.74],[16.72,12.58],[16.7,12.4],[16.72,12.22],[16.77,12.06],[16.85,11.9],[16.96,11.76],[17.1,11.65],[17.26,11.57],[17.42,11.52],[17.6,11.5]]];
+function spectrum(t) {
+  const S = [[127,208,255],[102,242,176],[232,240,74],[255,147,49],[210,54,46],[122,43,143]];
+  t = Math.max(0, Math.min(1, t)) * (S.length - 1); const i = Math.min(Math.floor(t), S.length - 2), f = t - i;
+  return "rgb(" + [0,1,2].map((k) => Math.round(S[i][k] + (S[i+1][k] - S[i][k]) * f)).join(",") + ")";
+}
+let heroTimer = 0;
+function paintHero() {
+  const cv = $("hero"), dpr = Math.min(devicePixelRatio || 1, 2);
+  const W = Math.round(innerWidth * dpr), H = Math.round(innerHeight * dpr);
+  cv.width = W; cv.height = H;
+  const g = cv.getContext("2d"); g.fillStyle = "#e4e3df"; g.fillRect(0, 0, W, H);
+  let seed = 5; const rnd = () => (seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296;
+  const top = H * .04, ph = H * .62;
+  const mw = 90, mh = Math.max(40, Math.round(mw * ph / W));
+  const m = document.createElement("canvas"); m.width = mw; m.height = mh; const mc = m.getContext("2d");
+  const s = mw * 0.040, ang = -9 * Math.PI / 180, ca = Math.cos(ang), sa = Math.sin(ang);
+  const tf = (p) => { const x = (p[0] - 12) * s, y = (p[1] - 12) * s; return [x * ca - y * sa + mw * .54, x * sa + y * ca + mh * .5]; };
+  mc.fillStyle = "#fff"; mc.beginPath(); PAD_ICON[0].forEach((p, i) => { const q = tf(p); i ? mc.lineTo(q[0], q[1]) : mc.moveTo(q[0], q[1]); }); mc.fill();
+  mc.globalCompositeOperation = "destination-out"; mc.lineWidth = s * .9; mc.lineCap = "round";
+  for (const k of [1, 2]) { mc.beginPath(); PAD_ICON[k].forEach((p, i) => { const q = tf(p); i ? mc.lineTo(q[0], q[1]) : mc.moveTo(q[0], q[1]); }); mc.stroke(); }
+  for (const k of [3, 4]) { const c = PAD_ICON[k], cx = c.reduce((a, p) => a + p[0], 0) / c.length, cy = c.reduce((a, p) => a + p[1], 0) / c.length, q = tf([cx, cy]);
+    mc.beginPath(); mc.arc(q[0], q[1], s * 1.1, 0, 7); mc.fill(); }
+  const px = mc.getImageData(0, 0, mw, mh).data; let a = new Float32Array(mw * mh); for (let i = 0; i < a.length; i++) a[i] = px[i * 4 + 3] / 255;
+  const blur = (src) => { const t = new Float32Array(src.length), o = new Float32Array(src.length);
+    for (let y = 0; y < mh; y++) for (let x = 0; x < mw; x++) { let sum = 0, n = 0; for (let k = -1; k <= 1; k++) { const xx = x + k; if (xx >= 0 && xx < mw) { sum += src[y*mw+xx]; n++; } } t[y*mw+x] = sum / n; }
+    for (let y = 0; y < mh; y++) for (let x = 0; x < mw; x++) { let sum = 0, n = 0; for (let k = -1; k <= 1; k++) { const yy = y + k; if (yy >= 0 && yy < mh) { sum += t[yy*mw+x]; n++; } } o[y*mw+x] = sum / n; }
+    return o; };
+  a = blur(blur(a));
+  const at = (x, y) => { x = Math.max(0, Math.min(mw - 1.001, x)); y = Math.max(0, Math.min(mh - 1.001, y)); const x0 = x | 0, y0 = y | 0, fx = x - x0, fy = y - y0;
+    return (a[y0*mw+x0]*(1-fx) + a[y0*mw+x0+1]*fx)*(1-fy) + (a[(y0+1)*mw+x0]*(1-fx) + a[(y0+1)*mw+x0+1]*fx)*fy; };
+  const u = dpr, cl = (v) => Math.max(0, Math.min(1, v));
+  // The picture sits in the upper part of the screen; the message sits below it.
+  for (let i = 0; i < 70000; i++) {
+    const x = rnd() * W, y = top + rnd() * ph, d = at(x / W * mw, (y - top) / ph * mh);
+    const fade = cl(1.5 * (.62 * x / W + .55 * (1 - (y - top) / ph)) - .35), p = d * (.25 + .75 * fade);
+    if (rnd() > p * 2.6) continue;
+    const size = u * 1.5 * (.8 + 1.2 * p * rnd()), al = cl(p + .3 * rnd());
+    g.fillStyle = "rgba(20,20,20," + (.43 + .57 * al).toFixed(2) + ")"; g.fillRect(x, y, size, size);
+  }
+}
+function heatCell(el, label, t, text) {
+  el.querySelector("i").style.background = "linear-gradient(135deg," + spectrum(t - .22) + "," + spectrum(t + .12) + ")";
+  el.querySelector("b").textContent = label + " " + text;
+}
+const HEAT = [["ping", 120], ["buffer", 40], ["decode", 12], ["lost", 20]];
+function paintHeat(st) {
+  const box = $("heat"); if (!box.children.length) HEAT.forEach(() => { const s = document.createElement("span"); s.innerHTML = "<i></i><b></b>"; box.appendChild(s); });
+  const v = [st.rttMs, st.jitterBufMs, st.decodeMs, st.lost];
+  HEAT.forEach(([n, bad], i) => { const x = v[i]; const el = box.children[i];
+    if (typeof x !== "number") heatCell(el, n, 0, "?"); else heatCell(el, n, .05 + .9 * Math.min(1, x / bad), n === "lost" ? String(x) : x.toFixed(0) + "ms"); });
+}
+// small drifting heat square while waiting
+(function waiting() {
+  const c = $("wait"), g = c.getContext("2d"), N = 34, im = g.createImageData(N, N); let t0 = 0;
+  const noise = Array.from({ length: N * N }, () => Math.random());
+  function frame() {
+    if ($("msg").classList.contains("hide")) { requestAnimationFrame(frame); return; }
+    t0 += .016; const base = .3 + .25 * Math.sin(t0 * 2.2);
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+      const t = base + .55 * (Math.cos(t0) * (x / N - .5) + Math.sin(t0) * (y / N - .5)) + (noise[y * N + x] - .5) * .34;
+      const m = spectrum(t).match(/\d+/g), o = (y * N + x) * 4; im.data[o] = m[0]; im.data[o+1] = m[1]; im.data[o+2] = m[2]; im.data[o+3] = 255;
+    }
+    g.putImageData(im, 0, 0);
+    if (!matchMedia("(prefers-reduced-motion: reduce)").matches) requestAnimationFrame(frame);
+  }
+  frame();
+})();
+paintHero(); addEventListener("resize", () => { clearTimeout(heroTimer); heroTimer = setTimeout(paintHero, 150); });
 
 // ------------------------------------------------------------------ signaling (HTTP long-poll)
 async function api(path, opts) {
@@ -167,6 +255,7 @@ async function statsLoop() {
   st.addedMs = (st.rttMs !== null && st.jitterBufMs !== null && st.decodeMs !== null) ? +(st.rttMs / 2 + st.jitterBufMs + st.decodeMs).toFixed(1) : null;
   ctlSend({ t: "stats", s: st });
   if (state.hudOn) {
+    paintHeat(st);
     hud.textContent = `${st.w}x${st.h} @ ${st.fps ?? "?"} fps  ${st.kbps ?? "?"} kbps\n` +
       `round trip ${st.rttMs ?? "?"} ms\n` +
       `jitter buffer ${st.jitterBufMs ?? "?"} ms   decode ${st.decodeMs ?? "?"} ms\n` +
@@ -182,7 +271,7 @@ function hostLines(st) {
   return `\nhost: capture age ${n(h.captureAgeMs)}  convert ${n(h.convertMs)}  encode ${n(h.encodeMs)} (p95 ${n(h.encodeP95)})  pack ${n(h.payMs)} ms` +
     `\nestimated total delay ≈ ${total} ms (not counting the game itself or the screens)`;
 }
-function toggleHud() { state.hudOn = !state.hudOn; hud.style.display = state.hudOn ? "block" : "none"; }
+function toggleHud() { state.hudOn = !state.hudOn; hud.style.display = state.hudOn ? "block" : "none"; $("heat").style.display = state.hudOn ? "flex" : "none"; }
 addEventListener("keydown", (e) => { if (e.key === "F2" || (e.key === "s" && e.ctrlKey)) { e.preventDefault(); toggleHud(); } });
 pill.addEventListener("click", toggleHud);
 

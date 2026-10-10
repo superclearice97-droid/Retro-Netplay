@@ -24,3 +24,6 @@ This project contains no games, BIOS files or console firmware. You must own the
 The Android app and desktop app only launch the emulators above as separate programs; no emulator code is part of this package.
 
 This notice is a good-faith summary, not legal advice. Have a lawyer review it before commercial distribution.
+
+## Look and fonts
+The icons are our own drawings (design/make_icons.py); no third-party icon files are used. The Android app bundles DejaVu Sans Mono, which is free to use and redistribute under the Bitstream Vera / DejaVu licence (assets/DejaVu-LICENSE.txt). The desktop and browser pages use whatever monospace font your system already has.

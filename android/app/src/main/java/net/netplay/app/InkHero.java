@@ -143,12 +143,12 @@ final class InkHero extends View {
         int mw = 90, mh = Math.max(40, Math.round(mw * (float) h / w));
         Bitmap mb = Bitmap.createBitmap(mw, mh, Bitmap.Config.ARGB_8888);
         Canvas mc = new Canvas(mb);
-        float s = mw * 0.050f;                        // icon units -> mask pixels
+        float s = mw * 0.040f;                        // icon units -> mask pixels
         Matrix m = new Matrix();
         m.postTranslate(-12f, -12f);
         m.postScale(s, s);
         m.postRotate(-9f);
-        m.postTranslate(mw * 0.56f, mh * 0.50f);
+        m.postTranslate(mw * 0.54f, mh * 0.52f);
         Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
         fill.setColor(0xFFFFFFFF);
         Path body = pathOf(Icons.PAD[0]);
@@ -158,27 +158,36 @@ final class InkHero extends View {
         cut.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.CLEAR));
         cut.setStyle(Paint.Style.STROKE);
         cut.setStrokeCap(Paint.Cap.ROUND);
-        cut.setStrokeWidth(s * 2.4f);
-        for (int i = 1; i < Icons.PAD.length; i++) {
+        cut.setStrokeWidth(s * 0.9f);
+        for (int i = 1; i <= 2; i++) {            // the d-pad cross
             Path d = pathOf(Icons.PAD[i]);
             d.transform(m);
             mc.drawPath(d, cut);
+        }
+        cut.setStyle(Paint.Style.FILL);
+        for (int i = 3; i < Icons.PAD.length; i++) {   // the two face buttons, as round holes
+            float[] pts = Icons.PAD[i];
+            float bx = 0, by = 0;
+            for (int k = 0; k + 1 < pts.length; k += 2) { bx += pts[k]; by += pts[k + 1]; }
+            float[] ctr = {bx / (pts.length / 2), by / (pts.length / 2)};
+            m.mapPoints(ctr);
+            mc.drawCircle(ctr[0], ctr[1], s * 1.1f, cut);
         }
         float[] a = new float[mw * mh];
         int[] raw = new int[mw * mh];
         mb.getPixels(raw, 0, mw, 0, 0, mw, mh);
         for (int i = 0; i < raw.length; i++) a[i] = (raw[i] >>> 24) / 255f;
-        a = blur(blur(blur(a, mw, mh, 2), mw, mh, 2), mw, mh, 1);
+        a = blur(blur(a, mw, mh, 1), mw, mh, 1);
 
         // ink: random points kept in proportion to the mask, thinning toward the lower left
         Paint ink = new Paint(Paint.ANTI_ALIAS_FLAG);
-        for (int i = 0; i < 52000; i++) {
+        for (int i = 0; i < 80000; i++) {
             float x = rnd.nextFloat() * w, y = rnd.nextFloat() * h;
             float d = sample(a, mw, mh, x / w * mw, y / h * mh);
-            float fade = clamp01(1.25f * (0.62f * x / w + 0.55f * (1f - y / h)) - 0.12f);
+            float fade = clamp01(1.5f * (0.62f * x / w + 0.55f * (1f - y / h)) - 0.35f);
             float prob = d * (0.25f + 0.75f * fade);
-            if (rnd.nextFloat() > prob * 1.25f) continue;
-            float size = u * (0.7f + 1.5f * prob * rnd.nextFloat());
+            if (rnd.nextFloat() > prob * 2.6f) continue;
+            float size = u * 1.5f * (0.8f + 1.2f * prob * rnd.nextFloat());
             int alpha = (int) (110 + 145 * clamp01(prob + 0.3f * rnd.nextFloat()));
             ink.setColor((alpha << 24) | 0x141414);
             c.drawCircle(x, y, size * 0.5f, ink);

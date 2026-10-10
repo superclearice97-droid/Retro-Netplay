@@ -56,3 +56,42 @@ The matchmaker also relays the WebRTC setup between the two matched players. Eve
 
 ## Port check (optional)
 A client may send one line instead of a search: `{"v":1,"op":"probe","port":55435,"token":"<8-64 hex digits>"}`. The server connects back to the address that sent it, on that port (1024-65535 only), reads one line, and answers `{"op":"probe","v":1,"port":55435,"open":true|false,"ip":"<your public address>"}`. `open` is true only if the line it read equals the token, so another program on that port doesn't count. The client listens on the port with a short-lived socket that answers with the token. Counts toward the same per-address rate limit as searches.
+
+## Friends (optional)
+Everything here is optional; a client that sends none of it behaves exactly as before.
+
+**Identity.** Each install makes a random secret `me` (32 lowercase hex digits) and keeps it on the device. Its public id is the first 24 hex digits of `SHA-256(me)` (hashing the ASCII text). Friends share ids, never secrets, so nobody can act as you. A display `name` (up to 24 characters) is chosen by the player.
+
+**Friend links.** Web: `http://<host>:<N+1>/friend?i=<id>&n=<name>`. App: `netplay://friend?i=<id>&n=<name>&host=<host>&port=<N>`. Adding a friend is local to the device. Two players are friends only when **both** have added each other (mutual); one-sided adds count for nothing on the server.
+
+**Search fields.**
+```json
+{"me":"<secret>", "name":"Sam", "friends":["<id>",...], "priority":["<id>",...],
+ "friend_wait":15, "friends_only":false, "prefer_host":true}
+```
+- Public pool order: a mutual friend marked priority (by either side) first, then other mutual friends (longest waiting first), then strangers.
+- A player with friends waits `friend_wait` seconds (default 15, max 60) before strangers are allowed. `friends_only` never allows strangers. Invite rooms ignore all of this.
+- `prefer_host`: when both players can host, this one hosts (the app sets it when you are already in the game).
+- `matched.peer` gains `name` (if sent). Only for a mutual friend does it also carry `"friend":true` and `"id"`. A stranger never learns your id.
+- At most 200 ids per list. Privileges other than priority are never sent to the server.
+
+**Online list and calls (`hello` connection).** A client that wants friends to see it online opens a second connection and sends `{"v":1,"op":"hello","me":"<secret>","name":"Sam","friends":[...]}`, then keeps it open. It must send something (for example `{"op":"ping"}`) at least every 60 s.
+
+Server -> client:
+- `{"op":"hello","v":1,"id":"<your id>"}` once.
+- `{"op":"friends","v":1,"online":[{"id","name","state","game"}]}` now and whenever a mutual friend comes online, goes offline or changes status. Only mutual friends are listed.
+- `{"op":"call","v":1,"from":"<id>","name":"...","game":"<key>","kind":"play"|"watch","call":"<call id>"}`: a friend wants to join or watch.
+- `{"op":"start","v":1,"call":"...","code":"<invite code>","game":"...","kind":"...","as":"caller"|"callee","with":{"id","name"}}`: the call was accepted. Both sides now run a normal search with `invite=code, invite_only=true` (the callee also sends `prefer_host:true`).
+- `{"op":"declined","call":"...","name":"..."}`, `{"op":"call_failed","call":"...","msg":"..."}`, `{"op":"call_cancelled","call":"...","from":"<id>"}`, `{"op":"ping"}`.
+
+Client -> server:
+- `{"op":"status","state":"idle"|"queue"|"playing","game":"<key or empty>"}`
+- `{"op":"call","to":"<id>","game":"<key>","kind":"play"|"watch","call":"<6-32 letters/digits>"}`. Fails unless the friend is mutual and online. At most 10 calls a minute; calls expire after 60 s.
+- `{"op":"answer","to":"<caller id>","call":"...","ok":true|false}`. The callee's app decides; it may accept on its own when the caller has the matching privilege (join anytime for `play`, watch for `watch`).
+- `{"op":"cancel_call","to":"<id>","call":"..."}`
+
+**Privileges** live only on the device of the person who grants them: *join anytime* (auto-accept `play` calls), *watch* (auto-accept `watch` calls), *priority* (sent as `priority` in searches), *pick controller slot* (a stream host lets that friend choose Player 2-4).
+
+The server keeps the online list and pending calls in memory only, and forgets them when the connection closes.
+
+**Stream slot choice.** When the host allows it, its first `ctl` message is `{"t":"slot","n":2,"pick":[2,3,4]}`. The guest may answer `{"t":"want_slot","n":3}`; the host replies with a new `{"t":"slot","n":3,...}`.

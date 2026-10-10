@@ -102,7 +102,10 @@ final class Setup {
     private View serverStep() {
         LinearLayout box = new LinearLayout(act);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.addView(para("Players find each other through a matchmaker. A friend usually runs it and gives you its address."));
+        box.addView(Ink.caption(act, "Your name"));
+        final EditText name = Ink.field(act, "What friends and opponents see", Hub.get(act).myName());
+        box.addView(name, fill(6));
+        box.addView(para("Players find each other through a matchmaker. A friend usually runs it and gives you its address."), fill(16));
         box.addView(Ink.caption(act, "Matchmaker address"), fill(14));
         final EditText host = Ink.field(act, "for example 203.0.113.5", prefs.getString("server_host", ""));
         box.addView(host, fill(6));
@@ -113,6 +116,8 @@ final class Setup {
             int p = 7777;
             try { p = Integer.parseInt(port.getText().toString().trim()); } catch (NumberFormatException ignored) { }
             prefs.edit().putString("server_host", host.getText().toString().trim()).putInt("server_port", p).apply();
+            Hub.get(act).setName(name.getText().toString());
+            Hub.get(act).restartPresence();
         };
         return box;
     }
@@ -153,6 +158,52 @@ final class Setup {
             });
             box.addView(get, fill(14));
         }
+
+        // RetroArch network commands: lets this app start hosting and show messages on the game screen
+        box.addView(Ink.caption(act, "Let Retro-Netplay talk to RetroArch"), fill(22));
+        box.addView(para("In RetroArch open Settings > Network and turn on Network Commands. Then the app can see which game is "
+                + "running, start hosting for you, and show \"you're in the queue\" on the game screen. Leave a game running in "
+                + "RetroArch and tap Check."), fill(6));
+        final TextView raResult = Ink.text(act, prefs.getBoolean("ra_cmds_ok", false) ? "Working." : "", 14, false, Ink.INK);
+        InkButton check = new InkButton(act, Icons.SIGNAL, "Check", false);
+        check.onPress(() -> {
+            raResult.setText("Asking RetroArch...");
+            new Thread(() -> {
+                boolean ok = net.netplay.core.RetroCmd.available();
+                prefs.edit().putBoolean("ra_cmds_ok", ok).apply();
+                if (ok) net.netplay.core.RetroCmd.showMsg("Retro-Netplay can talk to RetroArch.");
+                act.runOnUiThread(() -> raResult.setText(ok ? "Working. You'll see a message in RetroArch."
+                        : "No answer. Is RetroArch open, and is Network Commands on? (Settings > Network)"));
+            }).start();
+        });
+        box.addView(check, fill(10));
+        box.addView(raResult, fill(8));
+
+        // the controller shortcut
+        box.addView(Ink.caption(act, "Controller shortcut"), fill(22));
+        box.addView(para("Hold Start + Select for 3 seconds in any game to join the queue (and again to leave). Android only lets an app "
+                + "see these buttons through an accessibility switch. Retro-Netplay looks at Start and Select only, never stores or sends "
+                + "your button presses, never reads your screen, and always passes every press on to the game."), fill(6));
+        final TextView hkResult = Ink.text(act, HotkeyService.isOn(act) ? "The shortcut is on." : "The shortcut is off.", 14, false, Ink.INK);
+        InkButton turnOn = new InkButton(act, Icons.PAD, "Turn the shortcut on or off", false);
+        turnOn.onPress(() -> {
+            try {
+                act.startActivity(new Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS));
+                hkResult.setText("In the list, open Retro-Netplay controller shortcut, switch it on, then come back.");
+            } catch (ActivityNotFoundException ignored) { hkResult.setText("Open your phone's Accessibility settings and switch on Retro-Netplay controller shortcut."); }
+        });
+        box.addView(turnOn, fill(10));
+        InkButton test = new InkButton(act, Icons.CHECK, "Test it", false);
+        test.onPress(() -> {
+            if (!HotkeyService.isOn(act)) { hkResult.setText("Switch the shortcut on first."); return; }
+            Hub.get(act).onHotkeyTest = () -> hkResult.setText("It works! Holding Start + Select in a game will now queue you.");
+            Hub.get(act).hotkeyTest = true;
+            hkResult.setText("Now hold Start + Select for 3 seconds...");
+        });
+        box.addView(test, fill(8));
+        box.addView(hkResult, fill(8));
+        box.addView(para("Tip: if RetroArch opens its menu with Start + Select, change RetroArch's Menu Toggle combo "
+                + "(Settings > Input > Hotkeys) so the two don't clash."), fill(10));
         return box;
     }
 

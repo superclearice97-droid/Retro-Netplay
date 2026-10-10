@@ -4,6 +4,13 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Reads the router address so the app can ask it to open the netplay port (NAT-PMP). -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- Keeps the queue running while RetroArch is on screen, with a notification you can stop it from. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- "Match found" and friends asking to play. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- A short buzz when you join the queue or get matched. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
 
     <!-- Android 11+ hides other apps unless we ask to see them. -->
     <queries>
@@ -24,7 +31,8 @@
         android:fullBackupContent="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:theme="@style/Theme.Ink">
-        <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop">
+        <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop"
+            android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -36,6 +44,29 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="netplay" android:host="join" />
             </intent-filter>
+            <!-- netplay://friend?... links from the friend page -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="netplay" android:host="friend" />
+            </intent-filter>
         </activity>
+
+        <service android:name=".QueueService" android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <receiver android:name=".ActionReceiver" android:exported="false" />
+
+        <!-- Optional controller shortcut (Start + Select, 3 s). Off until you switch it on in Accessibility settings. -->
+        <service android:name=".HotkeyService"
+            android:label="Retro-Netplay controller shortcut"
+            android:exported="true"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data android:name="android.accessibilityservice" android:resource="@xml/hotkey_service" />
+        </service>
     </application>
 </manifest>

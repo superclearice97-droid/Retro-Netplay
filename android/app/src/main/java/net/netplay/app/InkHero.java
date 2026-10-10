@@ -99,7 +99,13 @@ final class InkHero extends View {
 
     @Override protected void onMeasure(int wSpec, int hSpec) {
         int w = MeasureSpec.getSize(wSpec);
-        setMeasuredDimension(w, Math.round(w * 0.86f));
+        if (MeasureSpec.getMode(hSpec) == MeasureSpec.EXACTLY && MeasureSpec.getSize(hSpec) > 0) {
+            setMeasuredDimension(w, MeasureSpec.getSize(hSpec));       // side column on a wide screen
+            return;
+        }
+        // on a phone held upright: keep the picture from filling the whole screen
+        int cap = Math.round(getResources().getDisplayMetrics().heightPixels * 0.42f);
+        setMeasuredDimension(w, Math.min(Math.round(w * 0.86f), Math.max(cap, Ink.dp(getContext(), 220))));
     }
 
     @Override protected void onSizeChanged(int w, int h, int ow, int oh) {
@@ -291,7 +297,7 @@ final class InkHero extends View {
         Paint labelBold = new Paint(label);
         labelBold.setTypeface(Ink.mono(getContext(), true));
         for (int i = 0; i < 4; i++) {
-            float size = SPOTS[i][2] * w * (0.6f + 0.4f * intro);
+            float size = SPOTS[i][2] * Math.min(w, h / 0.86f) * (0.6f + 0.4f * intro);
             float sx = SPOTS[i][0] * w, sy = SPOTS[i][1] * h;
             RectF r = hit[i];
             r.set(sx - size / 2, sy - size / 2, sx + size / 2, sy + size / 2);

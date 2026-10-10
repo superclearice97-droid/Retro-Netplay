@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="hotkey_description">Hold Start + Select on your controller for 3 seconds in any game to join or leave the Retro-Netplay queue. This switch only looks at the Start and Select buttons. It never stores or sends your button presses, never reads your screen, and always passes every press on to the game.</string>
+</resources>

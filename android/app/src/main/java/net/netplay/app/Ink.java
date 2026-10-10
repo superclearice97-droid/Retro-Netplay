@@ -152,7 +152,8 @@ final class Ink {
         Window w = d.getWindow();
         if (w != null) {
             w.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT));
-            w.setLayout((int) (c.getResources().getDisplayMetrics().widthPixels * 0.92f), ViewGroup.LayoutParams.WRAP_CONTENT);
+            int width = Math.min((int) (c.getResources().getDisplayMetrics().widthPixels * 0.92f), dp(c, 620));
+            w.setLayout(width, ViewGroup.LayoutParams.WRAP_CONTENT);
             w.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         }
         return d;

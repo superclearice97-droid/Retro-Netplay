@@ -1,74 +1,103 @@
 package net.netplay.app;
 
+import android.Manifest;
 import android.app.Activity;
 import android.app.Dialog;
-import android.content.ActivityNotFoundException;
-import android.content.ClipData;
-import android.content.ClipboardManager;
-import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.content.res.Configuration;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
-import android.widget.Toast;
 
+import net.netplay.core.Friends;
 import net.netplay.core.Games;
 import net.netplay.core.Invite;
 import net.netplay.core.Json;
-import net.netplay.core.MatchClient;
-import net.netplay.core.Plan;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
-/** One screen: see your setup at a glance, pick a game, press the big button, get matched. */
-public class MainActivity extends Activity {
-    private static final String[] RETROARCH_PACKAGES = {"com.retroarch.aarch64", "com.retroarch", "com.retroarch.ra32"};
-
+/**
+ * Home: your games. Tap one to start it and join the queue. The card at the top says where you are
+ * (in the queue, matched, playing). Friends, links and settings sit underneath.
+ */
+public class MainActivity extends Activity implements Hub.Ui {
     private SharedPreferences prefs;
-    private final List<Map<String, Object>> games = new ArrayList<>();
-    private int selected = 0;
-    private InkHero hero;
-    private TextView gameName, gameSystem;
-    private InkButton goButton, shareButton;
-    private TextView status, linkView;
-    private final String[] checkHelp = {"", "", "", ""};
-    private MatchClient running;   // non-null while searching
+    private Hub hub;
     private Setup setup;
-    private String currentLink = "";
-    private String currentGameName = "";
+    private InkHero hero;
+    private TextView stateTitle, stateText, status, gamesCaption;
+    private InkButton leaveButton, friendsButton, streamButton;
+    private LinearLayout gameList;
+    private EditText filter;
+    private final String[] checkHelp = {"", "", "", ""};
+    private Dialog openFriends;
+    private int buttonMode = -1;
+    private String listSignature = "";
+    private Runnable friendsRefresher;
+    private final android.os.Handler ticker = new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable tick = new Runnable() {
+        @Override public void run() { showState(); ticker.postDelayed(this, 1000); }
+    };
 
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         prefs = getSharedPreferences("nm", Context.MODE_PRIVATE);
-        loadGames();
-        selected = Math.min(prefs.getInt("last_game", 0), Math.max(0, games.size() - 1));
+        hub = Hub.get(this);
         buildUi();
-        refresh();
-        setup = new Setup(this, prefs, () -> {
-            loadGames();
-            selected = Math.max(0, Math.min(selected, games.size() - 1));
-            refresh();
-        });
+        setup = new Setup(this, prefs, this::hubChanged);
         if (!prefs.getBoolean("setup_done", false)) {
             status.setText("Let's set everything up once. It takes about two minutes.");
             hero.post(() -> setup.start());
         } else {
             setup.background(false);
         }
+        askForNotifications();
         handleLink(getIntent());
+    }
+
+    @Override protected void onStart() {
+        super.onStart();
+        hub.addUi(this);
+        if (!hub.hasPresence()) hub.restartPresence();
+        hubChanged();
+        ticker.post(tick);
+    }
+
+    @Override protected void onStop() {
+        hub.removeUi(this);
+        ticker.removeCallbacks(tick);
+        // stay visible to friends only while the queue or a game keeps the background service running
+        if (hub.state == Hub.State.IDLE && hub.playingKey.isEmpty()) hub.stopPresence();
+        super.onStop();
+    }
+
+    /** Turning a handheld or tablet: switch between the side-by-side and stacked layouts, keeping everything else. */
+    @Override public void onConfigurationChanged(Configuration c) {
+        super.onConfigurationChanged(c);
+        String keep = filter == null ? "" : filter.getText().toString();
+        buildUi();
+        filter.setText(keep);
+        listSignature = "";
+        buttonMode = -1;
+        hubChanged();
     }
 
     @Override
@@ -84,13 +113,27 @@ public class MainActivity extends Activity {
         if (requestCode == Setup.PICK_FOLDER && resultCode == RESULT_OK && data != null) setup.onFolderPicked(data.getData());
     }
 
-    /** Someone tapped an invite link (netplay://join?...) in a browser or chat. */
-    private void handleLink(Intent intent) {
-        Uri data = intent == null ? null : intent.getData();
-        if (data != null) joinWithLink(data.toString());
+    private void askForNotifications() {
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                && !prefs.getBoolean("asked_notif", false)) {
+            prefs.edit().putBoolean("asked_notif", true).apply();
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 5);
+        }
     }
 
-    // ------------------------------------------------------------ UI
+    /** netplay://join (invite) and netplay://friend links from a browser or chat app. */
+    private void handleLink(Intent intent) {
+        Uri data = intent == null ? null : intent.getData();
+        if (data == null) return;
+        String s = data.toString();
+        Friends.Friend f = Friends.parse(s);
+        if (f != null) { addFriendFromLink(f); return; }
+        joinWithLink(s);
+    }
+
+    static boolean retroArchInstalled(Context c) { return Hub.get(c).retroArchPackage() != null; }
+
+    // ================================================================ layout
     private int dp(int v) { return Ink.dp(this, v); }
 
     private LinearLayout.LayoutParams fill(int top) {
@@ -105,72 +148,103 @@ public class MainActivity extends Activity {
         return lp;
     }
 
-    private void buildUi() {
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        ScrollView scroll = new ScrollView(this);
-        scroll.setFillViewport(true);
-        scroll.setBackgroundColor(Ink.PAPER);
-        scroll.addView(root);
-        setContentView(scroll);
+    private boolean wide() {
+        Configuration c = getResources().getConfiguration();
+        return c.orientation == Configuration.ORIENTATION_LANDSCAPE || c.screenWidthDp >= 720;
+    }
 
+    private void buildUi() {
         hero = new InkHero(this);
-        hero.setListener(i -> explainCheck(i));
-        root.addView(hero, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        hero.setListener(this::explainCheck);
 
         LinearLayout body = new LinearLayout(this);
         body.setOrientation(LinearLayout.VERTICAL);
-        body.setPadding(dp(20), dp(8), dp(20), dp(24));
-        root.addView(body, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        body.setPadding(dp(20), dp(12), dp(20), dp(24));
+        buildBody(body);
 
-        body.addView(Ink.caption(this, "Game"));
-        LinearLayout pick = new LinearLayout(this);
-        pick.setOrientation(LinearLayout.HORIZONTAL);
-        pick.setGravity(Gravity.CENTER_VERTICAL);
-        pick.setFocusable(true);
-        pick.setClickable(true);
-        pick.setMinimumHeight(dp(60));
-        pick.setPadding(dp(14), dp(8), dp(10), dp(8));
-        pick.setBackground(Ink.surface(this, false));
-        LinearLayout names = new LinearLayout(this);
-        names.setOrientation(LinearLayout.VERTICAL);
-        gameName = Ink.text(this, "", 16.5f, true, Ink.INK);
-        gameSystem = Ink.text(this, "", 13, false, Ink.INK_SOFT);
-        names.addView(gameName);
-        names.addView(gameSystem);
-        pick.addView(names, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        pick.addView(new IconView(this, Icons.CHEVRON, Ink.INK), new LinearLayout.LayoutParams(dp(24), dp(24)));
-        pick.setOnClickListener(v -> chooseGame());
-        LinearLayout.LayoutParams plp = fill(6);
-        body.addView(pick, plp);
+        if (wide()) {
+            // side by side: the picture on the left, everything you press on the right (handhelds, tablets)
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setBackgroundColor(Ink.PAPER);
+            FrameLayout left = new FrameLayout(this);
+            left.addView(hero, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            row.addView(left, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.42f));
+            ScrollView sv = new ScrollView(this);
+            sv.addView(body);
+            row.addView(sv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.58f));
+            setContentView(row);
+        } else {
+            LinearLayout col = new LinearLayout(this);
+            col.setOrientation(LinearLayout.VERTICAL);
+            col.addView(hero, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            col.addView(body, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            ScrollView sv = new ScrollView(this);
+            sv.setFillViewport(true);
+            sv.setBackgroundColor(Ink.PAPER);
+            sv.addView(col);
+            setContentView(sv);
+        }
+    }
+
+    private void buildBody(LinearLayout body) {
+        // where you are: idle / in the queue / playing
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(16), dp(14), dp(16), dp(14));
+        card.setBackground(Ink.box(Ink.PAPER_DEEP, Ink.INK, 1, this));
+        stateTitle = Ink.text(this, "", 17, true, Ink.INK);
+        stateText = Ink.text(this, "", 13.5f, false, Ink.INK_SOFT);
+        card.addView(stateTitle);
+        card.addView(stateText, fill(4));
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        leaveButton = new InkButton(this, Icons.CLOSE, "Leave queue", true);
+        leaveButton.onPress(() -> hub.leave());
+        streamButton = new InkButton(this, Icons.PLAY, "Open stream", false);
+        streamButton.onPress(() -> { if (!hub.lastStreamUrl.isEmpty()) hub.openUrl(hub.lastStreamUrl); });
+        actions.addView(leaveButton, half(0));
+        actions.addView(streamButton, half(10));
+        card.addView(actions, fill(12));
+        body.addView(card, fill(0));
+
+        status = Ink.text(this, "", 14, false, Ink.INK);
+        status.setPadding(0, dp(10), 0, 0);
+        body.addView(status, fill(0));
+
+        // your games
+        gamesCaption = Ink.caption(this, "Your games");
+        body.addView(gamesCaption, fill(18));
+        body.addView(Ink.text(this, "Tap a game to start it and join the queue. Hold Start + Select for 3 seconds in a game to join or leave the queue.",
+                12.5f, false, Ink.INK_SOFT), fill(4));
+        filter = Ink.field(this, "Find a game", "");
+        filter.setVisibility(View.GONE);
+        filter.addTextChangedListener(new TextWatcher() {
+            public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
+            public void onTextChanged(CharSequence s, int a, int b, int c) { }
+            public void afterTextChanged(Editable s) { fillGames(); }
+        });
+        body.addView(filter, fill(10));
+        gameList = new LinearLayout(this);
+        gameList.setOrientation(LinearLayout.VERTICAL);
+        body.addView(gameList, fill(8));
 
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
-        InkButton add = new InkButton(this, Icons.DISC, "Game folders", false);
-        add.onPress(() -> setup.step(1, true));
-        InkButton remove = new InkButton(this, Icons.PLUS, "Add one", false);
-        remove.onPress(this::addGame);
-        row.addView(add, half(0));
-        row.addView(remove, half(10));
-        body.addView(row, fill(10));
+        InkButton folders = new InkButton(this, Icons.DISC, "Game folders", false);
+        folders.onPress(() -> setup.step(1, true));
+        InkButton add = new InkButton(this, Icons.PLUS, "Add one", false);
+        add.onPress(this::addGame);
+        row.addView(folders, half(0));
+        row.addView(add, half(10));
+        body.addView(row, fill(12));
 
-        goButton = new InkButton(this, Icons.SEARCH, "Find an opponent", true);
-        goButton.setMinimumHeight(dp(68));
-        goButton.onPress(() -> { if (running != null) running.cancel(); else search(null); });
-        body.addView(goButton, fill(22));
-
-        status = Ink.text(this, "", 15, false, Ink.INK);
-        status.setPadding(0, dp(14), 0, dp(4));
-        body.addView(status, fill(0));
-
-        linkView = Ink.text(this, "", 12.5f, false, Ink.INK_SOFT);
-        linkView.setVisibility(View.GONE);
-        linkView.setTextIsSelectable(true);
-        body.addView(linkView, fill(4));
-        shareButton = new InkButton(this, Icons.SHARE, "Share invite link", false);
-        shareButton.setVisibility(View.GONE);
-        shareButton.onPress(this::shareLink);
-        body.addView(shareButton, fill(8));
+        // people
+        body.addView(Ink.caption(this, "Friends"), fill(22));
+        friendsButton = new InkButton(this, Icons.SIGNAL, "Friends", true);
+        friendsButton.setMinimumHeight(dp(60));
+        friendsButton.onPress(this::openFriends);
+        body.addView(friendsButton, fill(8));
 
         LinearLayout bottom = new LinearLayout(this);
         bottom.setOrientation(LinearLayout.HORIZONTAL);
@@ -180,126 +254,194 @@ public class MainActivity extends Activity {
         settings.onPress(this::openSettings);
         bottom.addView(join, half(0));
         bottom.addView(settings, half(10));
-        body.addView(bottom, fill(26));
+        body.addView(bottom, fill(10));
     }
 
-    private void refresh() {
-        Map<String, Object> g = currentGame();
-        if (g == null) {
-            gameName.setText("No game yet");
-            gameSystem.setText("Tap Game folders");
-        } else {
-            gameName.setText((String) g.get("name"));
-            gameSystem.setText(Games.SYSTEMS.get((String) g.get("system")).label);
-        }
+    // ================================================================ state
+    @Override public void hubChanged() {
+        showState();
+        fillGames();
         refreshChecks();
+        int on;
+        synchronized (hub.online) { on = hub.online.size(); }
+        int n = hub.friends().size();
+        friendsButton.set(Icons.SIGNAL, n == 0 ? "Friends" : "Friends  ·  " + on + " of " + n + " online");
+        if (friendsRefresher != null) friendsRefresher.run();
     }
 
-    private Map<String, Object> currentGame() {
-        return (selected >= 0 && selected < games.size()) ? games.get(selected) : null;
+    @Override public void say(String message) { status.setText(message); }
+
+    @Override public void incomingCall(Hub.Call c) {
+        Ink.sheet(this, c.name, Ink.text(this, c.name + " " + c.what(hub) + ".", 15, false, Ink.INK),
+                "Accept", () -> hub.answer(c.id, true), "Decline", () -> hub.answer(c.id, false)).show();
+    }
+
+    private void showState() {
+        if (stateTitle == null) return;
+        boolean q = hub.state == Hub.State.QUEUE;
+        hero.setSearching(q);
+        if (q) {
+            long s = (System.currentTimeMillis() - hub.queueSince) / 1000;
+            stateTitle.setText("In the queue · " + String.format(Locale.ROOT, "%d:%02d", s / 60, s % 60));
+            stateText.setText(hub.queueWith.isEmpty() ? hub.queueName + (hub.friends().isEmpty() ? "" : " · friends first") : "Connecting you with " + hub.queueWith + " · " + hub.queueName);
+        } else if (!hub.playingKey.isEmpty()) {
+            stateTitle.setText("Playing " + hub.gameTitle(hub.playingKey));
+            stateText.setText(hub.playingWith.isEmpty() ? "Hold Start + Select for 3 seconds to look for an opponent." : "With " + hub.playingWith);
+        } else {
+            stateTitle.setText("Not in the queue");
+            stateText.setText(hub.serverHost().isEmpty() ? "Set the matchmaker address in Settings first." : "Pick a game below.");
+        }
+        int mode = q ? 1 : (!hub.playingKey.isEmpty() ? 2 : 0);
+        if (mode != buttonMode) {          // only when it changes, so the icon doesn't redraw every second
+            buttonMode = mode;
+            leaveButton.setVisibility(mode == 0 ? View.GONE : View.VISIBLE);
+            if (mode == 2) {
+                leaveButton.set(Icons.CHECK, "Done playing");
+                leaveButton.onPress(() -> hub.doneSession());
+            } else {
+                leaveButton.set(Icons.CLOSE, "Leave queue");
+                leaveButton.onPress(() -> hub.leave());
+            }
+        }
+        streamButton.setVisibility(!hub.lastStreamUrl.isEmpty() && !q ? View.VISIBLE : View.GONE);
+        if (!hub.message.isEmpty() && status.getText().length() == 0) status.setText(hub.message);
+    }
+
+    private void fillGames() {
+        if (gameList == null) return;
+        List<Map<String, Object>> games = hub.games();
+        gamesCaption.setText(("Your games" + (games.isEmpty() ? "" : "  ·  " + games.size())).toUpperCase());
+        filter.setVisibility(games.size() > 10 ? View.VISIBLE : View.GONE);
+        String f = filter.getText().toString().trim().toLowerCase(Locale.ROOT);
+        String playing0 = hub.state == Hub.State.QUEUE ? hub.queueKey : hub.playingKey;
+        StringBuilder sig = new StringBuilder(f).append('|').append(playing0);
+        for (Map<String, Object> g : games) sig.append('|').append(Hub.key(g));
+        // rebuild only when something in the list changed, so a controller's focus doesn't jump around
+        if (sig.toString().equals(listSignature)) return;
+        listSignature = sig.toString();
+        View focused = getCurrentFocus();
+        int focusIndex = focused != null && focused.getParent() == gameList ? gameList.indexOfChild(focused) : -1;
+        gameList.removeAllViews();
+        if (games.isEmpty()) {
+            gameList.addView(Ink.text(this, "No games yet. Tap Game folders and pick the folders where your games are.", 14, false, Ink.INK));
+            return;
+        }
+        String playing = hub.state == Hub.State.QUEUE ? hub.queueKey : hub.playingKey;
+        int shown = 0;
+        for (final Map<String, Object> g : games) {
+            String name = (String) g.get("name");
+            if (!f.isEmpty() && !name.toLowerCase(Locale.ROOT).contains(f)) continue;
+            if (++shown > 300) break;
+            gameList.addView(gameRow(g, Hub.key(g).equals(playing)), fill(shown == 1 ? 0 : 8));
+        }
+        if (focusIndex >= 0 && gameList.getChildCount() > 0) gameList.getChildAt(Math.min(focusIndex, gameList.getChildCount() - 1)).requestFocus();
+    }
+
+    private View gameRow(final Map<String, Object> g, boolean active) {
+        Games.Sys s = Hub.sys(g);
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setFocusable(true);
+        row.setClickable(true);
+        row.setMinimumHeight(dp(64));
+        row.setPadding(dp(14), dp(8), dp(12), dp(8));
+        row.setBackground(Ink.surface(this, active));
+        int fg = active ? Ink.PAPER : Ink.INK;
+        LinearLayout names = new LinearLayout(this);
+        names.setOrientation(LinearLayout.VERTICAL);
+        names.addView(Ink.text(this, (String) g.get("name"), 16, true, fg));
+        String sub = s.label + (s.hasNative() ? "" : " · joins a stream");
+        names.addView(Ink.text(this, sub, 12.5f, false, active ? 0xFFCFCEC9 : Ink.INK_SOFT));
+        row.addView(names, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        TextView go = Ink.text(this, s.hasNative() ? "PLAY" : "QUEUE", 13, true, fg);
+        go.setLetterSpacing(0.08f);
+        row.addView(go);
+        IconView icon = new IconView(this, Icons.PLAY, fg);
+        LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(dp(22), dp(22));
+        ip.leftMargin = dp(8);
+        row.addView(icon, ip);
+        row.setContentDescription(g.get("name") + ", " + s.label + ". Tap to play and join the queue. Press and hold for more.");
+        row.setOnClickListener(v -> {
+            icon.play();
+            status.setText("");
+            hub.play(this, g, prefs.getBoolean("auto_queue", true));
+        });
+        row.setOnLongClickListener(v -> { gameOptions(g); return true; });
+        return row;
+    }
+
+    private void gameOptions(final Map<String, Object> g) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        final Dialog[] d = new Dialog[1];
+        boolean nat = Hub.sys(g).hasNative();
+        if (nat) {
+            InkButton solo = new InkButton(this, Icons.PLAY, "Play without the queue", false);
+            solo.onPress(() -> { d[0].dismiss(); hub.play(this, g, false); });
+            box.addView(solo, fill(0));
+            InkButton q = new InkButton(this, Icons.SEARCH, "Queue only (it's already running)", false);
+            q.onPress(() -> { d[0].dismiss(); hub.queue(g, true, null, "", "play", true); });
+            box.addView(q, fill(8));
+        }
+        InkButton inv = new InkButton(this, Icons.SHARE, "Invite someone with a link", false);
+        inv.onPress(() -> { d[0].dismiss(); inviteWithLink(g); });
+        box.addView(inv, fill(8));
+        InkButton rm = new InkButton(this, Icons.TRASH, "Remove from the list", false);
+        rm.onPress(() -> { d[0].dismiss(); removeGame(g); });
+        box.addView(rm, fill(8));
+        d[0] = Ink.sheet(this, (String) g.get("name"), box, null, null, "Close");
+        d[0].show();
     }
 
     private void refreshChecks() {
-        Map<String, Object> g = currentGame();
         String[] note = new String[4];
         int[] st = new int[4];
-        boolean server = !prefs.getString("server_host", "").isEmpty();
+        boolean server = !hub.serverHost().isEmpty();
         st[0] = server ? InkHero.READY : InkHero.ATTENTION;
-        note[0] = server ? "set" : "not set";
-        checkHelp[0] = server ? "The matchmaker address is set. It is where players find each other."
+        note[0] = server ? (hub.presenceUp ? "online" : "set") : "not set";
+        checkHelp[0] = server ? "The matchmaker address is set. It is where players find each other." + (hub.presenceUp ? " Your friends can see you're online." : "")
                 : "Open Settings and enter the matchmaker address your friend gave you.";
+        int n = hub.games().size();
+        st[1] = n > 0 ? InkHero.READY : InkHero.ATTENTION;
+        note[1] = n > 0 ? n + " found" : "add some";
+        checkHelp[1] = n > 0 ? "Games are named from their files, so they match the other player's." : "Tap Game folders and pick the folders where your games are.";
+        boolean ra = hub.retroArchPackage() != null;
+        boolean hk = HotkeyService.isOn(this);
+        st[2] = ra ? InkHero.READY : InkHero.ATTENTION;
+        note[2] = ra ? (hk ? "shortcut on" : "RetroArch") : "install";
+        String pm = prefs.getString("port_message", "");
+        checkHelp[2] = (ra ? "RetroArch is installed." : "RetroArch isn't installed. Install it for Game Boy Advance, PS1 and Dreamcast netplay.")
+                + (hk ? " The Start + Select shortcut is on." : " The Start + Select shortcut is off (Settings > Run setup again).")
+                + (ra && !pm.isEmpty() ? "\n\n" + pm : "");
         boolean parsec = prefs.getBoolean("use_parsec", false);
         st[3] = InkHero.READY;
         note[3] = parsec ? "Parsec" : "built in";
         checkHelp[3] = parsec ? "Parsec: you can join another player's stream. A phone can't host one."
-                : "Built-in streaming: when you match, the other player's game opens in your browser and your touch controls play it.";
-        if (g == null) {
-            st[1] = InkHero.ATTENTION; note[1] = "add one";
-            checkHelp[1] = "Tap Game folders and pick the folders where your games are. Games are found and named for you, so they match the other player's.";
-            st[2] = InkHero.UNKNOWN; note[2] = "-";
-            checkHelp[2] = "Pick a game first.";
-        } else {
-            Games.Sys sys = Games.SYSTEMS.get((String) g.get("system"));
-            prefs.edit().putInt("last_game", selected).apply();
-            boolean hasRom = !((String) g.get("rom")).isEmpty();
-            String again = "\nYour opponent must add this game as \"" + g.get("name") + "\".";
-            if (sys.hasNative()) {
-                st[1] = hasRom ? InkHero.READY : InkHero.UNKNOWN;
-                note[1] = hasRom ? "file set" : "no file";
-                checkHelp[1] = (hasRom ? "The game file is set." : "No game file is set. Netplay needs one; streaming doesn't.") + again;
-                boolean ra = retroArchPackage() != null;
-                st[2] = ra ? InkHero.READY : InkHero.ATTENTION;
-                note[2] = ra ? "RetroArch" : "install";
-                String pm = prefs.getString("port_message", "");
-                checkHelp[2] = (ra ? "RetroArch is installed." : "RetroArch isn't installed. Install it for rollback netplay. Streaming still works.")
-                        + (ra && !pm.isEmpty() ? "\n\n" + pm : "");
-            } else {
-                st[1] = InkHero.READY; note[1] = "stream";
-                checkHelp[1] = sys.label + " games play by joining someone's stream." + again;
-                st[2] = InkHero.UNKNOWN; note[2] = "not needed";
-                checkHelp[2] = "No emulator is needed on this phone for " + sys.label + ".";
-            }
-        }
-        hero.setChecks(new String[]{"Server", "Game", "Emulator", "Stream"}, note, st);
+                : "PS2, PS3 and GameCube games stream from a friend's computer. When you match, the stream opens in your browser.";
+        hero.setChecks(new String[]{"Server", "Games", "Emulator", "Stream"}, note, st);
     }
 
     private void explainCheck(int i) {
         TextView t = Ink.text(this, checkHelp[i], 14.5f, false, Ink.INK);
-        String[] titles = {"Server", "Game", "Emulator", "Stream"};
+        String[] titles = {"Server", "Games", "Emulator", "Stream"};
         Ink.sheet(this, titles[i], t, i == 0 ? "Settings" : "OK", i == 0 ? this::openSettings : null, i == 0 ? "Close" : null).show();
     }
 
-    // ------------------------------------------------------------ games
+    // ================================================================ games
     @SuppressWarnings("unchecked")
-    private void loadGames() {
-        games.clear();
-        try {
-            Object o = Json.parse(prefs.getString("games", "[]"));
-            for (Object x : (List<Object>) o) {
-                if (!(x instanceof Map)) continue;
-                Map<String, Object> g = (Map<String, Object>) x;
-                // skip anything the screen can't show instead of crashing on it
-                if (!(g.get("name") instanceof String) || !(g.get("system") instanceof String)
-                        || !Games.SYSTEMS.containsKey(g.get("system"))) continue;
-                if (!(g.get("rom") instanceof String)) g.put("rom", "");
-                games.add(g);
-            }
-        } catch (RuntimeException ignored) { }
+    private void saveGames(List<Map<String, Object>> games) {
+        prefs.edit().putString("games", Json.stringify(games)).apply();
+        hubChanged();
     }
 
-    private void saveGames() { prefs.edit().putString("games", Json.stringify(games)).apply(); }
-
-    private void chooseGame() {
-        if (games.isEmpty()) { setup.step(1, true); return; }
-        final LinearLayout list = new LinearLayout(this);
-        list.setOrientation(LinearLayout.VERTICAL);
-        final Dialog[] dlg = new Dialog[1];
-        for (int i = 0; i < games.size(); i++) {
-            final int idx = i;
-            Map<String, Object> g = games.get(i);
-            TextView row = Ink.text(this, g.get("name") + "\n" + Games.SYSTEMS.get((String) g.get("system")).label, 15, i == selected, Ink.INK);
-            row.setContentDescription(g.get("name") + ", " + Games.SYSTEMS.get((String) g.get("system")).label + ". Long press to remove.");
-            row.setPadding(dp(14), dp(10), dp(14), dp(10));
-            row.setMinimumHeight(dp(56));
-            row.setGravity(Gravity.CENTER_VERTICAL);
-            row.setFocusable(true);
-            row.setClickable(true);
-            row.setBackground(Ink.surface(this, false));
-            row.setOnClickListener(v -> { selected = idx; dlg[0].dismiss(); refresh(); });
-            row.setOnLongClickListener(v -> {
-                dlg[0].dismiss();
-                Ink.sheet(this, "Remove " + games.get(idx).get("name") + "?",
-                        Ink.text(this, Boolean.TRUE.equals(games.get(idx).get("auto"))
-                                ? "It comes back the next time your game folders are scanned, unless you remove the file or folder."
-                                : "Your game file isn't deleted.", 14, false, Ink.INK),
-                        "Remove", () -> { selected = idx; removeGame(); }, "Cancel").show();
-                return true;
-            });
-            list.addView(row, fill(idx == 0 ? 0 : 8));
-        }
-        list.addView(Ink.text(this, "Tip: press and hold a game to remove it.", 12.5f, false, Ink.INK_SOFT), fill(12));
-        dlg[0] = Ink.sheet(this, "Choose a game", list, null, null, "Close");
-        dlg[0].show();
+    private void removeGame(Map<String, Object> g) {
+        List<Map<String, Object>> games = hub.games();
+        String k = Hub.key(g);
+        games.removeIf(x -> Hub.key(x).equals(k));
+        saveGames(games);
+        status.setText(Boolean.TRUE.equals(g.get("auto"))
+                ? "Removed. It comes back the next time your game folders are scanned, unless you remove the file." : "Removed. Your game file isn't deleted.");
     }
 
     private void addGame() {
@@ -337,50 +479,259 @@ public class MainActivity extends Activity {
         Ink.sheet(this, "Add a game", box, "Add", () -> {
             String n = name.getText().toString().trim();
             if (n.isEmpty()) return;
+            List<Map<String, Object>> games = hub.games();
             Map<String, Object> g = new LinkedHashMap<>();
             g.put("name", n);
             g.put("system", systems.get(pickedSys[0]).id);
             g.put("rom", rom.getText().toString().trim());
             games.add(g);
-            saveGames();
-            selected = games.size() - 1;
-            refresh();
+            saveGames(games);
         }, "Cancel").show();
     }
 
-    private void removeGame() {
-        if (selected >= 0 && selected < games.size()) {
-            games.remove(selected);
-            saveGames();
-            selected = Math.max(0, Math.min(selected, games.size() - 1));
-            refresh();
-        }
+    // ================================================================ links
+    private void askForLink() {
+        final EditText box = Ink.field(this, "Paste an invite or friend link", "");
+        Ink.sheet(this, "Join a link", box, "Go", () -> {
+            String t = box.getText().toString();
+            Friends.Friend f = Friends.parse(t);
+            if (f != null && !t.contains("/join")) addFriendFromLink(f); else joinWithLink(t);
+        }, "Cancel").show();
     }
 
-    // ------------------------------------------------------------ settings
+    private void joinWithLink(String text) {
+        Invite inv = Invite.parse(text);
+        if (inv == null) { status.setText("That doesn't look like a Retro-Netplay link."); return; }
+        Map<String, Object> g = hub.gameByKey(inv.game);
+        if (g == null) {
+            status.setText("You don't have " + hub.gameTitle(inv.game) + " in your games yet. Add its folder, then open the link again.");
+            return;
+        }
+        if (hub.serverHost().isEmpty()) prefs.edit().putString("server_host", inv.host).putInt("server_port", inv.port).apply();
+        if (Hub.sys(g).hasNative() && !hub.playingKey.equals(inv.game)) {
+            String problem = hub.boot(this, g);
+            if (!problem.isEmpty()) { status.setText(problem); return; }
+        }
+        hub.queue(g, hub.playingKey.equals(inv.game), inv.code, "your friend", "play", true);
+    }
+
+    /** Old-style invite: a link anyone can open. Friends are easier, but this works with people who aren't. */
+    private void inviteWithLink(Map<String, Object> g) {
+        if (hub.serverHost().isEmpty()) { status.setText("Set the matchmaker address in Settings first."); return; }
+        String code = Invite.newCode();
+        String linkHost = prefs.getString("invite_host", "").trim();
+        String link = Invite.link(linkHost.isEmpty() ? hub.serverHost() : linkHost, hub.serverPort(), Hub.key(g), code);
+        hub.queue(g, hub.playingKey.equals(Hub.key(g)), code, "", "play", true);
+        Intent send = new Intent(Intent.ACTION_SEND);
+        send.setType("text/plain");
+        send.putExtra(Intent.EXTRA_TEXT, "Play " + g.get("name") + " with me! " + link);
+        startActivity(Intent.createChooser(send, "Send your invite"));
+    }
+
+    // ================================================================ friends
+    private void addFriendFromLink(Friends.Friend f) {
+        if (f.id.equals(hub.myId())) { status.setText("That's your own friend link."); return; }
+        boolean added = hub.addFriend(f);
+        status.setText(added ? "Added " + f.name + ". You'll be friends once they add you too." : f.name + " is already your friend.");
+        hubChanged();
+    }
+
+    private void openFriends() {
+        final LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        final TextView me = Ink.text(this, "", 13, false, Ink.INK_SOFT);
+        box.addView(me);
+        LinearLayout r1 = new LinearLayout(this);
+        r1.setOrientation(LinearLayout.HORIZONTAL);
+        InkButton share = new InkButton(this, Icons.SHARE, "Share my link", true);
+        share.onPress(this::shareFriendLink);
+        InkButton add = new InkButton(this, Icons.PLUS, "Add a friend", false);
+        add.onPress(this::addFriendDialog);
+        r1.addView(share, half(0));
+        r1.addView(add, half(10));
+        box.addView(r1, fill(12));
+        final LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        box.addView(list, fill(14));
+        box.addView(Ink.text(this, "Friends are matched with you first. Both of you have to add each other. "
+                + "Tap a friend to play with them or to choose what they may do.", 12.5f, false, Ink.INK_SOFT), fill(14));
+        friendsRefresher = () -> {
+            me.setText("You: " + hub.myName() + "\nYour code: " + Friends.pretty(hub.myId())
+                    + (hub.serverHost().isEmpty() ? "\nSet the matchmaker address in Settings to see friends online." : hub.presenceUp ? "" : "\nConnecting..."));
+            list.removeAllViews();
+            List<Friends.Friend> fl = hub.friends();
+            if (fl.isEmpty()) list.addView(Ink.text(this, "No friends yet. Share your link, or add theirs.", 14, false, Ink.INK));
+            for (Friends.Friend f : fl) list.addView(friendRow(f), fill(list.getChildCount() == 0 ? 0 : 8));
+        };
+        friendsRefresher.run();
+        openFriends = Ink.sheet(this, "Friends", box, null, null, "Close", () -> friendsRefresher = null);
+        openFriends.setOnDismissListener(d -> friendsRefresher = null);
+        openFriends.show();
+    }
+
+    private View friendRow(final Friends.Friend f) {
+        Map<String, Object> on = hub.onlineInfo(f.id);
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setFocusable(true);
+        row.setClickable(true);
+        row.setMinimumHeight(dp(60));
+        row.setPadding(dp(12), dp(8), dp(12), dp(8));
+        row.setBackground(Ink.surface(this, false));
+        View dot = new View(this);
+        dot.setBackground(Ink.box(on != null ? Ink.spectrum(0.30f) : 0x00000000, Ink.INK, 1, this));
+        row.addView(dot, new LinearLayout.LayoutParams(dp(14), dp(14)));
+        LinearLayout names = new LinearLayout(this);
+        names.setOrientation(LinearLayout.VERTICAL);
+        names.setPadding(dp(12), 0, 0, 0);
+        names.addView(Ink.text(this, f.name, 15.5f, true, Ink.INK));
+        names.addView(Ink.text(this, describe(on) + privilegesShort(f), 12.5f, false, Ink.INK_SOFT));
+        row.addView(names, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        row.addView(new IconView(this, Icons.CHEVRON, Ink.INK), new LinearLayout.LayoutParams(dp(22), dp(22)));
+        row.setOnClickListener(v -> friendSheet(f));
+        return row;
+    }
+
+    private String describe(Map<String, Object> on) {
+        if (on == null) return "Offline";
+        String st = String.valueOf(on.get("state")), game = String.valueOf(on.get("game"));
+        if ("playing".equals(st) && !game.isEmpty()) return "Playing " + hub.gameTitle(game);
+        if ("queue".equals(st) && !game.isEmpty()) return "In the queue for " + hub.gameTitle(game);
+        return "Online";
+    }
+
+    private static String privilegesShort(Friends.Friend f) {
+        List<String> p = new ArrayList<>();
+        if (f.priority) p.add("priority");
+        if (f.join) p.add("can join");
+        if (f.watch) p.add("can watch");
+        if (f.slot) p.add("picks slot");
+        return p.isEmpty() ? "" : " · " + android.text.TextUtils.join(", ", p);
+    }
+
+    private void friendSheet(final Friends.Friend f) {
+        final Map<String, Object> on = hub.onlineInfo(f.id);
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.addView(Ink.text(this, describe(on) + "\nCode: " + Friends.pretty(f.id), 13, false, Ink.INK_SOFT));
+        final Dialog[] d = new Dialog[1];
+        if (on != null) {
+            final String theirGame = String.valueOf(on.get("game"));
+            boolean busy = !theirGame.isEmpty() && hub.gameByKey(theirGame) != null;
+            InkButton play = new InkButton(this, Icons.PAD, busy ? "Play " + hub.gameTitle(theirGame) + " with them" : "Ask them to play", true);
+            play.onPress(() -> {
+                d[0].dismiss();
+                if (busy) callFriend(f, theirGame, "play");
+                else pickGameThen(g -> callFriend(f, Hub.key(g), "play"));
+            });
+            box.addView(play, fill(14));
+            if ("playing".equals(on.get("state")) && busy) {
+                InkButton watch = new InkButton(this, Icons.MONITOR, "Watch them play", false);
+                watch.onPress(() -> { d[0].dismiss(); callFriend(f, theirGame, "watch"); });
+                box.addView(watch, fill(8));
+            }
+        } else {
+            box.addView(Ink.text(this, "When they're online you can ask them to play from here.", 13.5f, false, Ink.INK), fill(10));
+        }
+        box.addView(Ink.caption(this, "What " + f.name + " may do"), fill(20));
+        final InkCheck pri = new InkCheck(this, "Priority: matched with me before anyone else", f.priority);
+        final InkCheck join = new InkCheck(this, "Join anytime: can drop into my game without asking", f.join);
+        final InkCheck watch = new InkCheck(this, "Watch: can watch my games without asking", f.watch);
+        final InkCheck slot = new InkCheck(this, "Pick a controller slot (Player 2-4) on streams I host", f.slot);
+        box.addView(pri, fill(8));
+        box.addView(join, fill(2));
+        box.addView(watch, fill(2));
+        box.addView(slot, fill(2));
+        InkButton remove = new InkButton(this, Icons.TRASH, "Remove friend", false);
+        remove.onPress(() -> {
+            d[0].dismiss();
+            Ink.sheet(this, "Remove " + f.name + "?", Ink.text(this, "You'll stop seeing each other online. You can add them again later.", 14, false, Ink.INK),
+                    "Remove", () -> { hub.removeFriend(f.id); hubChanged(); }, "Cancel").show();
+        });
+        box.addView(remove, fill(16));
+        d[0] = Ink.sheet(this, f.name, box, "Save", () -> {
+            f.priority = pri.isOn(); f.join = join.isOn(); f.watch = watch.isOn(); f.slot = slot.isOn();
+            hub.updateFriend(f);
+            hubChanged();
+        }, "Close");
+        d[0].show();
+    }
+
+    private void callFriend(Friends.Friend f, String gameKey, String kind) {
+        String problem = hub.callFriend(f, gameKey, kind);
+        if (!problem.isEmpty()) status.setText(problem);
+    }
+
+    interface GamePick { void picked(Map<String, Object> g); }
+
+    private void pickGameThen(final GamePick then) {
+        List<Map<String, Object>> games = hub.games();
+        if (games.isEmpty()) { status.setText("Add your games first."); return; }
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        final Dialog[] d = new Dialog[1];
+        for (final Map<String, Object> g : games) {
+            TextView row = Ink.text(this, g.get("name") + "\n" + Hub.sys(g).label, 15, false, Ink.INK);
+            row.setPadding(dp(14), dp(10), dp(14), dp(10));
+            row.setMinimumHeight(dp(56));
+            row.setFocusable(true);
+            row.setClickable(true);
+            row.setBackground(Ink.surface(this, false));
+            row.setOnClickListener(v -> { d[0].dismiss(); then.picked(g); });
+            list.addView(row, fill(list.getChildCount() == 0 ? 0 : 8));
+        }
+        d[0] = Ink.sheet(this, "Which game?", list, null, null, "Cancel");
+        d[0].show();
+    }
+
+    private void shareFriendLink() {
+        if (hub.serverHost().isEmpty()) { status.setText("Set the matchmaker address in Settings first."); return; }
+        String linkHost = prefs.getString("invite_host", "").trim();
+        String link = Friends.link(linkHost.isEmpty() ? hub.serverHost() : linkHost, hub.serverPort(), hub.myId(), hub.myName());
+        Intent send = new Intent(Intent.ACTION_SEND);
+        send.setType("text/plain");
+        send.putExtra(Intent.EXTRA_TEXT, "Add me on Retro-Netplay so we can play together: " + link
+                + "\n(or type my code: " + Friends.pretty(hub.myId()) + ")");
+        startActivity(Intent.createChooser(send, "Share your friend link"));
+    }
+
+    private void addFriendDialog() {
+        final EditText box = Ink.field(this, "Their friend link or code", "");
+        Ink.sheet(this, "Add a friend", box, "Add", () -> {
+            Friends.Friend f = Friends.parse(box.getText().toString());
+            if (f == null) status.setText("That isn't a friend link or code. Codes look like a1b2-c3d4-...");
+            else addFriendFromLink(f);
+        }, "Cancel").show();
+    }
+
+    // ================================================================ settings
     private void openSettings() {
         final LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.addView(Ink.caption(this, "Matchmaker address"));
+        box.addView(Ink.caption(this, "Your name (friends and opponents see it)"));
+        final EditText name = Ink.field(this, "Your name", hub.myName());
+        box.addView(name, fill(6));
+        box.addView(Ink.caption(this, "Matchmaker address"), fill(12));
         final EditText host = Ink.field(this, "for example 203.0.113.5", prefs.getString("server_host", ""));
         box.addView(host, fill(6));
         box.addView(Ink.caption(this, "Port"), fill(12));
         final EditText port = Ink.field(this, "7777", String.valueOf(prefs.getInt("server_port", 7777)));
         box.addView(port, fill(6));
-        box.addView(Ink.caption(this, "Public address for invite links"), fill(12));
+        box.addView(Ink.caption(this, "Public address for links"), fill(12));
         final EditText inviteHost = Ink.field(this, "blank = same as above", prefs.getString("invite_host", ""));
         box.addView(inviteHost, fill(6));
+        final InkCheck autoQueue = new InkCheck(this, "Join the queue when I start a game", prefs.getBoolean("auto_queue", true));
+        final InkCheck friendsOnly = new InkCheck(this, "Only match me with friends", prefs.getBoolean("friends_only", false));
+        final InkCheck showOnline = new InkCheck(this, "Let friends see when I'm online and what I'm playing", prefs.getBoolean("show_online", true));
         final InkCheck autoPorts = new InkCheck(this, "Open the port on my router automatically (recommended)", prefs.getBoolean("auto_ports", true));
         final InkCheck canHost = new InkCheck(this, "I opened port 55435 on my router myself", prefs.getBoolean("can_host", false));
-        final InkCheck inviteOn = new InkCheck(this, "Make an invite link when I search", prefs.getBoolean("invite_on", true));
-        final InkCheck randoms = new InkCheck(this, "Also let random players match me", prefs.getBoolean("invite_randoms", true));
-        final InkCheck autoShare = new InkCheck(this, "Open the share sheet when I search", prefs.getBoolean("auto_share", true));
         final InkCheck useParsec = new InkCheck(this, "Use Parsec instead of built-in streaming (PS2/PS3)", prefs.getBoolean("use_parsec", false));
-        box.addView(autoPorts, fill(14));
+        box.addView(autoQueue, fill(14));
+        box.addView(friendsOnly, fill(2));
+        box.addView(showOnline, fill(2));
+        box.addView(autoPorts, fill(2));
         box.addView(canHost, fill(2));
-        box.addView(inviteOn, fill(2));
-        box.addView(randoms, fill(2));
-        box.addView(autoShare, fill(2));
         box.addView(useParsec, fill(2));
         final Dialog[] me = new Dialog[1];
         InkButton again = new InkButton(this, Icons.CHECK, "Run setup again", false);
@@ -389,198 +740,22 @@ public class MainActivity extends Activity {
         me[0] = Ink.sheet(this, "Settings", box, "Save", () -> {
             int p = 7777;
             try { p = Integer.parseInt(port.getText().toString().trim()); } catch (NumberFormatException ignored) { }
+            boolean serverChanged = !host.getText().toString().trim().equals(hub.serverHost()) || p != hub.serverPort()
+                    || showOnline.isOn() != prefs.getBoolean("show_online", true);
             prefs.edit().putString("server_host", host.getText().toString().trim())
                     .putInt("server_port", p).putBoolean("can_host", canHost.isOn())
                     .putString("invite_host", inviteHost.getText().toString().trim())
-                    .putBoolean("invite_on", inviteOn.isOn())
-                    .putBoolean("invite_randoms", randoms.isOn())
+                    .putBoolean("auto_queue", autoQueue.isOn())
+                    .putBoolean("friends_only", friendsOnly.isOn())
+                    .putBoolean("show_online", showOnline.isOn())
                     .putBoolean("use_parsec", useParsec.isOn())
-                    .putBoolean("auto_share", autoShare.isOn())
                     .putBoolean("auto_ports", autoPorts.isOn()).apply();
+            hub.setName(name.getText().toString());
+            if (serverChanged) hub.restartPresence();
             status.setText("Settings saved.");
-            refreshChecks();
+            hubChanged();
             setup.background(true);
         }, "Cancel");
         me[0].show();
-    }
-
-    // ------------------------------------------------------------ searching
-    private Map<String, Object> findGame(String key) {
-        for (Map<String, Object> g : games) {
-            if (Games.key((String) g.get("system"), (String) g.get("name")).equals(key)) return g;
-        }
-        return null;
-    }
-
-    private static boolean isLocalAddress(String h) {
-        String x = h.toLowerCase();
-        return x.isEmpty() || x.equals("localhost") || x.startsWith("127.") || x.startsWith("192.168.") || x.startsWith("10.");
-    }
-
-    /** join == null: start my own search (and make an invite link). join != null: follow a friend's link. */
-    private void search(final Invite join) {
-        if (running != null) { status.setText("Finish or cancel the current search first."); return; }
-        final Map<String, Object> g;
-        final String host, code;
-        final int port;
-        final boolean only;
-        if (join != null) {
-            g = findGame(join.game);
-            if (g == null) {
-                String guess = join.game.substring(join.game.indexOf(':') + 1).replace('-', ' ');
-                status.setText("You don't have this game yet. Tap Add and name it \"" + guess + "\" (capital letters don't matter), then open the invite again.");
-                return;
-            }
-            host = join.host; port = join.port; code = join.code; only = true;
-        } else {
-            g = currentGame();
-            if (g == null) { status.setText("Add a game first."); return; }
-            host = prefs.getString("server_host", "");
-            if (host.isEmpty()) { status.setText("Open Settings and enter the matchmaker address first."); return; }
-            port = prefs.getInt("server_port", 7777);
-            code = prefs.getBoolean("invite_on", true) ? Invite.newCode() : "";
-            only = !prefs.getBoolean("invite_randoms", true);
-        }
-        final Games.Sys sys = Games.SYSTEMS.get((String) g.get("system"));
-        final String rom = (String) g.get("rom");
-        final Plan.Offer offer = Plan.offer(sys, retroArchPackage() != null, !rom.isEmpty(), setup.canHostNative());
-        final String key = Games.key(sys.id, (String) g.get("name"));
-        final MatchClient mc = new MatchClient();
-        running = mc;
-        goButton.set(Icons.SEARCH, "Cancel search");
-        goButton.icon().loop(true);
-        hero.setSearching(true);
-        status.setText((join != null ? "Joining your friend for " : "Looking for an opponent for ") + g.get("name") + "...");
-        if (join == null && !code.isEmpty()) {
-            String linkHost = prefs.getString("invite_host", "").trim();
-            showInvite((String) g.get("name"), Invite.link(linkHost.isEmpty() ? host : linkHost, port, key, code),
-                    isLocalAddress(linkHost.isEmpty() ? host : linkHost));
-        }
-        new Thread(() -> {
-            try {
-                Map<String, Object> info = new LinkedHashMap<>();
-                info.put("native", new LinkedHashMap<String, Object>());
-                info.put("stream", Plan.streamInfo(prefs.getBoolean("use_parsec", false)));
-                MatchClient.Match m = mc.search(host, port, key, offer.lanes, info, offer.canHost,
-                        "android", code.isEmpty() ? null : code, only);
-                runOnUiThread(() -> onMatch(sys, rom, m, host, port));
-            } catch (MatchClient.Cancelled c) {
-                runOnUiThread(() -> finishSearch("Search cancelled."));
-            } catch (Exception e) {
-                runOnUiThread(() -> finishSearch("Couldn't reach the matchmaker at " + host + ":" + port
-                        + " (" + e.getMessage() + "). Check Settings" + (join != null ? " or ask for a new invite." : ".")));
-            }
-        }).start();
-    }
-
-    // ------------------------------------------------------------ invites
-    private void showInvite(String gameName, String link, boolean localOnly) {
-        currentLink = link;
-        currentGameName = gameName;
-        linkView.setText(link);
-        linkView.setVisibility(View.VISIBLE);
-        shareButton.setVisibility(View.VISIBLE);
-        shareButton.icon().play();
-        ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-        cm.setPrimaryClip(ClipData.newPlainText("netplay invite", link));
-        status.setText(status.getText() + " Invite link copied."
-                + (localOnly ? " (It only works on your own network until you set a public address in Settings.)" : ""));
-        if (prefs.getBoolean("auto_share", true) && !localOnly) shareLink();
-    }
-
-    /** The system share sheet reaches every social app you have, with no logins handed to this app. */
-    private void shareLink() {
-        if (currentLink.isEmpty()) return;
-        Intent send = new Intent(Intent.ACTION_SEND);
-        send.setType("text/plain");
-        send.putExtra(Intent.EXTRA_TEXT, "Looking for a " + currentGameName + " match! Join me: " + currentLink);
-        startActivity(Intent.createChooser(send, "Share your invite"));
-    }
-
-    private void askForLink() {
-        final EditText box = Ink.field(this, "Paste the invite link", "");
-        Ink.sheet(this, "Join with a link", box, "Join", () -> joinWithLink(box.getText().toString()), "Cancel").show();
-    }
-
-    private void joinWithLink(String text) {
-        Invite inv = Invite.parse(text);
-        if (inv == null) { status.setText("That doesn't look like a Netplay Matchmaker invite link."); return; }
-        search(inv);
-    }
-
-    private void finishSearch(String message) {
-        running = null;
-        goButton.icon().loop(false);
-        goButton.set(Icons.SEARCH, "Find an opponent");
-        hero.setSearching(false);
-        status.setText(message);
-        currentLink = "";
-        linkView.setVisibility(View.GONE);
-        shareButton.setVisibility(View.GONE);
-    }
-
-    private void onMatch(Games.Sys sys, String rom, MatchClient.Match m, String host, int port) {
-        // Built-in stream: the guest page lives on the matchmaker's web port (TCP port + 1).
-        String playUrl = Plan.playUrl(host, port, m.play, m.secureWeb);
-        Plan plan = Plan.make(sys, m.lane, m.role, m.peer, playUrl);
-        String who = m.peerString("client");
-        finishSearch((m.via.equals("invite") ? "Your friend joined from the invite! " : "") + plan.message + (who.isEmpty() ? "" : "  (Opponent is on " + who + ".)"));
-        if (plan.kind == Plan.Kind.ERROR) return;
-        if (!plan.clipboard.isEmpty()) {
-            ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-            cm.setPrimaryClip(ClipData.newPlainText("netplay", plan.clipboard));
-        }
-        if (plan.kind == Plan.Kind.OPEN_STREAM) {
-            try {
-                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(plan.clipboard)));
-            } catch (ActivityNotFoundException e) {
-                status.setText("No web browser found. Open this address in a browser: " + plan.clipboard + " (copied).");
-            }
-        } else if (plan.kind == Plan.Kind.OPEN_PARSEC) {
-            try {
-                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("parsec://peer_id=" + plan.clipboard)));
-            } catch (ActivityNotFoundException e) {
-                status.setText("Parsec isn't installed. Install the Parsec app, then join peer ID " + plan.clipboard + " (copied).");
-            }
-        } else {
-            launchRetroArch(plan.core, rom);
-        }
-    }
-
-    // ------------------------------------------------------------ RetroArch
-    static boolean retroArchInstalled(android.content.Context c) {
-        for (String pkg : RETROARCH_PACKAGES) {
-            try { c.getPackageManager().getPackageInfo(pkg, 0); return true; }
-            catch (PackageManager.NameNotFoundException ignored) { }
-        }
-        return false;
-    }
-
-    private String retroArchPackage() {
-        for (String pkg : RETROARCH_PACKAGES) {
-            try {
-                getPackageManager().getPackageInfo(pkg, 0);
-                return pkg;
-            } catch (PackageManager.NameNotFoundException ignored) { }
-        }
-        return null;
-    }
-
-    /** Standard way launchers start RetroArch on Android. */
-    private void launchRetroArch(String core, String rom) {
-        String pkg = retroArchPackage();
-        if (pkg == null) { Toast.makeText(this, "RetroArch isn't installed.", Toast.LENGTH_LONG).show(); return; }
-        try {
-            Intent i = new Intent(Intent.ACTION_MAIN);
-            i.setComponent(new ComponentName(pkg, "com.retroarch.browser.retroactivity.RetroActivityFuture"));
-            i.putExtra("ROM", rom);
-            i.putExtra("LIBRETRO", "/data/data/" + pkg + "/cores/" + core + "_libretro_android.so");
-            i.putExtra("CONFIGFILE", "/storage/emulated/0/Android/data/" + pkg + "/files/retroarch.cfg");
-            i.putExtra("QUITFOCUS", "");
-            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-            startActivity(i);
-        } catch (RuntimeException e) {
-            status.setText("Couldn't start RetroArch: " + e.getMessage());
-        }
     }
 }

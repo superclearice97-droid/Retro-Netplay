@@ -8,13 +8,23 @@ are removed from every pool at once. Compatible = same game, same lane, and at l
 Invites: a search may carry an invite code. It then also waits in a PRIVATE room (game + code).
 `invite_only` clients wait ONLY in that private room, so a friend with a link meets the person who
 shared it, while that person stays open to randoms in the public pool unless they chose otherwise.
+
+Friends (optional): a player may send a random secret (`me`) and the ids of their friends. Their id is a hash
+of the secret, so nobody can pretend to be them. Two players are friends only if BOTH list each other. In
+the public pool friends are matched first (players marked priority before other friends); a player with
+friends waits `friend_wait` seconds before strangers are allowed. `friends_only` never allows strangers.
+A separate `hello` connection keeps you visible to your friends while you're online, and carries calls
+("play with me" / "let me watch") between friends. The server keeps none of this after you disconnect.
 """
 import asyncio
+import hashlib
 import html
 import json
 import os
 import re
+import secrets
 import ssl
+import time
 import sys
 from urllib.parse import parse_qs, quote, urlsplit
 
@@ -36,6 +46,40 @@ SEARCHES_PER_MIN = 30      # new searches one address may start per minute (stop
 INFO_KEY_RE = re.compile(r"^[A-Za-z0-9_]{1,32}$")
 open_by_ip = {}            # ip -> searches currently waiting
 recent_by_ip = {}          # ip -> [start times in the last minute]
+
+# Friends
+ID_RE = re.compile(r"^[0-9a-f]{24}$")
+SECRET_RE = re.compile(r"^[0-9a-f]{32,64}$")
+CALL_RE = re.compile(r"^[A-Za-z0-9]{6,32}$")
+MAX_FRIENDS = 200
+FRIEND_WAIT = 15           # default seconds a player with friends waits for one before strangers count
+FRIEND_WAIT_MAX = 60
+MAX_PRESENCE_PER_IP = 8
+MAX_PRESENCE = 20000
+CALLS_PER_MIN = 10
+CALL_SECONDS = 60          # an unanswered call expires
+STATES = ("idle", "queue", "playing")
+online = {}                # player id -> Presence (only while connected)
+presence_by_ip = {}
+pending_calls = {}         # (caller id, callee id, call id) -> (game, kind, expiry)
+
+
+def player_id(secret):
+    """Public id = start of SHA-256 of the secret. Friends share ids; only the owner knows the secret."""
+    return hashlib.sha256(secret.encode("ascii")).hexdigest()[:24]
+
+
+def clean_name(n):
+    if not isinstance(n, str):
+        return ""
+    n = "".join(c for c in n if c.isprintable() and c not in "<>\"\\")
+    return " ".join(n.split())[:24]
+
+
+def id_set(v):
+    if not isinstance(v, list):
+        return set()
+    return {x for x in v[:MAX_FRIENDS] if isinstance(x, str) and ID_RE.match(x)}
 
 
 def clean_info(info):
@@ -93,6 +137,19 @@ class Waiter:
         # rooms to wait in, most specific first
         self.keys = ([f"{self.game}#{invite}"] if invite else []) + ([] if only else [self.game])
         self.done = False
+        me = req.get("me")
+        self.id = player_id(me) if isinstance(me, str) and SECRET_RE.match(me) else ""
+        self.name = clean_name(req.get("name"))
+        self.friends = id_set(req.get("friends")) if self.id else set()
+        self.priority = id_set(req.get("priority")) & self.friends
+        self.friends_only = bool(req.get("friends_only")) and bool(self.id)
+        self.prefer_host = bool(req.get("prefer_host"))
+        fw = req.get("friend_wait")
+        wait = fw if isinstance(fw, (int, float)) and not isinstance(fw, bool) else FRIEND_WAIT
+        wait = max(0.0, min(float(wait), FRIEND_WAIT_MAX)) if self.friends else 0.0
+        self.since = time.monotonic()
+        self.open_at = self.since + wait
+        self.timer = None
 
 
 def validate(req):
@@ -108,6 +165,19 @@ def validate(req):
         return "invite must be 4 to 32 letters or digits"
     if req.get("invite_only") and not inv:
         return "invite_only needs an invite code"
+    return validate_social(req)
+
+
+def validate_social(req):
+    me = req.get("me")
+    if me is not None and (not isinstance(me, str) or not SECRET_RE.match(me)):
+        return "me must be 32 to 64 lowercase hex digits"
+    for k in ("friends", "priority"):
+        v = req.get(k)
+        if v is not None and (not isinstance(v, list) or len(v) > MAX_FRIENDS):
+            return f"{k} must be a list of at most {MAX_FRIENDS} ids"
+    if req.get("name") is not None and not isinstance(req.get("name"), str):
+        return "name must be text"
     return ""
 
 
@@ -171,13 +241,103 @@ def wants_own_stream(w):
     return isinstance(st, dict) and st.get("backend") == "own"
 
 
-def peer_view(other, lane):
+def peer_view(other, lane, me=None):
     """What one player learns about the other. The IP address is only shared on the native lane, where
-    the emulators connect directly and need it; stream matches go through Parsec or our relay instead."""
+    the emulators connect directly and need it; stream matches go through Parsec or our relay instead.
+    The player id is only shown to a mutual friend, never to a stranger."""
     v = {**(other.info.get(lane) or {}), "client": other.client}
+    if other.name:
+        v["name"] = other.name
+    if me is not None and mutual(me, other):
+        v["friend"] = True
+        v["id"] = other.id
     if lane == "native":
         v["ip"] = other.ip
     return v
+
+
+def mutual(a, b):
+    return bool(a.id and b.id and a.id != b.id and a.id in b.friends and b.id in a.friends)
+
+
+def strangers_ok(x, now):
+    return not x.friends_only and now >= x.open_at
+
+
+def rank(a, b, key, now):
+    """Lower is better; None = these two may not be paired (yet)."""
+    if "#" in key:
+        return 0                                   # an invite or a friend's call: always
+    if mutual(a, b):
+        return 0 if (b.id in a.priority or a.id in b.priority) else 1
+    if strangers_ok(a, now) and strangers_ok(b, now):
+        return 2
+    return None
+
+
+def roles(w, other, lane):
+    """(host, guest) or None. The player who waited longer hosts, unless only one can, or one asked to."""
+    if other.can_host[lane] and w.can_host[lane]:
+        return (w, other) if (w.prefer_host and not other.prefer_host) else (other, w)
+    if other.can_host[lane]:
+        return other, w
+    if w.can_host[lane]:
+        return w, other
+    return None
+
+
+def find_match(w):
+    now = time.monotonic()
+    best = None
+    for key in w.keys:
+        for lane in w.lanes:
+            for other in pools.get((key, lane), []):
+                if other is w or other.done or not compatible(other, w, lane):
+                    continue
+                hg = roles(w, other, lane)
+                r = rank(w, other, key, now)
+                if hg is None or r is None:
+                    continue
+                cand = (r, other.since, key, lane, hg)
+                if best is None or cand[:2] < best[:2]:
+                    best = cand
+    return None if best is None else best[2:]
+
+
+def do_match(w, key, lane, hg):
+    host, guest = hg
+    for x in (host, guest):
+        leave_all(x)
+        x.done = True
+        if x.timer:
+            x.timer.cancel()
+            x.timer = None
+    via = "invite" if "#" in key else "public"
+    to_host = {"op": "matched", "v": 1, "lane": lane, "role": "host", "via": via, "peer": peer_view(guest, lane, host)}
+    to_guest = {"op": "matched", "v": 1, "lane": lane, "role": "guest", "via": via, "peer": peer_view(host, lane, guest)}
+    if lane == "stream" and wants_own_stream(host) and wants_own_stream(guest):
+        sess = sessions.create(w.game)
+        if sess:    # else: server is full, fall through to the plain match
+            to_host["session"] = {"key": sess.keys["host"]}
+            to_guest["session"] = {"key": sess.keys["guest"], "play": f"/play?t={sess.keys['guest']}"}
+            if TLS:
+                to_host["session"]["web"] = to_guest["session"]["web"] = "https"
+    for x, msg in ((host, to_host), (guest, to_guest)):
+        try:
+            send(x, msg)
+        except Exception:
+            pass
+    print(f"matched on {lane} ({w.game}, {via}{', friends' if mutual(host, guest) else ''}) host={host.client} guest={guest.client}", flush=True)
+
+
+def retry(w):
+    """A player's friends-only head start just ended: try again, now with strangers allowed."""
+    w.timer = None
+    if w.done:
+        return
+    m = find_match(w)
+    if m:
+        do_match(w, *m)
 
 
 async def pinger(w):
@@ -215,6 +375,9 @@ async def handle(reader, writer):
             writer.write((json.dumps(reply) + "\n").encode())
             await writer.drain()
             return
+        if isinstance(req, dict) and req.get("op") == "hello":
+            await presence(reader, writer, req, ip)
+            return
         problem = validate(req) or admit(ip, asyncio.get_running_loop().time())
         if problem:
             writer.write((json.dumps({"op": "error", "msg": problem}) + "\n").encode())
@@ -223,37 +386,16 @@ async def handle(reader, writer):
         w = Waiter(writer, req)
         open_by_ip[ip] = open_by_ip.get(ip, 0) + 1
         counted = True
-        for key in w.keys:
-            for lane in w.lanes:
-                for other in list(pools.get((key, lane), [])):
-                    if other.done or not compatible(other, w, lane):
-                        continue
-                    if other.can_host[lane]:
-                        host, guest = other, w
-                    elif w.can_host[lane]:
-                        host, guest = w, other
-                    else:
-                        continue
-                    leave_all(other)
-                    other.done = w.done = True
-                    via = "invite" if "#" in key else "public"
-                    to_host = {"op": "matched", "v": 1, "lane": lane, "role": "host", "via": via, "peer": peer_view(guest, lane)}
-                    to_guest = {"op": "matched", "v": 1, "lane": lane, "role": "guest", "via": via, "peer": peer_view(host, lane)}
-                    if lane == "stream" and wants_own_stream(host) and wants_own_stream(guest):
-                        sess = sessions.create(w.game)
-                        if sess:    # else: server is full, fall through to the plain match
-                            to_host["session"] = {"key": sess.keys["host"]}
-                            to_guest["session"] = {"key": sess.keys["guest"], "play": f"/play?t={sess.keys['guest']}"}
-                            if TLS:
-                                to_host["session"]["web"] = to_guest["session"]["web"] = "https"
-                    send(host, to_host)
-                    send(guest, to_guest)
-                    print(f"matched on {lane} ({w.game}, {via}) host={host.client} guest={guest.client}", flush=True)
-                    await writer.drain()
-                    return
+        m = find_match(w)
+        if m:
+            do_match(w, *m)
+            await writer.drain()
+            return
         for key in w.keys:
             for lane in w.lanes:
                 pools.setdefault((key, lane), []).append(w)
+        if w.open_at > time.monotonic():   # friends get first go; after this, strangers are allowed too
+            w.timer = asyncio.get_running_loop().call_later(w.open_at - time.monotonic() + 0.01, retry, w)
         print(f"waiting: {w.game} lanes={w.lanes} client={w.client}" + (" (invite)" if any("#" in k for k in w.keys) else ""), flush=True)
         ping = asyncio.create_task(pinger(w))
         while await reader.read(1024):   # until the client cancels (closes); anything it sends is ignored
@@ -270,7 +412,168 @@ async def handle(reader, writer):
         if w:
             w.done = True
             leave_all(w)
+            if w.timer:
+                w.timer.cancel()
         writer.close()
+
+
+# ----------------------------------------------------------------- friends online
+class Presence:
+    def __init__(self, writer, req, ip):
+        self.writer, self.ip = writer, ip
+        self.id = player_id(req["me"])
+        self.name = clean_name(req.get("name")) or "Player"
+        self.friends = id_set(req.get("friends"))
+        self.state, self.game = "idle", ""
+        self.call_times = []
+        self.closed = False
+
+
+def p_mutual(a, b):
+    return a.id != b.id and a.id in b.friends and b.id in a.friends
+
+
+def p_send(p, msg):
+    if p.closed:
+        return
+    try:
+        p.writer.write((json.dumps(msg) + "\n").encode())
+    except Exception:
+        p.closed = True
+
+
+def push_friends(p):
+    """Tell p which of its friends are online now. Only mutual friends, and only name, state and game."""
+    lst = []
+    for fid in sorted(p.friends):
+        q = online.get(fid)
+        if q and p_mutual(p, q):
+            lst.append({"id": q.id, "name": q.name, "state": q.state, "game": q.game})
+    p_send(p, {"op": "friends", "v": 1, "online": lst})
+
+
+def tell_friends(p):
+    for fid in p.friends:
+        q = online.get(fid)
+        if q and p_mutual(p, q):
+            push_friends(q)
+
+
+def validate_hello(req):
+    if not isinstance(req.get("me"), str) or not SECRET_RE.match(req["me"]):
+        return "hello needs me: 32 to 64 lowercase hex digits"
+    return validate_social(req)
+
+
+def prune_calls(now):
+    for k in [k for k, v in pending_calls.items() if v[2] < now]:
+        pending_calls.pop(k, None)
+
+
+def on_presence_msg(p, m):
+    now = time.monotonic()
+    op = m.get("op")
+    if op == "status":
+        st, game = m.get("state"), m.get("game") or ""
+        if st in STATES and isinstance(game, str) and (game == "" or GAME_RE.match(game)):
+            p.state, p.game = st, game
+            tell_friends(p)
+    elif op == "call":
+        to, game, kind, cid = m.get("to"), m.get("game"), m.get("kind"), m.get("call")
+        if not (isinstance(to, str) and ID_RE.match(to) and isinstance(game, str) and GAME_RE.match(game)
+                and kind in ("play", "watch") and isinstance(cid, str) and CALL_RE.match(cid)):
+            return p_send(p, {"op": "call_failed", "call": cid if isinstance(cid, str) else "", "msg": "bad call"})
+        p.call_times = [t for t in p.call_times if now - t < 60]
+        if len(p.call_times) >= CALLS_PER_MIN:
+            return p_send(p, {"op": "call_failed", "call": cid, "msg": "too many calls; wait a minute"})
+        p.call_times.append(now)
+        q = online.get(to)
+        if not q or not p_mutual(p, q):
+            return p_send(p, {"op": "call_failed", "call": cid, "msg": "not online"})
+        prune_calls(now)
+        if len(pending_calls) > 50000:
+            return p_send(p, {"op": "call_failed", "call": cid, "msg": "the matchmaker is busy"})
+        pending_calls[(p.id, q.id, cid)] = (game, kind, now + CALL_SECONDS)
+        p_send(q, {"op": "call", "v": 1, "from": p.id, "name": p.name, "game": game, "kind": kind, "call": cid})
+    elif op == "answer":
+        caller, cid = m.get("to"), m.get("call")
+        if not (isinstance(caller, str) and isinstance(cid, str)):
+            return
+        prune_calls(now)
+        entry = pending_calls.pop((caller, p.id, cid), None)
+        c = online.get(caller)
+        if not entry or not c:
+            return
+        game, kind, _ = entry
+        if m.get("ok") is True:
+            code = secrets.token_hex(8)
+            p_send(c, {"op": "start", "v": 1, "call": cid, "code": code, "game": game, "kind": kind, "as": "caller",
+                       "with": {"id": p.id, "name": p.name}})
+            p_send(p, {"op": "start", "v": 1, "call": cid, "code": code, "game": game, "kind": kind, "as": "callee",
+                       "with": {"id": c.id, "name": c.name}})
+        else:
+            p_send(c, {"op": "declined", "call": cid, "name": p.name})
+    elif op == "cancel_call":
+        to, cid = m.get("to"), m.get("call")
+        if isinstance(to, str) and isinstance(cid, str) and pending_calls.pop((p.id, to, cid), None):
+            q = online.get(to)
+            if q:
+                p_send(q, {"op": "call_cancelled", "call": cid, "from": p.id})
+
+
+async def presence(reader, writer, req, ip):
+    problem = validate_hello(req) or admit(ip, asyncio.get_running_loop().time())
+    if not problem and presence_by_ip.get(ip, 0) >= MAX_PRESENCE_PER_IP:
+        problem = "too many connections from your address"
+    if not problem and len(online) >= MAX_PRESENCE:
+        problem = "the matchmaker is busy; try again in a moment"
+    if problem:
+        writer.write((json.dumps({"op": "error", "msg": problem}) + "\n").encode())
+        await writer.drain()
+        return
+    p = Presence(writer, req, ip)
+    old = online.get(p.id)
+    if old:                                   # the same player opened a new connection: drop the old one
+        old.closed = True
+        old.writer.close()
+    online[p.id] = p
+    presence_by_ip[ip] = presence_by_ip.get(ip, 0) + 1
+    p_send(p, {"op": "hello", "v": 1, "id": p.id})
+    push_friends(p)
+    tell_friends(p)
+    last = time.monotonic()
+    try:
+        while not p.closed:
+            try:
+                line = await asyncio.wait_for(reader.readline(), PING_SECONDS)
+            except asyncio.TimeoutError:
+                if time.monotonic() - last > PING_SECONDS * 3:
+                    break
+                p_send(p, {"op": "ping"})
+                await writer.drain()
+                continue
+            if not line:
+                break
+            last = time.monotonic()
+            try:
+                m = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(m, dict):
+                on_presence_msg(p, m)
+                await writer.drain()
+    except (ConnectionError, ValueError, asyncio.LimitOverrunError, asyncio.IncompleteReadError):
+        pass
+    finally:
+        p.closed = True
+        presence_by_ip[ip] -= 1
+        if presence_by_ip[ip] <= 0:
+            presence_by_ip.pop(ip, None)
+        if online.get(p.id) is p:
+            online.pop(p.id, None)
+            tell_friends(p)
+        for k in [k for k in pending_calls if p.id in (k[0], k[1])]:
+            pending_calls.pop(k, None)
 
 
 # ----------------------------------------------------------------- invite landing page
@@ -290,6 +593,21 @@ def landing_page(host_header, tcp_port, game, code):
             "then come back to this page and tap the button again.</p>"
             "<p>The button does nothing? In the app choose <b>Join with a link</b> and paste this "
             "page's address.</p>")
+
+
+def friend_page(host_header, tcp_port, fid, name):
+    """HTML for a friend link. The id and name are validated and escaped; nothing is stored."""
+    host = (host_header or "").rsplit(":", 1)[0] if host_header and not host_header.endswith("]") else (host_header or "")
+    name = clean_name(name) or "A player"
+    if not (HOST_RE.match(host) and ID_RE.match(fid or "")):
+        return "<h1>Retro-Netplay</h1><p>This friend link looks incomplete or damaged. Ask your friend to send it again.</p>"
+    deep = "netplay://friend?" + "&".join(f"{k}={quote(str(v), safe='')}" for k, v in
+                                          (("i", fid), ("n", name), ("host", host), ("port", tcp_port)))
+    return (f"<h1>{html.escape(name)} wants to be friends</h1>"
+            f"<p><a class='btn' href='{html.escape(deep, quote=True)}'>Add {html.escape(name)} in Retro-Netplay</a></p>"
+            "<p>Friends get matched with each other first, and you choose what each friend may do. "
+            "You both have to add each other.</p>"
+            "<p>The button does nothing? In the app open <b>Friends</b>, choose <b>Add a friend</b> and paste this page's address.</p>")
 
 
 def tls_context():
@@ -410,6 +728,8 @@ async def http_handle(reader, writer, tcp_port=7777):
                 out = respond("200 OK", page(landing_page(headers.get("host", ""),
                               int(port) if port.isdigit() and 0 < int(port) < 65536 else tcp_port,
                               first("g"), first("c"))))
+            elif u.path == "/friend":
+                out = respond("200 OK", page(friend_page(headers.get("host", ""), tcp_port, first("i"), first("n"))))
             else:
                 out = respond("200 OK", page("<h1>Netplay Matchmaker</h1><p>The matchmaker is running.</p>"))
     except (ValueError, asyncio.TimeoutError, asyncio.IncompleteReadError):

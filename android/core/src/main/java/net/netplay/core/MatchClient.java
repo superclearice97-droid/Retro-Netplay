@@ -58,6 +58,13 @@ public final class MatchClient {
     public Match search(String host, int port, String game, List<String> lanes,
                         Map<String, Object> info, Map<String, Boolean> canHost, String client,
                         String invite, boolean inviteOnly) throws IOException {
+        return search(host, port, game, lanes, info, canHost, client, invite, inviteOnly, null);
+    }
+
+    /** extra: more search fields, such as the friends fields from Friends.searchFields(). */
+    public Match search(String host, int port, String game, List<String> lanes,
+                        Map<String, Object> info, Map<String, Boolean> canHost, String client,
+                        String invite, boolean inviteOnly, Map<String, Object> extra) throws IOException {
         Socket s = new Socket();
         socket = s;
         try {
@@ -76,6 +83,7 @@ public final class MatchClient {
                 req.put("invite", invite);
                 req.put("invite_only", inviteOnly);
             }
+            if (extra != null) for (Map.Entry<String, Object> e : extra.entrySet()) req.putIfAbsent(e.getKey(), e.getValue());
             OutputStream out = s.getOutputStream();
             out.write((Json.stringify(req) + "\n").getBytes(StandardCharsets.UTF_8));
             out.flush();

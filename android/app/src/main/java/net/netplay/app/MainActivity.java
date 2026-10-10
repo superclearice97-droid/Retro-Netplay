@@ -405,7 +405,7 @@ public class MainActivity extends Activity {
 
     private void onMatch(Games.Sys sys, String rom, MatchClient.Match m, String host, int port) {
         // Built-in stream: the guest page lives on the matchmaker's web port (TCP port + 1).
-        String playUrl = Plan.playUrl(host, port, m.play);
+        String playUrl = Plan.playUrl(host, port, m.play, m.secureWeb);
         Plan plan = Plan.make(sys, m.lane, m.role, m.peer, playUrl);
         String who = m.peerString("client");
         finishSearch((m.via.equals("invite") ? "Your friend joined from the invite! " : "") + plan.message + (who.isEmpty() ? "" : "  (Opponent is on " + who + ".)"));

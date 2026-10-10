@@ -28,7 +28,7 @@ public class StreamTest {
         } catch (MatchClient.Cancelled c) {
             System.out.println("NOMATCH");
         }
-        System.out.println("playUrl ipv6=" + Plan.playUrl("::1", 7777, "/play?t=x"));
+        System.out.println("playUrl ipv6=" + Plan.playUrl("::1", 7777, "/play?t=abcdEFGH12"));
         System.out.println("playUrl empty=[" + Plan.playUrl("h", 1, "") + "]");
         System.out.println("DONE");
     }

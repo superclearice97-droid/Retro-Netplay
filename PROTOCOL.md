@@ -23,8 +23,8 @@ Transport: TCP, UTF-8, one JSON object per line (`\n`). One connection = one sea
 - `client`: free-text label such as `desktop-linux` or `android`; shown to the opponent.
 
 ## Server -> client
-- `{"op":"matched","v":1,"lane":"native","role":"host"|"guest","via":"public"|"invite","peer":{...info, "ip":"1.2.3.4","client":"android"}}` then the server closes the connection.
-- When both players asked for `backend:"own"` on the stream lane, the message also has `"session":{"key":"..."}` (host) or `"session":{"key":"...","play":"/play?t=..."}` (guest). See Built-in streaming.
+- `{"op":"matched","v":1,"lane":"native","role":"host"|"guest","via":"public"|"invite","peer":{...info, "ip":"1.2.3.4","client":"android"}}` then the server closes the connection. `ip` is only included on the native lane. The server passes on only `info.<lane>` entries with short keys (letters, digits, `_`) and short text, number or true/false values.
+- When both players asked for `backend:"own"` on the stream lane, the message also has `"session":{"key":"..."}` (host) or `"session":{"key":"...","play":"/play?t=..."}` (guest). If the server's web port uses https (`NETPLAY_TLS_CERT` and `NETPLAY_TLS_KEY` set), both also get `"web":"https"`. See Built-in streaming.
 - `{"op":"ping"}` every 20 s while waiting. Ignore it.
 - `{"op":"error","msg":"..."}` then the server closes the connection.
 

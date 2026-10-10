@@ -21,6 +21,7 @@ from pathlib import Path
 
 import controls
 import invites
+import secretbox
 
 HERE = Path(__file__).resolve().parent
 CONFIG_PATH = Path.home() / ".netplay-matchmaker" / "config.json"
@@ -98,15 +99,34 @@ def load_cfg():
         pass
     cfg["slots"] = controls.normalize(cfg["slots"])
     invites.fill_defaults(cfg)
+    plain = False
+    for k in SECRET_KEYS:
+        stored = cfg["social"].get(k, "")
+        cfg["social"][k] = secretbox.reveal(k, stored)
+        plain = plain or (stored and not stored.startswith((secretbox.DPAPI, secretbox.KEYCHAIN)))
+    if plain:
+        save_cfg(cfg)   # move secrets saved by older versions into the secure store
     return cfg
 
 
+SECRET_KEYS = ("discord_webhook", "telegram_token")
+
+
 def save_cfg(cfg):
+    out = json.loads(json.dumps(cfg))
+    for k in SECRET_KEYS:
+        if k in out.get("social", {}):
+            out["social"][k] = secretbox.protect(k, out["social"][k])
     try:
-        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        CONFIG_PATH.write_text(json.dumps(cfg, indent=2))
+        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        tmp = CONFIG_PATH.with_suffix(".tmp")
+        # created owner-only from the start, then swapped in, so the file is never briefly world-readable
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps(out, indent=2))
+        os.replace(tmp, CONFIG_PATH)
         try:
-            os.chmod(CONFIG_PATH, 0o600)  # holds webhook/bot secrets: keep it private
+            os.chmod(CONFIG_PATH, 0o600)
         except OSError:
             pass
     except OSError:
@@ -300,12 +320,27 @@ def write_ra_config(cfg):
         return ""
 
 
+def safe_peer_id(peer):
+    """A Parsec peer ID from the opponent, or "" if it isn't one (never pass odd text to a URL handler)."""
+    v = str(peer.get("peer_id", ""))
+    return v if re.fullmatch(r"[A-Za-z0-9]{1,64}", v) else ""
+
+
+def safe_ip(peer):
+    """The opponent's IP address as the matchmaker reported it, or "" if it isn't an IP address."""
+    import ipaddress
+    try:
+        return str(ipaddress.ip_address(str(peer.get("ip", ""))))
+    except ValueError:
+        return ""
+
+
 def build_cmd(cfg, g, lane, role, peer):
     """-> ('link', url) or ('run', [argv...])"""
     s = SYSTEMS[g["system"]]
     exe, rom = cfg["paths"][s["emu"]], g["rom"]
     if lane == "stream" and role == "guest":
-        return "link", f"parsec://peer_id={peer.get('peer_id', '')}"
+        return "link", f"parsec://peer_id={safe_peer_id(peer)}"
     kind, argv = _build(cfg, g, s, exe, rom, lane, role, peer)
     return kind, emu_argv(exe) + argv[1:]
 
@@ -315,7 +350,7 @@ def _build(cfg, g, s, exe, rom, lane, role, peer):
         core = find_core(cfg, s["core"])
         extra = ["--appendconfig", p] if (p := write_ra_config(cfg)) else []
         if lane == "native":
-            return "run", [exe, "-L", core, rom] + extra + (["--host"] if role == "host" else ["--connect", peer.get("ip", "")])
+            return "run", [exe, "-L", core, rom] + extra + (["--host"] if role == "host" else ["--connect", safe_ip(peer)])
         return "run", [exe, "-f", "-L", core, rom] + extra
     if s["emu"] == "dolphin":
         return "run", [exe, "-b", "-e", rom] if lane == "native" else [exe, "-e", rom]
@@ -477,10 +512,14 @@ class Engine:
             return await self.play_own_stream(cfg, g, role, sess, friend)
         kind, what = build_cmd(cfg, g, lane, role, peer)
         if kind == "link":
-            pid = peer.get("peer_id", "")
+            pid = safe_peer_id(peer)
+            if not pid:
+                return self.set("idle", "Your opponent didn't share a valid Parsec ID. Press the button to search again.")
             webbrowser.open(what)
             return self.set("session", f"Opening Parsec. If it doesn't connect, join peer ID {pid} in Parsec "
                                        f"(copied to your clipboard).", clip=pid)
+        if lane == "native" and role == "guest" and not safe_ip(peer):
+            return self.set("idle", "The matchmaker didn't send a valid address for your opponent. Search again.")
         if lane == "native" and role == "guest":
             self.set("session", f"Opponent found! Waiting {NATIVE_GUEST_DELAY}s for the host to start...")
             await asyncio.sleep(NATIVE_GUEST_DELAY)
@@ -501,9 +540,12 @@ class Engine:
 
     async def play_own_stream(self, cfg, g, role, sess, friend=""):
         host, port = self.mm
-        web = f"http://{host}:{port + 1}"
+        web = f"{'https' if sess.get('web') == 'https' else 'http'}://{host}:{port + 1}"
         if role == "guest":
-            url = web + sess.get("play", "")
+            play = str(sess.get("play", ""))
+            if not re.fullmatch(r"/play\?t=[A-Za-z0-9_-]{8,64}", play):
+                return self.set("idle", "The matchmaker sent a stream link that doesn't look right. Search again.")
+            url = web + play
             webbrowser.open(url)
             return self.set("session", f"{friend}Opening the stream in your browser. Plug in a controller first "
                                        f"(or use the on-screen / keyboard controls). If nothing opens, go to: {url}", clip=url)

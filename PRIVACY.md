@@ -3,10 +3,10 @@
 Retro-Netplay has no accounts, no analytics, no ads and no tracking. This page says exactly what leaves your device, and where.
 
 ## What the matchmaker sees
-When you press "Find an opponent", your app sends the matchmaker: the game name, which lanes you offer, a label like `android` or `desktop-linux`, whether you can host, and any invite code. The matchmaker also sees your IP address (every server does). It hands your opponent your IP address and label, because the two of you must connect directly. It keeps this in memory only while you wait or play, and writes nothing to disk. Whoever runs a matchmaker can see this, so use one you trust. You can run your own: `python3 desktop/server.py`.
+When you press "Find an opponent", your app sends the matchmaker: the game name, which lanes you offer, a label like `android` or `desktop-linux`, whether you can host, and any invite code. The matchmaker also sees your IP address (every server does). It hands your opponent your label, and, only for emulator netplay (where the two of you connect directly), your IP address. Stream matches don't share your IP address through the matchmaker. It keeps this in memory only while you wait or play, and writes nothing to disk. Whoever runs a matchmaker can see this, so use one you trust. You can run your own: `python3 desktop/server.py`.
 
 ## What your opponent sees
-Your IP address and app label (needed for the connection), plus your game name. In a built-in stream, the host's guest also sends controller button presses. The guest never gets the host's mouse, keyboard, files or desktop: only the chosen game window or screen is shared, and the guest's input becomes a virtual game controller.
+Your app label and game name, and for emulator netplay your IP address (needed for the direct connection). In a built-in stream, the host's guest also sends controller button presses. The guest never gets the host's mouse, keyboard, files or desktop: only the chosen game window or screen is shared, and the guest's input becomes a virtual game controller.
 
 ## Streaming
 - Video and sound travel directly between the two players, encrypted by WebRTC. The matchmaker only relays the setup messages (they contain network addresses, not video).
@@ -18,7 +18,7 @@ Your IP address and app label (needed for the connection), plus your game name. 
 Settings, game list, controller layout and optional social settings, in `~/.netplay-matchmaker/` (Linux/Mac) or the app's folder (Windows), readable only by you (permissions 0600). Stream timing statistics go to `stream-stats.csv` in the same folder: numbers only (delays, frame rates), no video or names. Delete the folder to remove everything.
 
 ## Optional: posting your invite
-Off by default. If you turn it on, the app sends your invite text and link to the Discord webhook or Telegram chat that you entered, and nothing else. Tokens stay on your device. Android uses the system share sheet instead and stores no logins.
+Off by default. If you turn it on, the app sends your invite text and link to the Discord webhook or Telegram chat that you entered, and nothing else. Tokens stay on your device: on Windows they are encrypted with your Windows account (DPAPI), on macOS they go in your Keychain, and on Linux in your desktop keyring when `secret-tool` is installed (otherwise in a settings file only your user account can read). Android uses the system share sheet instead and stores no logins; its settings are excluded from cloud backups and phone transfers.
 
 ## Your rights
 The software keeps your data only on your device, so you control it: delete the settings folder to erase it. A matchmaker operator may see your IP address while you search; ask that operator about access or deletion. If you are in the EU/UK or California, a public matchmaker operator must tell you what it keeps and honour your rights.

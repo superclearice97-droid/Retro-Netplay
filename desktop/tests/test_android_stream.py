@@ -39,7 +39,7 @@ try:
     page = urllib.request.urlopen(kv["URL"], timeout=5)
     check("the URL Android would open serves the guest page", page.status == 200 and b"RTCPeerConnection" in page.read())
     check("desktop host got the host-role key", "play" not in hm["session"] and hm["peer"]["client"] == "android")
-    check("IPv6 host is bracketed", "playUrl ipv6=http://[::1]:7778/play?t=x" in j.stdout, j.stdout)
+    check("IPv6 host is bracketed", "playUrl ipv6=http://[::1]:7778/play?t=abcdEFGH12" in j.stdout, j.stdout)
     check("empty play path -> empty url", "playUrl empty=[]" in j.stdout)
     # Parsec-mode phone must not pair with a built-in host
     h2 = host_search("own"); time.sleep(0.3)

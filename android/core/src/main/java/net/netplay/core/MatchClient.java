@@ -18,8 +18,14 @@ public final class MatchClient {
         public final Map<String, Object> peer;
         /** Built-in stream only: this side's session key, and (guest) the page path to open. Both "" otherwise. */
         public final String sessionKey, play;
+        /** True when the matchmaker's web port uses https (the server operator set up a certificate). */
+        public final boolean secureWeb;
         Match(String lane, String role, String via, Map<String, Object> peer, String sessionKey, String play) {
+            this(lane, role, via, peer, sessionKey, play, false);
+        }
+        Match(String lane, String role, String via, Map<String, Object> peer, String sessionKey, String play, boolean secureWeb) {
             this.lane = lane; this.role = role; this.via = via; this.peer = peer; this.sessionKey = sessionKey; this.play = play;
+            this.secureWeb = secureWeb;
         }
         public String peerString(String key) {
             Object v = peer.get(key);
@@ -85,12 +91,14 @@ public final class MatchClient {
                     @SuppressWarnings("unchecked")
                     Map<String, Object> peer = m.get("peer") instanceof Map ? (Map<String, Object>) m.get("peer") : new LinkedHashMap<String, Object>();
                     String key = "", play = "";
+                    boolean https = false;
                     if (m.get("session") instanceof Map) {
                         Map<?, ?> sess = (Map<?, ?>) m.get("session");
                         key = sess.get("key") == null ? "" : String.valueOf(sess.get("key"));
                         play = sess.get("play") == null ? "" : String.valueOf(sess.get("play"));
+                        https = "https".equals(sess.get("web"));
                     }
-                    return new Match(String.valueOf(m.get("lane")), String.valueOf(m.get("role")), m.get("via") == null ? "public" : String.valueOf(m.get("via")), peer, key, play);
+                    return new Match(String.valueOf(m.get("lane")), String.valueOf(m.get("role")), m.get("via") == null ? "public" : String.valueOf(m.get("via")), peer, key, play, https);
                 }
             }
         } catch (IOException e) {

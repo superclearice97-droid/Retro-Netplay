@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 /** Pure decisions: what to offer the matchmaker, and what to do when matched. No Android classes here. */
 public final class Plan {
@@ -44,10 +45,19 @@ public final class Plan {
         return m;
     }
 
+    // Anything a matchmaker or opponent sends us is checked before we open it, copy it or pass it to an app.
+    static final Pattern PLAY_RE = Pattern.compile("^/play\\?t=[A-Za-z0-9_-]{8,64}$");
+    static final Pattern PEER_ID_RE = Pattern.compile("^[A-Za-z0-9]{1,64}$");
+    static final Pattern IP_RE = Pattern.compile("^([0-9]{1,3}(\\.[0-9]{1,3}){3}|[0-9A-Fa-f:.]{2,45})$");
+
     /** Address of the guest page for a built-in stream match: the matchmaker's web port is its TCP port + 1. */
     public static String playUrl(String host, int port, String play) {
-        if (play == null || play.isEmpty()) return "";
-        return "http://" + (host.contains(":") && !host.startsWith("[") ? "[" + host + "]" : host) + ":" + (port + 1) + play;
+        return playUrl(host, port, play, false);
+    }
+
+    public static String playUrl(String host, int port, String play, boolean https) {
+        if (play == null || !PLAY_RE.matcher(play).matches()) return "";
+        return (https ? "https://" : "http://") + (host.contains(":") && !host.startsWith("[") ? "[" + host + "]" : host) + ":" + (port + 1) + play;
     }
 
     public static Plan make(Games.Sys sys, String lane, String role, Map<String, Object> peer) {
@@ -64,6 +74,8 @@ public final class Plan {
         }
         String ip = peer.get("ip") == null ? "" : String.valueOf(peer.get("ip"));
         String pid = peer.get("peer_id") == null ? "" : String.valueOf(peer.get("peer_id"));
+        if (!IP_RE.matcher(ip).matches()) ip = "";
+        if (!PEER_ID_RE.matcher(pid).matches()) pid = "";
         if ("stream".equals(lane)) {
             if (!"guest".equals(role)) {
                 return new Plan(Kind.ERROR, "Android can't host a Parsec stream, so this match can't start. Please search again.", "", "");
@@ -75,6 +87,9 @@ public final class Plan {
         }
         if (!sys.hasNative()) {
             return new Plan(Kind.ERROR, sys.label + " netplay isn't available on Android.", "", "");
+        }
+        if ("guest".equals(role) && ip.isEmpty()) {
+            return new Plan(Kind.ERROR, "The matchmaker didn't send a valid address for your opponent. Please search again.", "", "");
         }
         if ("host".equals(role)) {
             return new Plan(Kind.LAUNCH_RETROARCH,

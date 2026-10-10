@@ -14,6 +14,7 @@ import html
 import json
 import os
 import re
+import ssl
 import sys
 from urllib.parse import parse_qs, quote, urlsplit
 
@@ -26,16 +27,66 @@ GAME_RE = re.compile(r"^[a-z0-9]+:[a-z0-9-]+$")
 HOST_RE = re.compile(r"^[A-Za-z0-9.\-\[\]:]{1,255}$")
 pools = {}                 # (room key, lane) -> [Waiter]
 
+# Abuse limits. A search is one small JSON line; nothing legitimate comes close to these.
+FIRST_LINE_TIMEOUT = 10    # seconds to send the search line before we hang up
+MAX_LINE = 8192            # bytes in that line
+MAX_PER_IP = 8             # searches one address may have waiting at once
+MAX_WAITING = 5000         # searches waiting on the whole server
+SEARCHES_PER_MIN = 30      # new searches one address may start per minute (stops invite-code guessing)
+INFO_KEY_RE = re.compile(r"^[A-Za-z0-9_]{1,32}$")
+open_by_ip = {}            # ip -> searches currently waiting
+recent_by_ip = {}          # ip -> [start times in the last minute]
+
+
+def clean_info(info):
+    """Keep only what an opponent needs: {lane: {short_key: short string/number/bool}}. Nothing nested,
+    nothing long, so one player can't push arbitrary data (or huge blobs) to another through us."""
+    out = {}
+    if not isinstance(info, dict):
+        return out
+    for lane in LANES:
+        d = info.get(lane)
+        if not isinstance(d, dict):
+            continue
+        clean = {}
+        for k, v in list(d.items())[:8]:
+            if k in ("ip", "client") or not isinstance(k, str) or not INFO_KEY_RE.match(k):
+                continue
+            if isinstance(v, bool) or (isinstance(v, (int, float)) and abs(v) < 1e12):
+                clean[k] = v
+            elif isinstance(v, str) and len(v) <= 64 and v.isprintable():
+                clean[k] = v
+        out[lane] = clean
+    return out
+
+
+def admit(ip, now):
+    """'' if this address may start another search, else a reason."""
+    times = [t for t in recent_by_ip.get(ip, []) if now - t < 60]
+    recent_by_ip[ip] = times
+    if len(recent_by_ip) > 20000:   # forget idle addresses so this table can't grow forever
+        for k in [k for k, v in recent_by_ip.items() if not v or now - v[-1] >= 60]:
+            recent_by_ip.pop(k, None)
+    if len(times) >= SEARCHES_PER_MIN:
+        return "too many searches from your address; wait a minute and try again"
+    if open_by_ip.get(ip, 0) >= MAX_PER_IP:
+        return "too many searches waiting from your address"
+    if sum(open_by_ip.values()) >= MAX_WAITING:
+        return "the matchmaker is busy; try again in a moment"
+    times.append(now)
+    recent_by_ip[ip] = times
+    return ""
+
 
 class Waiter:
     def __init__(self, writer, req):
         self.writer = writer
         self.game = req["game"]
         self.lanes = [l for l in req["lanes"] if l in LANES]
-        self.info = req.get("info") if isinstance(req.get("info"), dict) else {}
+        self.info = clean_info(req.get("info"))
         ch = req.get("can_host") if isinstance(req.get("can_host"), dict) else {}
         self.can_host = {l: bool(ch.get(l, True)) for l in LANES}   # old clients: assume yes
-        self.client = str(req.get("client", "unknown"))[:40]
+        self.client = re.sub(r"[^A-Za-z0-9 ._-]", "", str(req.get("client", "unknown")))[:40] or "unknown"
         self.ip = (writer.get_extra_info("peername") or [""])[0]
         invite = req.get("invite") or ""
         only = bool(req.get("invite_only"))
@@ -93,8 +144,12 @@ def wants_own_stream(w):
 
 
 def peer_view(other, lane):
-    return {**(other.info.get(lane) if isinstance(other.info.get(lane), dict) else {}),
-            "ip": other.ip, "client": other.client}
+    """What one player learns about the other. The IP address is only shared on the native lane, where
+    the emulators connect directly and need it; stream matches go through Parsec or our relay instead."""
+    v = {**(other.info.get(lane) or {}), "client": other.client}
+    if lane == "native":
+        v["ip"] = other.ip
+    return v
 
 
 async def pinger(w):
@@ -110,20 +165,27 @@ async def pinger(w):
 
 async def handle(reader, writer):
     w = ping = None
+    ip = (writer.get_extra_info("peername") or [""])[0]
+    counted = False
     try:
-        line = await reader.readline()
+        try:
+            line = await asyncio.wait_for(reader.readline(), FIRST_LINE_TIMEOUT)
+        except (asyncio.TimeoutError, asyncio.LimitOverrunError, ValueError):
+            return
         if not line:
             return
         try:
             req = json.loads(line)
         except ValueError:
             req = None
-        problem = validate(req)
+        problem = validate(req) or admit(ip, asyncio.get_running_loop().time())
         if problem:
             writer.write((json.dumps({"op": "error", "msg": problem}) + "\n").encode())
             await writer.drain()
             return
         w = Waiter(writer, req)
+        open_by_ip[ip] = open_by_ip.get(ip, 0) + 1
+        counted = True
         for key in w.keys:
             for lane in w.lanes:
                 for other in list(pools.get((key, lane), [])):
@@ -145,6 +207,8 @@ async def handle(reader, writer):
                         if sess:    # else: server is full, fall through to the plain match
                             to_host["session"] = {"key": sess.keys["host"]}
                             to_guest["session"] = {"key": sess.keys["guest"], "play": f"/play?t={sess.keys['guest']}"}
+                            if TLS:
+                                to_host["session"]["web"] = to_guest["session"]["web"] = "https"
                     send(host, to_host)
                     send(guest, to_guest)
                     print(f"matched on {lane} ({w.game}, {via}) host={host.client} guest={guest.client}", flush=True)
@@ -155,10 +219,15 @@ async def handle(reader, writer):
                 pools.setdefault((key, lane), []).append(w)
         print(f"waiting: {w.game} lanes={w.lanes} client={w.client}" + (" (invite)" if any("#" in k for k in w.keys) else ""), flush=True)
         ping = asyncio.create_task(pinger(w))
-        await reader.read()  # until the client cancels (closes) or the connection dies
+        while await reader.read(1024):   # until the client cancels (closes); anything it sends is ignored
+            pass
     except (ConnectionError, asyncio.IncompleteReadError):
         pass
     finally:
+        if counted:
+            open_by_ip[ip] -= 1
+            if open_by_ip[ip] <= 0:
+                open_by_ip.pop(ip, None)
         if ping:
             ping.cancel()
         if w:
@@ -186,6 +255,19 @@ def landing_page(host_header, tcp_port, game, code):
             "page's address.</p>")
 
 
+def tls_context():
+    """Optional https for the web port (stream pages and signaling). Set NETPLAY_TLS_CERT and
+    NETPLAY_TLS_KEY to a certificate and key, e.g. from Let's Encrypt, for the server's domain name."""
+    cert, key = os.environ.get("NETPLAY_TLS_CERT", ""), os.environ.get("NETPLAY_TLS_KEY", "")
+    if not (cert and key):
+        return None
+    ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    ctx.load_cert_chain(cert, key)
+    return ctx
+
+
+TLS = tls_context()
 DEMO = bool(os.environ.get("NETPLAY_DEMO"))   # --demo: lets /demo make test streams with no second player
 DEMO_CSP = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; "
             "frame-src 'self'; media-src 'self' blob:; img-src 'self' data:")
@@ -211,7 +293,9 @@ PLAY_CSP = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-i
 
 def respond(status, body, ctype="text/html; charset=utf-8", csp=PAGE_CSP):
     data = body if isinstance(body, bytes) else body.encode()
-    return (f"HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {len(data)}\r\n"
+    hsts = "Strict-Transport-Security: max-age=31536000\r\n" if TLS else ""
+    return (f"HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {len(data)}\r\n{hsts}"
+            f"X-Frame-Options: SAMEORIGIN\r\n"
             f"Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\n"
             f"Content-Security-Policy: {csp}\r\nConnection: close\r\n\r\n").encode() + data
 
@@ -304,12 +388,12 @@ async def http_handle(reader, writer, tcp_port=7777):
 
 async def main(port, http_port=None):
     http_port = port + 1 if http_port is None else http_port
-    srv = await asyncio.start_server(handle, "0.0.0.0", port)
+    srv = await asyncio.start_server(handle, "0.0.0.0", port, limit=MAX_LINE)
     print(f"matchmaker on :{port}", flush=True)
     if http_port:
         try:
-            await asyncio.start_server(lambda r, w: http_handle(r, w, port), "0.0.0.0", http_port)
-            print(f"invite page on :{http_port}", flush=True)
+            await asyncio.start_server(lambda r, w: http_handle(r, w, port), "0.0.0.0", http_port, ssl=TLS)
+            print(f"invite page on :{http_port}" + (" (https)" if TLS else ""), flush=True)
         except OSError as e:
             print(f"invite page disabled ({e})", flush=True)
     async with srv:

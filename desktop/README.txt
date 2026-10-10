@@ -29,7 +29,8 @@ SETUP (about 5 minutes)
      "Run the matchmaker on this PC". The other types that PC's address in
      "Matchmaker address". Over the internet, the host must allow port 7777 (TCP)
      through the router/firewall. The default 127.0.0.1 only works on one PC.
-  6. Both of you click "Find an opponent". When you're matched, the game starts.
+  6. Both of you click "Play". RetroArch games start right away and you're queued; other games
+     start when you're matched. Hold Start + Select for 3 seconds to join or leave the queue.
 
 CONTROLLERS (2 to 4 players)
   - The first time you open the app it asks if your controllers are ready for 2 players.
@@ -51,7 +52,7 @@ PHONES AND TABLETS
     match each other. See the README one folder up.
 
 INVITE LINKS AND POSTING
-  - When you press "Find an opponent" the app makes an invite link, copies it, and shows it under
+  - When you press "Play" the app makes an invite link, copies it, and shows it under
     the button. Send it to friends anywhere. They tap it, it opens the app (or tells them how to
     get it), and they land in a private match with you. You stay open to random players too, unless
     you untick that in "Invites & social...".

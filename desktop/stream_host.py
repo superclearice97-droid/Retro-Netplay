@@ -210,8 +210,11 @@ class HostTimer:
 class Session:
     """One guest. Backend does the media; this decides what to do with each message."""
 
-    def __init__(self, signal, backend_factory, pad, slot=2, stats_path=STATS_CSV, clock=time.monotonic):
+    def __init__(self, signal, backend_factory, pad, slot=2, stats_path=STATS_CSV, clock=time.monotonic,
+                 pick=None, pad_factory=None):
         self.signal, self.backend_factory, self.pad, self.slot = signal, backend_factory, pad, slot
+        # a friend with the "pick a controller slot" privilege may choose one of these players
+        self.pick, self.pad_factory = (list(pick) if pick and pad_factory else None), pad_factory
         self.backend, self.last_seq, self.last_packet, self.ended = None, None, 0.0, threading.Event()
         self.stats_path, self.clock, self.packets = stats_path, clock, 0
         self.host_stats = {}
@@ -263,9 +266,24 @@ class Session:
         if t == "ping" and self.backend:
             self.backend.send_ctl({"t": "pong", "ts": m.get("ts")})
         elif t == "hi" and self.backend:
-            self.backend.send_ctl({"t": "slot", "n": self.slot})
+            self.send_slot()
+        elif t == "want_slot" and self.backend and self.pick:
+            n = m.get("n")
+            if isinstance(n, int) and not isinstance(n, bool) and n in self.pick and n != self.slot:
+                self.pad.release_all()
+                self.pad.close()
+                self.pad = self.pad_factory(n)
+                self.slot = n
+                log(f"guest switched to Player {n}")
+            self.send_slot()
         elif t == "stats" and isinstance(m.get("s"), dict):
             self.record_stats(m["s"])
+
+    def send_slot(self):
+        msg = {"t": "slot", "n": self.slot}
+        if self.pick:
+            msg["pick"] = self.pick
+        self.backend.send_ctl(msg)
 
     def on_state(self, state):
         log("connection:", state)
@@ -613,6 +631,7 @@ def main(argv=None):
     ap.add_argument("--fps", type=int, default=60)
     ap.add_argument("--profile", default="constrained-baseline", help="H.264 profile (constrained-baseline is safest for browsers)")
     ap.add_argument("--slot", type=int, default=2, help="which player the guest controls")
+    ap.add_argument("--slot-pick", action="store_true", help="let the guest choose Player 2, 3 or 4 (a friend's privilege)")
     ap.add_argument("--no-audio", action="store_true")
     ap.add_argument("--no-timing", action="store_true", help="skip measuring the host's capture/encode time")
     a = ap.parse_args(argv)
@@ -653,7 +672,12 @@ def main(argv=None):
         print("Can't reach the matchmaker:", e)
         pad.close()
         return 2
-    session = Session(sig, lambda s: GstBackend(s, opts, ice), pad, slot=a.slot)
+    def new_pad(n):
+        p = uinput_pad.UinputPad(f"Netplay Virtual Pad (Player {n})")
+        p.open()
+        return p
+    session = Session(sig, lambda s: GstBackend(s, opts, ice), pad, slot=a.slot,
+                      pick=[2, 3, 4] if a.slot_pick else None, pad_factory=new_pad)
     def tick():
         session.watchdog_tick()
         if session.ended.is_set():
@@ -670,7 +694,7 @@ def main(argv=None):
     finally:
         time.sleep(0.3)      # let the final 'bye' go out
         sig.stop()
-        pad.close()
+        session.pad.close()   # (the guest may have switched to another player's pad)
     return 0
 
 

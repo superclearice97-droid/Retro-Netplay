@@ -32,6 +32,7 @@ This is the checklist the project follows as it's built, so publishing doesn't n
 
 - Sessions stream gameplay only to the people in that session. Don't add public broadcast or recording of other people's sessions without their consent.
 - Matchmaking with "randoms" needs: block and report, a way to leave instantly, and no open text or voice chat with strangers until there's moderation.
+- Friends: mutual adds only, privileges stored on the device, "only match me with friends" available, no chat. If chat or friend requests between strangers are ever added, redo this section (moderation, reporting, age).
 - Games draw a young audience. Either set a 13+ age requirement (with an age prompt before random matchmaking), or plan for COPPA if children under 13 can use online features.
 
 ## 5. Privacy
@@ -101,6 +102,8 @@ Running a public server makes you responsible for it.
 - **Google Play:** emulator-related apps are allowed but must not facilitate piracy; Play may reject apps that mention ROM downloads. Keep store text free of "free games" language.
 - **Encryption export rules:** apps using standard encryption (WebRTC/DTLS) are generally covered by open-source and mass-market exceptions in the US (EAR); keep source public and check current rules before commercial distribution.
 - **EU Cyber Resilience Act:** non-commercial open-source hobby projects are largely outside its scope; selling the app or running it as a paid service can change that.
+- **Accessibility service (controller shortcut):** Google Play only allows accessibility services that help people with disabilities, or that are declared and reviewed with a prominent in-app disclosure and consent. The shortcut is optional, off by default, and explained in plain words before the switch; sideloaded builds aren't reviewed, but before publishing on Play either submit the AccessibilityService declaration or ship the Play build without the shortcut. https://support.google.com/googleplay/android-developer/answer/10964491
+- **Foreground service:** the queue uses a "data sync" foreground service with a visible notification and Stop button. Android 15 limits that type to about 6 hours a day; Play requires declaring the type. Keep it running only while queued or playing.
 - **Accessibility:** remappable controls, readable text sizes, and screen-reader labels reduce complaint risk (ADA/EAA) and help users.
 
 ## 12. Documents in this repository

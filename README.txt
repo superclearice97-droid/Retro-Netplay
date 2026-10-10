@@ -4,9 +4,28 @@ NETPLAY MATCHMAKER  -  two apps, one matchmaker
   android/   Android app (Java, open it in Android Studio).
   PROTOCOL.md  The few rules both apps follow so they can match each other.
 
+HOW YOU PLAY (new)
+  - Tap a game (phone) or press Play (computer). The game starts and you're in the queue at
+    the same time. When someone is found, the player already in the game starts hosting inside
+    it (no restart) and the other player joins.
+  - Already in a game? Hold START + SELECT for 3 seconds: you're in the queue, and RetroArch
+    shows "in the queue" on screen. Hold them again to leave.
+    Phone: switch on "Retro-Netplay controller shortcut" once (setup shows you where), and turn
+    on Network Commands in RetroArch (Settings > Network). Computer: it just works with RetroArch.
+  - RetroArch on Android can't be told to join someone else's game by another app, so when the
+    PHONE is the joining player, RetroArch shows exactly what to pick (Netplay > Refresh Netplay
+    Host List > the host's name, or Connect to Netplay Host, address already copied).
+  - FRIENDS: share your friend link (or your 24-character friend code). Once you've both added each other,
+    friends are matched with you first (15 seconds before strangers), you see who's online and
+    what they're playing, and you can ask a friend to play or to watch. For each friend you
+    choose: Priority (matched before anyone), Join anytime (no need to accept), Watch, and
+    Pick a controller slot (Player 2-4 on a stream you host). Settings has "Only match me with
+    friends".
+
 HOW THEY WORK TOGETHER
   Both apps connect to the same matchmaker (desktop/server.py). Pick the same game with the
-  exact same name and system on both, press the big button, and you're paired.
+  exact same name and system on both and you're paired. Games found through Game folders are
+  named the same way on every device, so this usually just works.
   - The matchmaker runs inside the desktop app ("Run the matchmaker on this PC" in Settings),
     or on any always-on machine with:  python3 desktop/server.py
     The host needs port 7777 (TCP) reachable from the internet.
@@ -82,8 +101,8 @@ ANDROID APP: BUILD AND INSTALL
   4. Add a game: its name (same as your opponent's), its system, and the full path to the game
      file, for example /storage/emulated/0/ROMs/game.gba. Leave the path blank for PS2 / PS3 games
      you'll only stream.
-  5. Press "Find an opponent". The app opens RetroArch, or your browser for a stream; for RetroArch you finish the
-     connection in its Netplay menu (the host's address is copied for you).
+  5. Tap a game. RetroArch opens with it and you're in the queue. For PS2/PS3/GameCube games the
+     phone joins a friend's stream instead: when matched, your browser opens.
 
 WHAT WAS AND WASN'T TESTED
   Tested: the matchmaker rules, the desktop app's engine, and the Android app's matching logic
@@ -92,7 +111,12 @@ WHAT WAS AND WASN'T TESTED
   Chromium, over real WebRTC against a stand-in host: video arrives at 60 fps, controller/keyboard
   packets arrive intact, latency numbers are measured, access control (each side's own key), the
   host's session logic and the virtual-controller event translation.
-  NOT tested: the real host (screen capture, GPU encoding, GStreamer, the virtual controller on a
+  Tested for queue and friends: friends-first matching, priority, friends-only, mutual adds, the
+  online list and calls (server, Android core and desktop app against the real matchmaker), the
+  desktop Play/hotkey flow with a pretend RetroArch, and the RetroArch commands against a
+  pretend RetroArch.
+  NOT tested: the controller shortcut and notifications on a real phone, a real RetroArch
+  answering network commands, the real host (screen capture, GPU encoding, GStreamer, the virtual controller on a
   real /dev/uinput, the Wayland picker), so actual latency is unknown until you run it. Also not
   tested: the Android screens and the RetroArch launch (never built or run on a phone), the
   desktop windows on screen, and any real emulator session.

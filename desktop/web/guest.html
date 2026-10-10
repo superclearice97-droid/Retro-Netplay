@@ -32,6 +32,10 @@
   #heat i { width: 18px; height: 18px; display: block; outline: 1px solid rgba(20,20,20,.5); }
   #pill { position: fixed; top: 8px; right: 8px; z-index: 6; font-size: 12px; letter-spacing: .06em; text-transform: uppercase;
     background: rgba(228,227,223,.94); padding: 6px 10px; border: 0; min-height: 28px; cursor: pointer; }
+  #slots { position: fixed; top: 44px; right: 8px; z-index: 6; display: none; gap: 4px; }
+  #slots button { font-size: 12px; min-width: 44px; min-height: 36px; padding: 4px 8px; border: 1px solid rgba(20,20,20,.6);
+    background: rgba(228,227,223,.94); color: var(--ink); cursor: pointer; }
+  #slots button.on { background: var(--ink); color: var(--paper); }
   #snd { position: fixed; bottom: 8px; right: 8px; z-index: 7; display: none; font-size: 13px; padding: 10px 16px; min-height: 44px; }
   #pad { position: fixed; inset: auto 0 0 0; height: 46%; z-index: 4; display: none; }
   #pad .b { position: absolute; width: 17vmin; height: 17vmin; min-width: 52px; min-height: 52px; border-radius: 0;
@@ -46,6 +50,7 @@
 <video id="v" autoplay muted playsinline></video>
 <button id="pill">connecting…</button>
 <div id="hud"></div>
+<div id="slots" aria-label="Choose your player"></div>
 <div id="pad"></div>
 <button id="snd">Tap for sound</button>
 <div id="heat"></div>
@@ -223,8 +228,24 @@ function ctlSend(o) { if (state.ctl && state.ctl.readyState === "open") state.ct
 function onCtl(e) {
   let m; try { m = JSON.parse(e.data); } catch (_) { return; }
   if (m.t === "pong") state.rtt = performance.now() - m.ts;
-  else if (m.t === "slot") { state.slot = m.n; pillText("Player " + m.n); }
+  else if (m.t === "slot") { state.slot = m.n; pillText("Player " + m.n); showSlots(m.pick); }
   else if (m.t === "host" && m.s && typeof m.s === "object") state.host = m.s;
+}
+// A friend the host trusts may choose which player they are (Player 2, 3 or 4).
+function showSlots(pick) {
+  const box = document.getElementById("slots");
+  if (!Array.isArray(pick) || !pick.length) { box.style.display = "none"; return; }
+  box.textContent = "";
+  for (const n of pick) {
+    if (typeof n !== "number" || n < 1 || n > 8) continue;
+    const b = document.createElement("button");
+    b.textContent = "P" + n;
+    b.title = "Play as Player " + n;
+    if (n === state.slot) b.className = "on";
+    b.addEventListener("click", () => ctlSend({ t: "want_slot", n }));
+    box.appendChild(b);
+  }
+  box.style.display = "flex";
 }
 function pingLoop() { ctlSend({ t: "ping", ts: performance.now() }); }
 

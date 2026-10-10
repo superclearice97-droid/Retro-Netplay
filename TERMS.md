@@ -13,7 +13,9 @@ Retro-Netplay helps you find opponents and start online play using emulators and
 - Be at least 13 years old (or older if your country requires it).
 
 ## Playing with others
-You connect with other people's devices and may share your IP address with them (see PRIVACY.md). We can't check who they are and aren't responsible for their conduct. Use invite links with people you know, and leave and report anyone who misbehaves.
+You connect with other people's devices and may share your IP address with them (see PRIVACY.md). We can't check who they are and aren't responsible for their conduct. Use friends or invite links with people you know, and leave and report anyone who misbehaves.
+
+Friends' privileges (join anytime, watch, pick a controller slot) let those friends join, watch or take a controller in your games without asking each time. Only give them to people you trust, and remove them (or the friend) whenever you like. Choose a name that isn't offensive and doesn't pretend to be someone else.
 
 ## Streaming
 Streaming and virtual controllers can misbehave, drop out or expose what's on screen. Save your games and close anything private. Don't let strangers control your computer or accounts.

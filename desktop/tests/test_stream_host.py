@@ -100,6 +100,7 @@ class FakePad:
     def __init__(self): self.state, self.applied, self.released = U.neutral(), [], 0
     def apply(self, st): self.state = st; self.applied.append(st)
     def release_all(self): self.state = U.neutral(); self.released += 1
+    def close(self): self.closed = True
 
 class FakeBackend:
     instances = []
@@ -167,6 +168,23 @@ try:
     sess.on_ctl({"t": "ping", "ts": 12.5}); sess.on_ctl({"t": "hi"})
     check("ping answered with pong", ("ctl", {"t": "pong", "ts": 12.5}) in be.log)
     check("guest told its player slot", ("ctl", {"t": "slot", "n": 2}) in be.log)
+
+    # a friend with the "pick a controller slot" privilege
+    made = []
+    def factory(n):
+        p = FakePad(); p.n = n; made.append(p); return p
+    first = FakePad()
+    s3 = S.Session(sig, lambda s_: FakeBackend(s_), first, slot=2, stats_path=csv, pick=[2, 3, 4], pad_factory=factory)
+    s3.backend = FakeBackend(s3)
+    s3.on_ctl({"t": "hi"})
+    check("trusted friend is offered Player 2-4", ("ctl", {"t": "slot", "n": 2, "pick": [2, 3, 4]}) in s3.backend.log)
+    s3.on_ctl({"t": "want_slot", "n": 3})
+    check("friend switches to Player 3 (new pad, old one closed)", s3.slot == 3 and len(made) == 1 and made[0].n == 3
+          and getattr(first, "closed", False) and s3.pad is made[0] and ("ctl", {"t": "slot", "n": 3, "pick": [2, 3, 4]}) in s3.backend.log)
+    s3.on_ctl({"t": "want_slot", "n": 7}); s3.on_ctl({"t": "want_slot", "n": True}); s3.on_ctl({"t": "want_slot", "n": "4"})
+    check("slots that weren't offered are refused", s3.slot == 3 and len(made) == 1)
+    sess.on_ctl({"t": "want_slot", "n": 3})
+    check("without the privilege the slot never changes", sess.slot == 2 and not any(isinstance(x, tuple) and x[0] == "ctl" and x[1].get("pick") for x in be.log))
 
     # input: ordering, duplicates, wrap-around, stuck buttons
     sess.on_pad(pkt(10, 1)); sess.on_pad(pkt(10, 1)); sess.on_pad(pkt(9, 0)); sess.on_pad(pkt(11, 3))

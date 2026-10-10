@@ -32,14 +32,14 @@ PART 3 - The Android app (needs the APK; see PART 5)
   Install the APK. Open it > Settings: Matchmaker address 127.0.0.1, port 7777. Save.
   Tap Add: system PlayStation 2, name  Urban Reign , leave the file path empty.
   Termux is already running  sh phone-test.sh  (leave it open; swipe between apps).
-  Tap "Find an opponent".
+  Tap the game in "Your games" (it starts and you join the queue).
    - Within a second the app should say it found an opponent and open Chrome on a stream page
      (it will say "connecting" - the host half isn't there yet).
    - Termux prints a link ending  /demo?k=...  . Open it in a NEW Chrome tab. Go back to the stream
      tab: it should connect, and your taps/controller show up in the host tab.
    - Also check: an invite link appeared in the app; "Share invite link" opens the share sheet;
      "Join with a link" accepts the link from PART 2 (and says clearly if it's wrong).
-   - Cancel works: tap Find an opponent, then tap again; it says "Search cancelled".
+   - Leaving works: tap a game, then tap "Leave queue"; it says "You left the queue".
   Native lane (optional, needs RetroArch + mGBA core + a GBA file): stop Termux, run
      sh phone-test.sh native
   add a GBA game named  Test Game  with its file path, tap Find. The app should open RetroArch

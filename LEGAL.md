@@ -1,6 +1,6 @@
 # Retro-Netplay: legal and compliance plan
 
-This is the checklist the project follows as it's built, so publishing doesn't need a rewrite later. It is a practical engineering guide, not legal advice; get a lawyer's review before charging money or launching widely.
+This is the checklist the project follows as it's built, so publishing doesn't need a rewrite later. It is a practical engineering guide, not legal advice, and no one can promise a project will never be sued. Get a lawyer's review before charging money or launching widely. Last reviewed 10 October 2026.
 
 ## 1. Emulator licenses (decide before writing integration code)
 
@@ -69,3 +69,48 @@ These keep Retro-Netplay as private as possible from day one.
 - [ ] Play Store Data safety form matches what the app really collects
 - [ ] Trademark name search done
 - [ ] Privacy-by-design rules in section 6 met (relay default for randoms, encryption, no telemetry, data deletion)
+
+## 8. Streaming a game to another person (the biggest open question)
+
+The built-in streamer sends video and sound of a running game from the host's computer to a guest's browser. That is different from two people each running their own copy in sync (netplay).
+
+- Sending a copyrighted game's picture and sound to someone else can be treated as a public performance or distribution, depending on the country. Platforms such as Steam and Parsec handle this with their own licences and terms; a hobby project has none.
+- Mitigations the design already uses: private sessions between two people, no public or broadcast mode, no recording, invite links that expire.
+- Keep doing: tell both players that they should each own the game, never offer "watch" or "spectate" links for strangers, and never record or re-stream sessions.
+- Have a lawyer look at this section before any public launch. It is the part most likely to attract a complaint from a publisher.
+
+## 9. Circumvention and emulator-adjacent law
+
+- US copyright law (DMCA section 1201) bans circumventing technical protection. Don't add features that decrypt discs, dump BIOS or firmware from consoles, or bypass copy protection. Point users to dumping guides from the emulator projects themselves instead.
+- Nintendo v. Yuzu (2024 settlement) shows publishers will sue emulator developers over encryption keys and in-app instructions for getting them. Keep this project a *launcher and matchmaker* for emulators the user installs, and never ship keys, firmware or links to them.
+- Don't patch or bundle emulators with game-specific hacks that bypass online-service checks of the original games.
+
+## 10. Running a matchmaker or relay for other people
+
+Running a public server makes you responsible for it.
+
+- Publish PRIVACY.md and TERMS.md (in this repo) at the matchmaker's address; log nothing but short-lived abuse protection (see section 6).
+- Provide an abuse contact and respond to reports. Remove abusive users' access quickly.
+- Never run `--demo` on a public server.
+- If you add accounts, chat or voice, redo sections 4 and 5 (moderation, age, data retention, reporting duties for illegal content).
+- A TURN relay carries other people's traffic; rate-limit it and restrict it to authenticated sessions so it can't be used for attacks or anonymous proxying.
+
+## 11. Distribution and platform rules
+
+- **Android developer verification:** Google's programme for apps installed outside Google Play begins 30 September 2026 in Brazil, Indonesia, Singapore and Thailand, with a global rollout from 2027. Free "limited distribution" accounts exist for hobbyists sharing with up to 20 devices. Register before public release. https://developer.android.com/developer-verification
+- **Google Play:** emulator-related apps are allowed but must not facilitate piracy; Play may reject apps that mention ROM downloads. Keep store text free of "free games" language.
+- **Encryption export rules:** apps using standard encryption (WebRTC/DTLS) are generally covered by open-source and mass-market exceptions in the US (EAR); keep source public and check current rules before commercial distribution.
+- **EU Cyber Resilience Act:** non-commercial open-source hobby projects are largely outside its scope; selling the app or running it as a paid service can change that.
+- **Accessibility:** remappable controls, readable text sizes, and screen-reader labels reduce complaint risk (ADA/EAA) and help users.
+
+## 12. Documents in this repository
+
+| File | Purpose |
+|---|---|
+| LEGAL.md | this plan |
+| PRIVACY.md | what the software shares and with whom |
+| TERMS.md | rules for using the software and any matchmaker |
+| NOTICE.md | licences, trademarks, warranty |
+| SECURITY.md | how to report vulnerabilities |
+
+**Open decision for the owner:** choose the project's own licence (GPL-3.0 recommended in section 1) and add a `LICENSE` file. Until then the code is all rights reserved and others cannot legally reuse it.

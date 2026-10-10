@@ -43,9 +43,13 @@ public final class Library {
     private static void put(String ext, String... systems) { EXT_SYSTEMS.put(ext, Arrays.asList(systems)); }
 
     private static final Pattern BRACKETS = Pattern.compile("[\\(\\[\\{][^\\)\\]\\}]*[\\)\\]\\}]");
-    private static final Pattern NUMBERED = Pattern.compile("^\\s*\\d{3,5}\\s*-\\s*", Pattern.UNICODE_CHARACTER_CLASS);
-    private static final Pattern SPACES = Pattern.compile("\\s+", Pattern.UNICODE_CHARACTER_CLASS);
-    private static final Pattern ARTICLE = Pattern.compile("^(.*?), (The|A|An)(\\s+-\\s+.*)?$", Pattern.UNICODE_CHARACTER_CLASS | Pattern.DOTALL);
+    // Android's regex engine rejects the Unicode-character-class flag (it threw on first use and crashed the app),
+    // so whitespace and digits are spelled out to match Python's Unicode \s and \d on every platform.
+    private static final String WS = "[\\t\\n\\u000B\\f\\r\\u001C-\\u001F \\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]";
+    private static final String DIGIT = "\\p{Nd}";
+    private static final Pattern NUMBERED = Pattern.compile("^" + WS + "*" + DIGIT + "{3,5}" + WS + "*-" + WS + "*");
+    private static final Pattern SPACES = Pattern.compile(WS + "+");
+    private static final Pattern ARTICLE = Pattern.compile("^(.*?), (The|A|An)(" + WS + "+-" + WS + "+.*)?$", Pattern.DOTALL);
 
     public static String ext(String filename) {
         int dot = filename.lastIndexOf('.');

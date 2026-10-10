@@ -9,7 +9,8 @@ def check(name, ok, info=""):
 
 NAMES = ["Legend of Zelda, The - The Minish Cap (USA) [!].gba", "Urban_Reign_(USA).iso", "0042 - Pokemon - Emerald Version (U).gba",
          "Final Fantasy VII (USA) (Disc 1).cue", "Tekken.3.cue", "Soulcalibur (USA).gdi", "  Odd   spacing  - .gba",
-         "A, The.gba", "Mario Kart - Double Dash!! (USA).rvz", "Pokémon Ruby (E).gba", "game.v1.2 (beta).iso"]
+         "A, The.gba", "Mario Kart - Double Dash!! (USA).rvz", "Pokémon Ruby (E).gba", "game.v1.2 (beta).iso",
+         "Wide\u3000Space\u00a0Game (J).gba", "\u0661\u0662\u0663 - Arabic Digits.gba", "Tab\tGame, The.gba"]
 
 check("No-Intro article moved", L.clean_name(NAMES[0]) == "The Legend of Zelda - The Minish Cap", L.clean_name(NAMES[0]))
 check("underscores and region removed", L.clean_name(NAMES[1]) == "Urban Reign")
@@ -52,6 +53,15 @@ with tempfile.TemporaryDirectory() as d:
     check("answer applies", ("dreamcast", "Mystery") in {(g["system"], g["name"]) for g in games2} and not qs2)
     merged = L.merge([{"name": "My Hack", "system": "gba", "rom": "/x.gba"}, {"name": "Old", "system": "gba", "rom": "/o.gba", "auto": True}], games)
     check("merge keeps manual games, refreshes automatic ones", any(g["name"] == "My Hack" for g in merged) and not any(g["name"] == "Old" for g in merged))
+
+# Android's regex engine throws on this flag; it crashed the app the moment a folder was added
+src_root = os.path.join(os.path.dirname(os.path.dirname(HERE)), "android")
+bad = []
+for dp, _, fs in os.walk(src_root):
+    for f in fs:
+        if f.endswith(".java") and "/test/" not in dp.replace(os.sep, "/") + "/":
+            if "UNICODE_CHARACTER_CLASS" in open(os.path.join(dp, f), encoding="utf-8").read(): bad.append(f)
+check("no Android-unsupported regex flags in app code", not bad, bad)
 
 # Java must name and hint exactly the same
 root = os.path.join(os.path.dirname(os.path.dirname(HERE)), "android", "core", "src", "main", "java")

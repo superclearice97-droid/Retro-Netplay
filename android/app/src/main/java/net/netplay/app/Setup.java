@@ -168,8 +168,10 @@ final class Setup {
             prefs.edit().putBoolean("auto_ports", auto.isOn()).apply();
             result.setText("Asking your router and the matchmaker...");
             new Thread(() -> {
-                String msg = refreshPorts();
-                act.runOnUiThread(() -> result.setText(msg));
+                String msg;
+                try { msg = refreshPorts(); } catch (Throwable t) { msg = "Couldn't check the connection. Try again in a moment."; }
+                final String shown = msg;
+                act.runOnUiThread(() -> result.setText(shown));
             }).start();
         });
         box.addView(test, fill(12));
@@ -216,7 +218,7 @@ final class Setup {
             String id = DocumentsContract.getTreeDocumentId(Uri.parse(treeUri));
             String path = Library.pathFromDocId(id);
             return path.isEmpty() ? id : path.replace("/storage/emulated/0", "Phone");
-        } catch (RuntimeException e) { return treeUri; }
+        } catch (Throwable e) { return treeUri; }
     }
 
     private void rescanAndShow() {
@@ -230,9 +232,13 @@ final class Setup {
             final List<Question> qs = new ArrayList<>();
             final List<Map<String, Object>> found = scan(qs);
             act.runOnUiThread(() -> {
-                saveScan(found);
-                showScan(found, qs);
-                host.setupChanged();
+                try {
+                    saveScan(found);
+                    showScan(found, qs);
+                    host.setupChanged();
+                } catch (Throwable t) {
+                    if (folderSummary != null) folderSummary.setText("Something went wrong reading these folders. Try another folder.");
+                }
             });
         }).start();
     }
@@ -293,7 +299,7 @@ final class Setup {
             try {
                 Uri tree = Uri.parse(s);
                 walk(tree, DocumentsContract.getTreeDocumentId(tree), 0, found, qs, ans, budget);
-            } catch (RuntimeException ignored) { }
+            } catch (Throwable ignored) { } // one bad folder or file never stops the app
         }
         questionsOut.addAll(qs.values());
         return new ArrayList<>(found.values());
@@ -433,14 +439,16 @@ final class Setup {
     void background(boolean force) {
         final boolean ports = force || System.currentTimeMillis() - prefs.getLong("port_time", 0) > 30 * 60 * 1000L;
         new Thread(() -> {
-            if (!folders().isEmpty()) {
-                List<Map<String, Object>> found = scan(new ArrayList<>());
-                act.runOnUiThread(() -> { saveScan(found); host.setupChanged(); });
-            }
-            if (ports && MainActivity.retroArchInstalled(act)) {
-                refreshPorts();
-                act.runOnUiThread(host::setupChanged);
-            }
+            try {
+                if (!folders().isEmpty()) {
+                    List<Map<String, Object>> found = scan(new ArrayList<>());
+                    act.runOnUiThread(() -> { try { saveScan(found); host.setupChanged(); } catch (Throwable ignored) { } });
+                }
+                if (ports && MainActivity.retroArchInstalled(act)) {
+                    refreshPorts();
+                    act.runOnUiThread(() -> { try { host.setupChanged(); } catch (Throwable ignored) { } });
+                }
+            } catch (Throwable ignored) { } // background work is best effort; it must never close the app
         }).start();
     }
 }

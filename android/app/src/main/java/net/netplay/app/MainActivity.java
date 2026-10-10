@@ -255,7 +255,15 @@ public class MainActivity extends Activity {
         games.clear();
         try {
             Object o = Json.parse(prefs.getString("games", "[]"));
-            for (Object x : (List<Object>) o) games.add((Map<String, Object>) x);
+            for (Object x : (List<Object>) o) {
+                if (!(x instanceof Map)) continue;
+                Map<String, Object> g = (Map<String, Object>) x;
+                // skip anything the screen can't show instead of crashing on it
+                if (!(g.get("name") instanceof String) || !(g.get("system") instanceof String)
+                        || !Games.SYSTEMS.containsKey(g.get("system"))) continue;
+                if (!(g.get("rom") instanceof String)) g.put("rom", "");
+                games.add(g);
+            }
         } catch (RuntimeException ignored) { }
     }
 

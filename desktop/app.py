@@ -24,10 +24,11 @@ import ink
 import invites
 import library
 import portmap
+import runtime
 import secretbox
 import social
 
-HERE = Path(__file__).resolve().parent
+HERE = runtime.BASE      # bundled files (icon, web pages) whether run from source or the download
 CONFIG_PATH = Path.home() / ".netplay-matchmaker" / "config.json"
 IS_WIN = platform.system() == "Windows"
 LIB_EXT = ".dll" if IS_WIN else (".dylib" if sys.platform == "darwin" else ".so")
@@ -287,6 +288,19 @@ def own_host_ready(refresh=False):
     if refresh or "v" not in _own_cache:
         if platform.system() != "Linux":
             _own_cache["v"] = (False, "Built-in streaming can host from Linux only for now. You can still join a friend's stream.")
+        elif runtime.FROZEN:
+            # the download can't carry GStreamer: ask the computer's own Python, which runs the stream host
+            py = runtime.host_python()
+            doctor = f"python3 \"{runtime.host_script()}\" --doctor"
+            if not py:
+                _own_cache["v"] = (False, "Hosting a stream needs Python 3 and GStreamer on this computer. You can still join streams.")
+            else:
+                try:
+                    r = subprocess.run([py, str(runtime.host_script()), "--doctor"], capture_output=True, text=True, timeout=20)
+                    _own_cache["v"] = ((True, "Built-in streaming ready (you can host)") if r.returncode == 0 else
+                                       (False, "Some streaming parts are missing. To see what, run: " + doctor))
+                except (OSError, subprocess.SubprocessError) as e:
+                    _own_cache["v"] = (False, f"Couldn't check streaming tools ({e})")
         else:
             try:
                 import stream_host
@@ -735,7 +749,7 @@ class Engine:
         except OSError as e:
             return self.set("idle", f"Couldn't start {EMUS[s['emu']][0]}: {e}")
         await asyncio.sleep(NATIVE_GUEST_DELAY)   # give the emulator a moment to open its window
-        cmd = [sys.executable, str(Path(__file__).with_name("stream_host.py")), "--server", web,
+        cmd = [runtime.host_python(), str(runtime.host_script()), "--server", web,
                "--key", sess.get("key", ""), "--slot", "2"]
         f = social.find(cfg, str((peer or {}).get("id", ""))) if (peer or {}).get("friend") else None
         if f and f.get("slot"):
@@ -854,6 +868,7 @@ def start_local_server(port, note):
 
 
 def run_gui():
+    runtime.restore_child_env()
     import tkinter as tk
     from tkinter import filedialog, messagebox, simpledialog, ttk
 
@@ -862,7 +877,7 @@ def run_gui():
     autodetect(cfg)
     save_cfg(cfg)
 
-    root = tk.Tk()
+    root = tk.Tk(className="Retro-Netplay")
     root.title("Retro-Netplay")
     root.geometry("500x860")
     root.minsize(500, 780)
@@ -1579,8 +1594,15 @@ def run_gui():
         import wizard
         ctx = {"autodetect": autodetect, "emu_ok": emu_ok, "EMUS": EMUS, "SYSTEMS": SYSTEMS,
                "refresh_ports": refresh_ports, "controller_check": lambda: controller_check(),
-               "done": lambda: (refresh(), save_cfg(cfg), start_background())}
+               "done": lambda: (refresh(), save_cfg(cfg), menu_entry(), start_background())}
         wizard.run(root, tk, ttk, filedialog, cfg, ctx, only=only)
+
+    def menu_entry():
+        """Put the app in the app menu (once chosen in setup), and follow it if the download was moved."""
+        if cfg.get("menu_entry", True) and cfg.get("setup_done") and not runtime.menu_entry_points_here():
+            msg = runtime.install_menu_entry()
+            if msg:
+                hint.config(text=msg)
 
     def start_background():
         """Pick up new games in the folders and keep the router ports open, without slowing the window."""
@@ -1605,7 +1627,13 @@ def run_gui():
     if not cfg.get("setup_done"):
         root.after(300, open_wizard)
     else:
+        menu_entry()
         start_background()
+    # for automatic screenshots of the packaged build: NETPLAY_SHOW=friends|settings|controllers
+    show = os.environ.get("NETPLAY_SHOW", "")
+    if show in ("friends", "settings", "controllers"):
+        root.after(1500, {"friends": lambda: open_friends(), "settings": lambda: open_settings(),
+                          "controllers": lambda: open_controllers()}[show])
     root.mainloop()
     save_cfg(cfg)
     if social_state["p"]:

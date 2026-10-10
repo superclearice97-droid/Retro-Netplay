@@ -242,6 +242,16 @@ def controllers_page(body, tk, ttk, filedialog, cfg, ctx, fam, win):
         "Last step. Connect your controllers now (two if you play side by side). Player 1 and Player 2 are always "
         "on; you can map buttons any time from Controllers on the main window.")).pack(anchor="w")
     ttk.Button(body, text="Check my controllers", command=ctx["controller_check"]).pack(anchor="w", pady=(14, 0))
+    ttk.Label(body, wraplength=500, justify="left", text=(
+        "In any game, hold START + SELECT for 3 seconds to join the queue, and again to leave it. "
+        "(Change the buttons with \"Set controller hotkey\" on the main window.)")).pack(anchor="w", pady=(14, 0))
+    if os.name == "posix" and not os.uname().sysname == "Darwin":
+        menu = tk.BooleanVar(value=cfg.get("menu_entry", True))
+        def keep():
+            cfg["menu_entry"] = menu.get()
+        ttk.Checkbutton(body, text="Add Retro-Netplay to my app menu (and open invite links with it)",
+                        variable=menu, command=keep).pack(anchor="w", pady=(14, 0))
+        keep()
     ttk.Label(body, wraplength=500, justify="left", foreground=ink.SOFT, text=(
         "You can run this setup again any time from Settings.")).pack(anchor="w", pady=(18, 0))
     return "Controllers", None

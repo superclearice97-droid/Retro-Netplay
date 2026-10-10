@@ -1,0 +1,78 @@
+name: Build apps
+on:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+      - name: Build debug APK
+        run: gradle -p android assembleDebug --no-daemon
+      - run: cp android/app/build/outputs/apk/debug/app-debug.apk Retro-Netplay.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: Retro-Netplay.apk
+
+  linux:
+    # built on an older Ubuntu so the download runs on older Linux systems too
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq xvfb imagemagick xdotool zip libfuse2 >/dev/null
+      - name: Build zip and AppImage
+        run: sh desktop/packaging/build-linux.sh
+      - name: Open the app on a virtual screen and take screenshots
+        run: sh desktop/packaging/smoke-test.sh dist/Retro-Netplay-x86_64.AppImage shots
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/*
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-shots
+          path: shots/*
+
+  publish:
+    if: github.ref == 'refs/heads/main'
+    needs: [android, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+      - name: Publish as the "latest" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest out/android/Retro-Netplay.apk out/linux/Retro-Netplay-linux-x86_64.zip out/linux/Retro-Netplay-x86_64.AppImage \
+            --title "Retro-Netplay test build" \
+            --notes "Early test build, from commit ${GITHUB_SHA::7}.
+
+          - Android: Retro-Netplay.apk (install on your phone; debug-signed).
+          - Linux: Retro-Netplay-x86_64.AppImage (one file: download, then double-click; if it won't open, right-click > Properties > Permissions > Allow executing as program), or Retro-Netplay-linux-x86_64.zip (unzip, open the folder, double-click Retro-Netplay).
+
+          No games, BIOS or firmware are included. Licence GPL-3.0."
+      - name: Screenshots from the automatic test (separate test release)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete ci-screens --yes --cleanup-tag || true
+          gh release create ci-screens out/linux-shots/* --prerelease --latest=false --title "Automatic test screenshots" --notes "Not a download. Screenshots of the desktop app from the automatic build."

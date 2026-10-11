@@ -895,7 +895,10 @@ def run_gui():
     hero = tk.Canvas(root, width=HW, height=HH, bg=ink.PAPER, highlightthickness=0)
     hero.pack(fill="x")
     ink.draw_hero(hero, HW, HH, fam)
-    spots = [(0.14, 0.34, 2, "Emulator"), (0.86, 0.26, 2, "Game"), (0.80, 0.72, 3, "Online"), (0.16, 0.78, 2, "Controllers")]
+    # squares sit clear of the corner captions (top-left and bottom-right)
+    spots = ([(0.14, 0.40, 2, "Emulator"), (0.86, 0.26, 2, "Game"), (0.72, 0.66, 3, "Online"), (0.16, 0.80, 2, "Controllers")]
+             if HH >= 220 else
+             [(0.30, 0.26, 2, "Emulator"), (0.86, 0.24, 2, "Game"), (0.66, 0.58, 2, "Online"), (0.10, 0.74, 2, "Controllers")])
     heats = [ink.Heat(tk, zoom=z, seed=i + 1) for i, (_x, _y, z, _n) in enumerate(spots)]
     sq_state = {"states": [ink.UNKNOWN] * 4, "notes": [""] * 4, "clock": 0.0, "searching": False}
 
@@ -1007,7 +1010,8 @@ def run_gui():
                 ttk.Label(r, text=text, wraplength=470, justify="left").pack(side="left")
             hint.config(text="Double-click a game (or select it and press Play) to start it and join the queue.")
         update_squares(g)
-        hot_lbl.config(text="Hotkey: buttons " + " + ".join(str(b) for b in cfg["hotkey"]) + f", hold {cfg['hold']:g}s")
+        combo_name = "Start + Select" if sorted(cfg["hotkey"]) == [6, 7] else "buttons " + " + ".join(str(b) for b in cfg["hotkey"])
+        hot_lbl.config(text=f"Controller hotkey: hold {combo_name} for {cfg['hold']:g} s to join or leave the queue")
         save_cfg(cfg)
 
     def update_squares(g):

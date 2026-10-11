@@ -27,6 +27,15 @@ public final class Presence {
         void onDeclined(String callId, String name);
         void onCallFailed(String callId, String msg);
         void onCallCancelled(String callId, String fromId);
+        /** Your own friend code on this matchmaker (K7M-4QZ). */
+        default void onMyCode(String code) { }
+        /** Answer to lookup(): found = false if no one has that code. */
+        default void onLookup(String code, boolean found, String id, String name, boolean self) { }
+        /** Someone sent you a friend request. */
+        default void onFriendRequest(String fromId, String name, String code) { }
+        /** Someone accepted your request. */
+        default void onFriendAccepted(String fromId, String name, String code) { }
+        default void onSoftError(String msg) { }
     }
 
     private static final SecureRandom RNG = new SecureRandom();
@@ -35,6 +44,7 @@ public final class Presence {
     private final String host, secret, name;
     private final int port;
     private final List<String> friends;
+    private final boolean hidden;
     private final Listener listener;
     private volatile boolean stopped;
     private volatile Socket socket;
@@ -42,8 +52,13 @@ public final class Presence {
     private Thread thread;
 
     public Presence(String host, int port, String secret, String name, List<String> friendIds, Listener l) {
+        this(host, port, secret, name, friendIds, l, false);
+    }
+
+    /** hidden: friends don't see you online, but requests and calls still reach you. */
+    public Presence(String host, int port, String secret, String name, List<String> friendIds, Listener l, boolean hidden) {
         this.host = host; this.port = port; this.secret = secret; this.name = name;
-        this.friends = new ArrayList<>(friendIds); this.listener = l;
+        this.friends = new ArrayList<>(friendIds); this.listener = l; this.hidden = hidden;
     }
 
     public synchronized void start() {
@@ -91,6 +106,7 @@ public final class Presence {
             hello.put("me", secret);
             hello.put("name", name);
             hello.put("friends", friends);
+            hello.put("hidden", hidden);
             write(hello);
             if (!"idle".equals(state) || !game.isEmpty()) status(state, game);
             BufferedReader in = new BufferedReader(new InputStreamReader(s.getInputStream(), StandardCharsets.UTF_8));
@@ -110,7 +126,23 @@ public final class Presence {
                 switch (op) {
                     case "ping": ping(); break;
                     case "error": throw new IOException(str(m.get("msg")));
-                    case "hello": if (!said) { said = true; listener.onConnected(true, ""); } break;
+                    case "hello":
+                        listener.onMyCode(Friends.pretty(str(m.get("code"))));
+                        if (!said) { said = true; listener.onConnected(true, ""); }
+                        break;
+                    case "lookup":
+                        listener.onLookup(Friends.pretty(str(m.get("code"))), Boolean.TRUE.equals(m.get("found")) && Friends.ID.matcher(str(m.get("id"))).matches(),
+                                str(m.get("id")), Friends.cleanName(str(m.get("name"))), Boolean.TRUE.equals(m.get("self")));
+                        break;
+                    case "friend_request":
+                        if (Friends.ID.matcher(str(m.get("from"))).matches())
+                            listener.onFriendRequest(str(m.get("from")), Friends.cleanName(str(m.get("name"))), Friends.pretty(str(m.get("code"))));
+                        break;
+                    case "friend_accept":
+                        if (Friends.ID.matcher(str(m.get("from"))).matches())
+                            listener.onFriendAccepted(str(m.get("from")), Friends.cleanName(str(m.get("name"))), Friends.pretty(str(m.get("code"))));
+                        break;
+                    case "error_soft": listener.onSoftError(str(m.get("msg"))); break;
                     case "friends": listener.onOnline(listOfMaps(m.get("online"))); break;
                     case "call":
                         if (Friends.ID.matcher(str(m.get("from"))).matches())
@@ -193,6 +225,28 @@ public final class Presence {
         m.put("to", callerId);
         m.put("call", callId);
         m.put("ok", ok);
+        quiet(m);
+    }
+
+    /** Who has this friend code? The answer comes to onLookup. */
+    public void lookup(String code) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("op", "lookup");
+        m.put("code", Friends.shortCode(code));
+        quiet(m);
+    }
+
+    public void request(String friendId) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("op", "friend_request");
+        m.put("to", friendId);
+        quiet(m);
+    }
+
+    public void accept(String friendId) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("op", "friend_accept");
+        m.put("to", friendId);
         quiet(m);
     }
 

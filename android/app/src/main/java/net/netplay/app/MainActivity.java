@@ -530,37 +530,78 @@ public class MainActivity extends Activity implements Hub.Ui {
 
     // ================================================================ friends
     private void addFriendFromLink(Friends.Friend f) {
-        if (f.id.equals(hub.myId())) { status.setText("That's your own friend link."); return; }
-        boolean added = hub.addFriend(f);
-        status.setText(added ? "Added " + f.name + ". You'll be friends once they add you too." : f.name + " is already your friend.");
+        if (!f.lookup.isEmpty()) {
+            String problem = hub.lookupCode(f.lookup);
+            status.setText(problem.isEmpty() ? "Looking up " + Friends.pretty(f.lookup) + "..." : problem);
+            return;
+        }
+        status.setText(hub.sendRequest(f.id, f.name, ""));
         hubChanged();
+    }
+
+    @Override public void friendLookup(String code, boolean found, String id, String name, boolean self) {
+        if (!found) { status.setText("No player has the friend code " + code + " on this matchmaker. Check it and try again."); return; }
+        if (self) { status.setText("That's your own friend code."); return; }
+        Ink.sheet(this, "Add " + name + "?", Ink.text(this, "Send a friend request to " + name + " (" + code + ")? "
+                        + "You'll be friends when they accept.", 14.5f, false, Ink.INK),
+                "Send request", () -> { status.setText(hub.sendRequest(id, name, code)); hubChanged(); }, "Cancel").show();
     }
 
     private void openFriends() {
         final LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
+        box.addView(Ink.caption(this, "Your friend code"));
+        final TextView code = Ink.text(this, "", 30, true, Ink.INK);
+        code.setLetterSpacing(0.08f);
+        code.setTextIsSelectable(true);
+        box.addView(code, fill(2));
         final TextView me = Ink.text(this, "", 13, false, Ink.INK_SOFT);
-        box.addView(me);
+        box.addView(me, fill(2));
         LinearLayout r1 = new LinearLayout(this);
         r1.setOrientation(LinearLayout.HORIZONTAL);
-        InkButton share = new InkButton(this, Icons.SHARE, "Share my link", true);
+        InkButton share = new InkButton(this, Icons.SHARE, "Share my code", true);
         share.onPress(this::shareFriendLink);
         InkButton add = new InkButton(this, Icons.PLUS, "Add a friend", false);
         add.onPress(this::addFriendDialog);
         r1.addView(share, half(0));
         r1.addView(add, half(10));
         box.addView(r1, fill(12));
+        final LinearLayout reqs = new LinearLayout(this);
+        reqs.setOrientation(LinearLayout.VERTICAL);
+        box.addView(reqs, fill(10));
         final LinearLayout list = new LinearLayout(this);
         list.setOrientation(LinearLayout.VERTICAL);
         box.addView(list, fill(14));
-        box.addView(Ink.text(this, "Friends are matched with you first. Both of you have to add each other. "
-                + "Tap a friend to play with them or to choose what they may do.", 12.5f, false, Ink.INK_SOFT), fill(14));
+        box.addView(Ink.text(this, "Friends are matched with you first. Tap a friend to play with them or to choose what they may do.",
+                12.5f, false, Ink.INK_SOFT), fill(14));
         friendsRefresher = () -> {
-            me.setText("You: " + hub.myName() + "\nYour code: " + Friends.pretty(hub.myId())
-                    + (hub.serverHost().isEmpty() ? "\nSet the matchmaker address in Settings to see friends online." : hub.presenceUp ? "" : "\nConnecting..."));
+            String mine = hub.myCode();
+            code.setText(mine.isEmpty() ? "\u00b7\u00b7\u00b7-\u00b7\u00b7\u00b7" : mine);
+            me.setText(hub.serverHost().isEmpty() ? "Set the matchmaker address in Settings to get your code."
+                    : !hub.presenceUp ? "Connecting to the matchmaker..." : "Name: " + hub.myName() + ". Friends type your code under Add a friend, then you accept.");
+            reqs.removeAllViews();
+            for (final Map<String, Object> r : hub.requests()) {
+                LinearLayout card = new LinearLayout(this);
+                card.setOrientation(LinearLayout.VERTICAL);
+                card.setPadding(dp(12), dp(10), dp(12), dp(10));
+                card.setBackground(Ink.box(Ink.PAPER_DEEP, Ink.INK, 1, this));
+                String c = String.valueOf(r.get("code"));
+                card.addView(Ink.text(this, r.get("name") + (c.isEmpty() || "null".equals(c) ? "" : " (" + c + ")") + " wants to be friends", 14.5f, true, Ink.INK));
+                LinearLayout b = new LinearLayout(this);
+                b.setOrientation(LinearLayout.HORIZONTAL);
+                final String rid = String.valueOf(r.get("id"));
+                InkButton yes = new InkButton(this, Icons.CHECK, "Accept", true);
+                yes.onPress(() -> hub.answerRequest(rid, true));
+                InkButton no = new InkButton(this, Icons.CLOSE, "Decline", false);
+                no.onPress(() -> hub.answerRequest(rid, false));
+                b.addView(yes, half(0));
+                b.addView(no, half(10));
+                card.addView(b, fill(8));
+                reqs.addView(card, fill(reqs.getChildCount() == 0 ? 0 : 8));
+            }
             list.removeAllViews();
             List<Friends.Friend> fl = hub.friends();
-            if (fl.isEmpty()) list.addView(Ink.text(this, "No friends yet. Share your link, or add theirs.", 14, false, Ink.INK));
+            if (fl.isEmpty()) list.addView(Ink.text(this, "No friends yet. Share your code, or add theirs.", 14, false, Ink.INK));
             for (Friends.Friend f : fl) list.addView(friendRow(f), fill(list.getChildCount() == 0 ? 0 : 8));
         };
         friendsRefresher.run();
@@ -586,7 +627,8 @@ public class MainActivity extends Activity implements Hub.Ui {
         names.setOrientation(LinearLayout.VERTICAL);
         names.setPadding(dp(12), 0, 0, 0);
         names.addView(Ink.text(this, f.name, 15.5f, true, Ink.INK));
-        names.addView(Ink.text(this, describe(on) + privilegesShort(f), 12.5f, false, Ink.INK_SOFT));
+        names.addView(Ink.text(this, (f.pending ? "Request sent" : describe(on)) + (f.code.isEmpty() ? "" : " \u00b7 " + f.code)
+                + privilegesShort(f), 12.5f, false, Ink.INK_SOFT));
         row.addView(names, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         row.addView(new IconView(this, Icons.CHEVRON, Ink.INK), new LinearLayout.LayoutParams(dp(22), dp(22)));
         row.setOnClickListener(v -> friendSheet(f));
@@ -614,7 +656,8 @@ public class MainActivity extends Activity implements Hub.Ui {
         final Map<String, Object> on = hub.onlineInfo(f.id);
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.addView(Ink.text(this, describe(on) + "\nCode: " + Friends.pretty(f.id), 13, false, Ink.INK_SOFT));
+        box.addView(Ink.text(this, (f.pending ? "Request sent, waiting for them to accept" : describe(on))
+                + (f.code.isEmpty() ? "" : "\nFriend code: " + f.code), 13, false, Ink.INK_SOFT));
         final Dialog[] d = new Dialog[1];
         if (on != null) {
             final String theirGame = String.valueOf(on.get("game"));
@@ -688,19 +731,22 @@ public class MainActivity extends Activity implements Hub.Ui {
     private void shareFriendLink() {
         if (hub.serverHost().isEmpty()) { status.setText("Set the matchmaker address in Settings first."); return; }
         String linkHost = prefs.getString("invite_host", "").trim();
-        String link = Friends.link(linkHost.isEmpty() ? hub.serverHost() : linkHost, hub.serverPort(), hub.myId(), hub.myName());
+        if (hub.myCode().isEmpty()) { status.setText("Still connecting to the matchmaker to get your code. Try again in a moment."); return; }
+        String link = Friends.link(linkHost.isEmpty() ? hub.serverHost() : linkHost, hub.serverPort(), hub.myCode(), hub.myName());
         Intent send = new Intent(Intent.ACTION_SEND);
         send.setType("text/plain");
-        send.putExtra(Intent.EXTRA_TEXT, "Add me on Retro-Netplay so we can play together: " + link
-                + "\n(or type my code: " + Friends.pretty(hub.myId()) + ")");
+        send.putExtra(Intent.EXTRA_TEXT, "Add me on Retro-Netplay! My friend code: " + hub.myCode() + "\n" + link);
         startActivity(Intent.createChooser(send, "Share your friend link"));
     }
 
     private void addFriendDialog() {
-        final EditText box = Ink.field(this, "Their friend link or code", "");
-        Ink.sheet(this, "Add a friend", box, "Add", () -> {
+        final EditText box = Ink.field(this, "Their friend code, like K7M-4QZ", "");
+        box.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
+                | android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        box.setTextSize(20);
+        Ink.sheet(this, "Add a friend", box, "Look up", () -> {
             Friends.Friend f = Friends.parse(box.getText().toString());
-            if (f == null) status.setText("That isn't a friend link or code. Codes look like a1b2-c3d4-...");
+            if (f == null) status.setText("That isn't a friend code. Codes look like K7M-4QZ.");
             else addFriendFromLink(f);
         }, "Cancel").show();
     }

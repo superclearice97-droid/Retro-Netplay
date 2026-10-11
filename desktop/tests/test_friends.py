@@ -14,8 +14,12 @@ SECRETS = {n: hashlib.sha256(n.encode()).hexdigest()[:32] for n in "ABCDSTUVWXYZ
 def pid(n): return hashlib.sha256(SECRETS[n].encode()).hexdigest()[:24]
 
 port = free_port()
-srv = subprocess.Popen([sys.executable, "-u", os.path.join(ROOT, "desktop/server.py"), str(port)],
-                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+import tempfile
+DATA = tempfile.mkdtemp()
+def start_server():
+    return subprocess.Popen([sys.executable, "-u", os.path.join(ROOT, "desktop/server.py"), str(port)],
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env={**os.environ, "NETPLAY_DATA": DATA})
+srv = start_server()
 time.sleep(1)
 
 class Conn:
@@ -154,6 +158,49 @@ try:
     check("A sees B go offline", pa.wait("friends", pred=lambda m: not m["online"]) is not None)
     for x in (pa, pc): x.close()
 
+    # 8b. short friend codes and requests
+    def hello2(n, friends, hidden=False):
+        c = Conn({"v": 1, "op": "hello", "me": SECRETS[n], "name": n, "friends": [pid(f) for f in friends], "hidden": hidden})
+        return c, c.wait("hello")
+    pw, hw = hello2("W", [])
+    code_w = hw.get("code", "")
+    check("hello gives a short friend code like K7M-4QZ", len(code_w) == 7 and code_w[3] == "-", code_w)
+    pw.close(); time.sleep(0.3)
+    pw, hw2 = hello2("W", [])
+    check("the code stays the same next time", hw2.get("code") == code_w)
+    px, hx = hello2("X", [])
+    px.send({"op": "lookup", "code": code_w.lower().replace("-", " ")})
+    lk = px.wait("lookup")
+    check("lookup finds the player by code (any case, spaces)", lk and lk["found"] and lk["id"] == pid("W") and lk["name"] == "W", lk)
+    px.send({"op": "lookup", "code": "ZZZ-ZZZ"})
+    check("unknown code not found", (px.wait("lookup") or {}).get("found") is False)
+    px.send({"op": "friend_request", "to": pid("W")})
+    check("sender is told the request went out", px.wait("request_sent") is not None)
+    rq = pw.wait("friend_request")
+    check("request arrives with name and code", rq and rq["from"] == pid("X") and rq["name"] == "X" and rq["code"] == hx["code"], rq)
+    pw.send({"op": "friend_accept", "to": pid("X")})
+    ac = px.wait("friend_accept")
+    check("acceptance reaches the sender", ac and ac["from"] == pid("W"), ac)
+    pw.close(); time.sleep(0.3)
+    px.send({"op": "friend_request", "to": pid("W")})
+    px.wait("request_sent")
+    pw, _ = hello2("W", [])
+    check("a request sent while offline arrives when they connect", pw.wait("friend_request") is not None)
+    # hidden players can be friends but aren't listed online
+    py_, _ = hello2("Y", ["Z"], hidden=True)
+    pz, _ = hello2("Z", ["Y"])
+    check("hidden friend not listed online", pz.wait("friends", 1.0, pred=lambda m: any(f["id"] == pid("Y") for f in m["online"])) is None)
+    py_.close(); pz.close()
+    for _ in range(25): px.send({"op": "lookup", "code": "ABCDEF"})
+    check("lookups are rate limited (no guessing codes)", px.wait("error_soft", 2) is not None)
+    px.close(); pw.close()
+    srv.terminate(); srv.wait(); time.sleep(0.3)
+    srv = start_server(); time.sleep(1)
+    q, _ = hello2("V", [])
+    q.send({"op": "lookup", "code": code_w})
+    check("codes survive a matchmaker restart", (q.wait("lookup") or {}).get("found") is True)
+    q.close()
+
     # 9. friend link page
     with urllib.request.urlopen(f"http://127.0.0.1:{port + 1}/friend?i={pid('A')}&n=%3Cb%3EAl", timeout=5) as r:
         body = r.read().decode()
@@ -161,6 +208,8 @@ try:
     check("friend page drops markup from names", "<b>Al" not in body and "bAl" in body)
     with urllib.request.urlopen(f"http://127.0.0.1:{port + 1}/friend?i=zzz&n=x", timeout=5) as r:
         check("damaged friend link explained", b"damaged" in r.read())
+    with urllib.request.urlopen(f"http://127.0.0.1:{port + 1}/friend?c=k7m-4qz&n=Sam", timeout=5) as r:
+        check("short-code friend link opens the app", "netplay://friend?c=K7M4QZ" in r.read().decode())
 finally:
     srv.terminate()
 

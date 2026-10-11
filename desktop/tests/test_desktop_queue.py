@@ -106,6 +106,35 @@ R.start_call({"code": "zzzz9999", "game": "ps2:not-mine", "with": "Bea"})
 check("call for a game you don't have is explained", wait(lambda: any("don't have that game" in m for _, m in e5)))
 for x in (P, Q): x.stop()
 
+# 4b. Play on a GameCube game with no matchmaker yet: the game still starts, the app keeps retrying
+log.write_text("")
+iso = d / "F-Zero GX (USA).rvz"; iso.write_text("x")
+app.RETRY_SECONDS = 1
+free = socket.socket(); free.bind(("127.0.0.1", 0)); LATE = free.getsockname()[1]; free.close()
+def mk_gc(name):
+    cfg, ev, e = mk(name)
+    cfg["paths"]["dolphin"] = str(fake)
+    cfg["games"] = [{"name": "F-Zero GX", "system": "gamecube", "rom": str(iso)}]
+    cfg["server_port"] = LATE; cfg["server_host"] = "127.0.0.1"; cfg["run_server"] = True   # "I'll run it on this computer"
+    return cfg, ev, e
+cg1, eg1, G1 = mk_gc("Gil")
+started = []
+G1.on_boot = lambda c: started.append(c["server_port"])
+G1.play_game()
+check("Play starts a GameCube game right away", wait(lambda: "-b -e" in log.read_text() and "F-Zero GX" in log.read_text()), log.read_text())
+check("the window is asked to start its own matchmaker first", started == [LATE])
+check("no matchmaker yet: still playing, retrying", wait(lambda: any("Trying again" in m for _, m in eg1)) and G1.ingame_alive(), eg1[-1:])
+threading.Thread(target=lambda: asyncio.run(mm.main(LATE, 0)), daemon=True).start()
+check("once the matchmaker is up, you're in the queue", wait(lambda: any(m.startswith("In the queue for F-Zero GX") for _, m in eg1)), [m for _, m in eg1][-2:])
+cg2, eg2, G2 = mk_gc("Hal")
+G2.toggle()
+check("matched on the GameCube game", wait(lambda: any("Matched with" in m for _, m in eg1)))
+lines = log.read_text().splitlines()
+check("the solo game closes and Dolphin's own window opens for NetPlay (no -b)", wait(lambda: "" in log.read_text().splitlines()), lines)
+check("queue messages in order (no second search running)", [m for _, m in eg1 if "Trying again" in m or m.startswith("In the queue")][-1].startswith("In the queue"),
+      [m[:30] for _, m in eg1])
+G1.stop(); G2.stop(); time.sleep(0.3)
+
 # 5. social helpers agree with Android
 s = "a" * 32
 check("id matches the server", social.id_of(s) == mm.player_id(s))
@@ -120,6 +149,18 @@ check("join privilege auto-accepts play, not watch", social.auto_accept(cx, fb["
 f = social.search_fields(cx, prefer_host=True)
 check("search fields carry friends but no privileges except priority",
       f["friends"] == [fb["id"]] and f["priority"] == [] and "join" not in json.dumps(f) and f["prefer_host"] is True)
+check("short friend code typed any way", social.parse_friend(" k7m 4qz ") == {"code": "K7M4QZ", "name": "Friend"}
+      and social.pretty_code("k7m4qz") == "K7M-4QZ" and social.short("K7M-40Z") == "")
+check("short-code friend link", social.parse_friend("http://1.2.3.4:7778/friend?c=K7M4QZ&n=Bea") == {"code": "K7M4QZ", "name": "Bea"})
+check("friend link uses the short code", social.friend_link("1.2.3.4", 7777, "K7M-4QZ", "Sam B") == "http://1.2.3.4:7778/friend?c=K7M4QZ&n=Sam%20B")
+cr = {"secret": "c" * 32, "friends": []}; social.ensure_identity(cr)
+check("incoming request is listed", social.got_request(cr, {"id": fb["id"], "name": "Bea", "code": "K7M4QZ"}) == "new" and cr["friend_requests"][0]["code"] == "K7M-4QZ")
+social.add_friend(cr, {"id": fb["id"], "name": "Bea"})
+check("accepting removes the request and adds the friend", not cr["friend_requests"] and social.find(cr, fb["id"]))
+social.add_friend(cr, {"id": fa["id"], "name": "Ann", "pending": True})
+check("request to someone who asked you too makes you friends", social.got_request(cr, {"id": fa["id"], "name": "Ann"}) == "friends"
+      and not social.find(cr, fa["id"])["pending"])
+dol = app.refresh_ports.__code__.co_consts
 old = json.loads(json.dumps(app.DEFAULT_CFG)); old.pop("hold_v2"); old["hold"] = 1.0
 app.CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True); app.CONFIG_PATH.write_text(json.dumps(old))
 check("old 1 s hotkey hold becomes 3 s", app.load_cfg()["hold"] == 3.0)

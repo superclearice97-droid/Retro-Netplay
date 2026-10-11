@@ -25,6 +25,8 @@ public final class Friends {
 
     public static final Pattern ID = Pattern.compile("^[0-9a-f]{24}$");
     public static final Pattern SECRET = Pattern.compile("^[0-9a-f]{32,64}$");
+    /** Friend codes like K7M-4QZ: 6 characters, no 0/O/1/I to mix up. Given out by the matchmaker. */
+    public static final Pattern SHORT = Pattern.compile("^[2-9A-HJ-NP-Z]{6}$");
     private static final SecureRandom RNG = new SecureRandom();
 
     public static final class Friend {
@@ -38,6 +40,12 @@ public final class Friends {
         public boolean watch;
         /** On a stream you host, they may pick Player 2, 3 or 4. */
         public boolean slot;
+        /** Their friend code (K7M-4QZ), or "". */
+        public String code = "";
+        /** You sent a request and they haven't accepted yet. */
+        public boolean pending;
+        /** Only from parsing a code or link: the short code still to be looked up (id is "" until then). */
+        public String lookup = "";
 
         public Friend(String id, String name) { this.id = id; this.name = cleanName(name).isEmpty() ? "Friend" : cleanName(name); }
 
@@ -45,6 +53,7 @@ public final class Friends {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("id", id); m.put("name", name);
             m.put("priority", priority); m.put("join", join); m.put("watch", watch); m.put("slot", slot);
+            m.put("code", code); m.put("pending", pending);
             return m;
         }
 
@@ -58,6 +67,8 @@ public final class Friends {
             f.join = Boolean.TRUE.equals(m.get("join"));
             f.watch = Boolean.TRUE.equals(m.get("watch"));
             f.slot = Boolean.TRUE.equals(m.get("slot"));
+            f.code = pretty(m.get("code") instanceof String ? (String) m.get("code") : "");
+            f.pending = Boolean.TRUE.equals(m.get("pending"));
             return f;
         }
     }
@@ -85,14 +96,17 @@ public final class Friends {
         return s.toString();
     }
 
-    /** "a1b2c3d4e5f6..." -> "a1b2-c3d4-e5f6-..." so it's easier to read out loud. */
-    public static String pretty(String id) {
-        StringBuilder s = new StringBuilder();
-        for (int i = 0; i < id.length(); i += 4) {
-            if (s.length() > 0) s.append('-');
-            s.append(id, i, Math.min(id.length(), i + 4));
-        }
-        return s.toString();
+    /** "k7m 4qz" / "K7M-4QZ" -> "K7M4QZ", or "" if it isn't a friend code. */
+    public static String shortCode(String text) {
+        if (text == null) return "";
+        String c = text.replaceAll("[\\s-]", "").toUpperCase(Locale.ROOT);
+        return SHORT.matcher(c).matches() ? c : "";
+    }
+
+    /** "K7M4QZ" -> "K7M-4QZ" (or "" if not a code). */
+    public static String pretty(String code) {
+        String c = shortCode(code);
+        return c.isEmpty() ? "" : c.substring(0, 3) + "-" + c.substring(3);
     }
 
     public static String cleanName(String n) {
@@ -111,18 +125,21 @@ public final class Friends {
 
     // ------------------------------------------------------------ links
     /** The link you send to a friend: a web page on your matchmaker that opens the app. */
-    public static String link(String host, int tcpPort, String id, String name) {
+    public static String link(String host, int tcpPort, String code, String name) {
         try {
-            return "http://" + host + ":" + (tcpPort + 1) + "/friend?i=" + id + "&n=" + URLEncoder.encode(cleanName(name), "UTF-8");
+            return "http://" + host + ":" + (tcpPort + 1) + "/friend?c=" + shortCode(code) + "&n=" + URLEncoder.encode(cleanName(name), "UTF-8");
         } catch (java.io.UnsupportedEncodingException e) {
             throw new IllegalStateException(e);
         }
     }
 
-    /** A friend link (web or netplay://), or a bare id typed in (dashes and spaces ignored). Null if neither. */
+    /** A friend code (K7M-4QZ), a friend link, or an older long code. Null if none of these.
+     *  For a code, the result has id "" and lookup set: ask the matchmaker who it is first. */
     public static Friend parse(String text) {
         if (text == null) return null;
         String t = text.trim();
+        String sc = shortCode(t);
+        if (!sc.isEmpty()) { Friend f = new Friend("", "Friend"); f.lookup = sc; return f; }
         String bare = t.toLowerCase(Locale.ROOT).replaceAll("[\\s-]", "");
         if (ID.matcher(bare).matches()) return new Friend(bare, "Friend");
         try {
@@ -131,6 +148,8 @@ public final class Friends {
             boolean web = ("http".equals(u.getScheme()) || "https".equals(u.getScheme())) && "/friend".equals(u.getPath());
             if (!app && !web) return null;
             Map<String, String> q = query(u.getRawQuery());
+            String c = shortCode(q.getOrDefault("c", ""));
+            if (!c.isEmpty()) { Friend f = new Friend("", q.getOrDefault("n", "Friend")); f.lookup = c; return f; }
             String id = q.getOrDefault("i", "");
             if (!ID.matcher(id).matches()) return null;
             return new Friend(id, q.getOrDefault("n", "Friend"));

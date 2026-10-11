@@ -41,6 +41,8 @@ final class Hub {
         void hubChanged();
         void incomingCall(Call c);
         void say(String message);
+        /** Answer to a friend-code lookup you started. */
+        default void friendLookup(String code, boolean found, String id, String name, boolean self) { }
     }
 
     static final class Call {
@@ -146,6 +148,101 @@ final class Hub {
         prefs.edit().putString("friends", Friends.save(list)).apply();
     }
 
+    String myCode() { return prefs.getString("my_code", ""); }
+
+    // ---------------------------------------------------------------- friend requests
+    @SuppressWarnings("unchecked")
+    List<Map<String, Object>> requests() {
+        List<Map<String, Object>> out = new ArrayList<>();
+        try {
+            for (Object o : (List<Object>) Json.parse(prefs.getString("friend_requests", "[]")))
+                if (o instanceof Map && Friends.ID.matcher(String.valueOf(((Map<?, ?>) o).get("id"))).matches()) out.add((Map<String, Object>) o);
+        } catch (RuntimeException ignored) { }
+        return out;
+    }
+
+    private void saveRequests(List<Map<String, Object>> r) {
+        prefs.edit().putString("friend_requests", Json.stringify(r)).apply();
+    }
+
+    /** Ask the matchmaker who has this code; the answer arrives at Ui.friendLookup. "" or a reason it can't. */
+    String lookupCode(String code) {
+        Presence p = presence;
+        if (p == null || !presenceUp) return serverHost().isEmpty() ? "Set the matchmaker address in Settings first." : "Still connecting to the matchmaker. Try again in a moment.";
+        p.lookup(code);
+        return "";
+    }
+
+    /** Add them (marked "request sent") and send the request. Returns a message for the person. */
+    String sendRequest(String id, String name, String code) {
+        if (id.equals(myId())) return "That's your own friend code.";
+        List<Friends.Friend> l = friends();
+        Friends.Friend f = Friends.find(l, id);
+        if (f != null && !f.pending) return f.name + " is already your friend.";
+        if (f == null) {
+            f = new Friends.Friend(id, name);
+            f.code = Friends.pretty(code);
+            f.pending = true;
+            l.add(f);
+            saveFriends(l);
+        }
+        List<Map<String, Object>> r = requests();
+        boolean theyAsked = r.removeIf(x -> id.equals(x.get("id")));
+        if (theyAsked) { f.pending = false; updateFriend(f); saveRequests(r); }
+        Presence p = presence;
+        if (p != null) { if (theyAsked) p.accept(id); else p.request(id); }
+        restartPresence();
+        return theyAsked ? "You and " + f.name + " are friends now." : "Friend request sent to " + f.name + ". You'll be friends when they accept.";
+    }
+
+    void answerRequest(String id, boolean ok) {
+        List<Map<String, Object>> r = requests();
+        Map<String, Object> req = null;
+        for (Map<String, Object> x : r) if (id.equals(x.get("id"))) req = x;
+        if (req == null) return;
+        r.remove(req);
+        saveRequests(r);
+        if (ok) {
+            List<Friends.Friend> l = friends();
+            if (Friends.find(l, id) == null) {
+                Friends.Friend f = new Friends.Friend(id, String.valueOf(req.get("name")));
+                f.code = Friends.pretty(String.valueOf(req.get("code")));
+                l.add(f);
+                saveFriends(l);
+            }
+            Presence p = presence;
+            if (p != null) p.accept(id);
+            restartPresence();
+            say("You and " + Friends.cleanName(String.valueOf(req.get("name"))) + " are friends now.", false);
+        }
+        changed();
+    }
+
+    private void gotRequest(String id, String name, String code) {
+        List<Friends.Friend> l = friends();
+        Friends.Friend f = Friends.find(l, id);
+        if (f != null) {                       // you'd already asked them: friends now
+            f.pending = false;
+            if (!code.isEmpty()) f.code = code;
+            saveFriends(l);
+            Presence p = presence;
+            if (p != null) p.accept(id);
+            restartPresence();
+            say("You and " + f.name + " are friends now.", false);
+            return;
+        }
+        List<Map<String, Object>> r = requests();
+        for (Map<String, Object> x : r) if (id.equals(x.get("id"))) return;
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", id); m.put("name", name); m.put("code", code);
+        r.add(m);
+        if (r.size() > 50) r.remove(0);
+        saveRequests(r);
+        buzz(150);
+        Notify.info(app, name + " wants to be friends", "Open Friends in Retro-Netplay to accept." + (code.isEmpty() ? "" : " Their code: " + code));
+        say(name + " wants to be friends. Open Friends to accept.", false);
+    }
+
     /** Returns false if it's you or already a friend. */
     boolean addFriend(Friends.Friend f) {
         if (f.id.equals(myId())) return false;
@@ -182,8 +279,28 @@ final class Hub {
         presenceUp = false;
         synchronized (online) { online.clear(); }
         List<Friends.Friend> fl = friends();
-        if (serverHost().isEmpty() || fl.isEmpty() || !prefs.getBoolean("show_online", true)) { changed(); return; }
+        // connected whenever a matchmaker is set, so friend requests reach you; "show online" only hides you
+        if (serverHost().isEmpty()) { changed(); return; }
         presence = new Presence(serverHost(), serverPort(), secret(), myName(), Friends.ids(fl), new Presence.Listener() {
+            @Override public void onMyCode(String code) {
+                if (!code.isEmpty() && !code.equals(myCode())) prefs.edit().putString("my_code", code).apply();
+                changed();
+            }
+            @Override public void onLookup(String code, boolean found, String id, String name, boolean self) {
+                main.post(() -> { for (Ui u : uiList()) u.friendLookup(code, found, id, name, self); });
+            }
+            @Override public void onFriendRequest(String id, String name, String code) { gotRequest(id, name, code); }
+            @Override public void onFriendAccepted(String id, String name, String code) {
+                List<Friends.Friend> l = friends();
+                Friends.Friend f = Friends.find(l, id);
+                if (f == null) return;
+                f.pending = false;
+                if (!code.isEmpty()) f.code = code;
+                saveFriends(l);
+                say(f.name + " accepted your friend request.", false);
+                restartPresence();
+            }
+            @Override public void onSoftError(String msg) { say("Friends: " + msg, false); }
             @Override public void onConnected(boolean c, String why) {
                 presenceUp = c;
                 if (!c) synchronized (online) { online.clear(); }
@@ -194,6 +311,16 @@ final class Hub {
                     online.clear();
                     for (Map<String, Object> m : list) online.put(String.valueOf(m.get("id")), m);
                 }
+                // listed online means you both added each other
+                List<Friends.Friend> l = friends();
+                boolean dirty = false;
+                for (Friends.Friend f : l) {
+                    Map<String, Object> m = onlineInfo(f.id);
+                    if (m == null) continue;
+                    String c = Friends.pretty(String.valueOf(m.get("code")));
+                    if (f.pending || (!c.isEmpty() && !c.equals(f.code))) { f.pending = false; if (!c.isEmpty()) f.code = c; dirty = true; }
+                }
+                if (dirty) saveFriends(l);
                 changed();
             }
             @Override public void onCall(String from, String name, String game, String kind, String id) { incoming(new Call(from, name, game, kind, id)); }
@@ -213,7 +340,7 @@ final class Hub {
                 Notify.cancelCall(app, id);
                 changed();
             }
-        });
+        }, !prefs.getBoolean("show_online", true));
         presence.start();
         sendStatus();
     }

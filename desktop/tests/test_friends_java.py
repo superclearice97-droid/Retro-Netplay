@@ -10,7 +10,9 @@ def free_port(kind=socket.SOCK_STREAM):
     s = socket.socket(socket.AF_INET, kind); s.bind(("127.0.0.1", 0)); p = s.getsockname()[1]; s.close(); return p
 
 mm = free_port()
-srv = subprocess.Popen([sys.executable, os.path.join(ROOT, "desktop/server.py"), str(mm)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+import tempfile as _t
+srv = subprocess.Popen([sys.executable, os.path.join(ROOT, "desktop/server.py"), str(mm)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       env={**os.environ, "NETPLAY_DATA": _t.mkdtemp()})
 
 # pretend RetroArch (network commands)
 ra_port = free_port(socket.SOCK_DGRAM)
@@ -44,30 +46,46 @@ public class FJ {
     public void onDeclined(String id, String n) { ev.add("declined"); }
     public void onCallFailed(String id, String msg) { ev.add("failed " + msg); }
     public void onCallCancelled(String id, String from) { ev.add("cancelled"); }
+    public void onMyCode(String c) { ev.add("code " + c); }
+    public void onLookup(String c, boolean found, String id, String name, boolean self) { ev.add("lookup " + found + " " + name + " " + self); }
+    public void onFriendRequest(String id, String name, String code) { ev.add("request " + name + " " + code); }
+    public void onFriendAccepted(String id, String name, String code) { ev.add("accepted " + name + " " + code); }
     String next(String prefix) throws Exception { long end = System.currentTimeMillis() + 5000; while (System.currentTimeMillis() < end) { String e = ev.poll(200, TimeUnit.MILLISECONDS); if (e != null && e.startsWith(prefix)) return e; } return "none"; }
   }
   public static void main(String[] a) throws Exception {
     RetroCmd.port = %RA%;
     p("idA", Friends.idOf("%A%"));
-    p("pretty", Friends.pretty("0123456789abcdef01234567"));
+    p("pretty", Friends.pretty("k7m 4qz") + "|" + Friends.pretty("K7M40Z") + "|" + Friends.shortCode("k7m-4qz"));
+    Friends.Friend sc = Friends.parse(" k7m-4qz ");
+    p("short", sc == null ? "null" : sc.id + "|" + sc.lookup);
+    Friends.Friend sl = Friends.parse("http://1.2.3.4:7778/friend?c=K7M4QZ&n=Bea");
+    p("shortLink", sl == null ? "null" : sl.lookup + "|" + sl.name);
     Friends.Friend f1 = Friends.parse("http://203.0.113.5:7778/friend?i=%IDB%&n=Sam%20%3Cb%3E");
     p("webLink", f1 == null ? "null" : f1.id + "|" + f1.name);
     Friends.Friend f2 = Friends.parse("netplay://friend?i=%IDB%&n=Al&host=x&port=7777");
     p("appLink", f2 == null ? "null" : f2.id + "|" + f2.name);
-    Friends.Friend f3 = Friends.parse(" " + Friends.pretty("%IDB%").toUpperCase() + " ");
+    Friends.Friend f3 = Friends.parse(" %IDB% ".toUpperCase());
     p("typed", f3 == null ? "null" : f3.id);
     p("junk", Friends.parse("http://x/join?i=%IDB%") == null && Friends.parse("abc") == null && Friends.parse("netplay://friend?i=zz") == null);
-    p("link", Friends.link("203.0.113.5", 7777, "%IDB%", "Sam B"));
-    List<Friends.Friend> l = new ArrayList<>(); Friends.Friend fb = new Friends.Friend("%IDB%", "Bea"); fb.priority = true; fb.join = true; l.add(fb);
+    p("link", Friends.link("203.0.113.5", 7777, "K7M-4QZ", "Sam B"));
+    List<Friends.Friend> l = new ArrayList<>(); Friends.Friend fb = new Friends.Friend("%IDB%", "Bea"); fb.priority = true; fb.join = true; fb.code = "K7M-4QZ"; fb.pending = true; l.add(fb);
     List<Friends.Friend> back = Friends.load(Friends.save(l) );
-    p("roundtrip", back.size() == 1 && back.get(0).priority && back.get(0).join && !back.get(0).watch && back.get(0).name.equals("Bea"));
+    p("roundtrip", back.size() == 1 && back.get(0).priority && back.get(0).join && !back.get(0).watch && back.get(0).name.equals("Bea")
+        && back.get(0).code.equals("K7M-4QZ") && back.get(0).pending);
     p("badload", Friends.load("[{\"id\":\"nope\"}, 5, \"x\"]").size() + "|" + Friends.load("garbage").size());
 
     L la = new L("A"), lb = new L("B");
     Presence pa = new Presence("127.0.0.1", %MM%, "%A%", "Ann", Arrays.asList("%IDB%"), la); la.me = pa;
     Presence pb = new Presence("127.0.0.1", %MM%, "%B%", "Bea", Arrays.asList("%IDA%"), lb); lb.me = pb;
-    pa.start(); p("aUp", la.next("up")); pb.start(); p("bUp", lb.next("up"));
+    pa.start(); String codeA = la.next("code"); p("aUp", la.next("up")); pb.start(); String codeB = lb.next("code"); p("bUp", lb.next("up"));
     p("aSeesB", la.next("online Bea"));
+    p("codes", codeA + "|" + codeB);
+    pa.lookup(codeB.substring(5).toLowerCase());
+    p("lookup", la.next("lookup"));
+    pa.lookup("ZZZ-ZZZ"); p("lookupMiss", la.next("lookup"));
+    pa.request("%IDB%"); p("request", lb.next("request"));
+    pb.accept("%IDA%"); p("accepted", la.next("accepted"));
+    p("codeB", codeB.substring(5));
     pb.status("playing", "gba:sonic-battle");
     p("aSeesPlaying", la.next("online Bea:playing"));
     String cid = pa.call("%IDB%", "gba:sonic-battle", "play");
@@ -122,12 +140,19 @@ try:
     res = dict(l.split("=", 1) for l in r.stdout.strip().splitlines() if "=" in l)
     if r.returncode: print(r.stdout, r.stderr)
     check("Java id matches the server's hash", res.get("idA") == ida)
-    check("ids are grouped for reading", res.get("pretty") == "0123-4567-89ab-cdef-0123-4567")
+    check("friend codes read any way, look-alike letters refused", res.get("pretty") == "K7M-4QZ||K7M4QZ", res.get("pretty"))
+    check("typed short code needs a lookup", res.get("short") == "|K7M4QZ", res.get("short"))
+    check("short-code friend link", res.get("shortLink") == "K7M4QZ|Bea")
+    check("each player gets a short code from the matchmaker", all(len(c) == 12 and c.startswith("code ") and c[8] == "-" for c in res.get("codes", "x|x").split("|")), res.get("codes"))
+    check("lookup by code finds the friend", res.get("lookup") == "lookup true Bea false", res.get("lookup"))
+    check("unknown code not found", res.get("lookupMiss", "").startswith("lookup false"))
+    check("friend request arrives with name and code", res.get("request") == "request Ann " + res.get("codes", "")[5:12], res.get("request"))
+    check("acceptance comes back", res.get("accepted") == "accepted Bea " + res.get("codeB", ""), res.get("accepted"))
     check("web friend link parsed, markup dropped", res.get("webLink") == idb + "|Sam b", res.get("webLink"))
     check("app friend link parsed", res.get("appLink") == idb + "|Al")
-    check("typed id with dashes and capitals accepted", res.get("typed") == idb)
+    check("older long codes still accepted", res.get("typed") == idb)
     check("junk is not a friend", res.get("junk") == "true")
-    check("friend link points at the friend page", res.get("link") == f"http://203.0.113.5:7778/friend?i={idb}&n=Sam+B", res.get("link"))
+    check("friend link uses the short code", res.get("link") == "http://203.0.113.5:7778/friend?c=K7M4QZ&n=Sam+B", res.get("link"))
     check("friends and privileges save and load", res.get("roundtrip") == "true")
     check("damaged friend lists load as empty", res.get("badload") == "0|0")
     check("both come online", res.get("aUp") == "up" and res.get("bUp") == "up")

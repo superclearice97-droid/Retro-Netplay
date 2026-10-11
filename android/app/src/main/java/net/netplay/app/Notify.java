@@ -91,6 +91,14 @@ final class Notify {
         } catch (RuntimeException ignored) { }
     }
 
+    static void info(Context c, String title, String text) {
+        try {
+            NotificationManager nm = (NotificationManager) c.getSystemService(Context.NOTIFICATION_SERVICE);
+            nm.notify(3, builder(c, CH_CALL, true).setContentTitle(title).setContentText(text)
+                    .setStyle(new Notification.BigTextStyle().bigText(text)).setAutoCancel(true).setContentIntent(openApp(c)).build());
+        } catch (RuntimeException ignored) { }
+    }
+
     static int callNotifId(String callId) { return 100 + (callId.hashCode() & 0xFFFF); }
 
     static void call(Context c, Hub.Call call, String text) {

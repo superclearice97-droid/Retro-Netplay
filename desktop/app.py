@@ -33,6 +33,7 @@ CONFIG_PATH = Path.home() / ".netplay-matchmaker" / "config.json"
 IS_WIN = platform.system() == "Windows"
 LIB_EXT = ".dll" if IS_WIN else (".dylib" if sys.platform == "darwin" else ".so")
 NATIVE_GUEST_DELAY = 6  # seconds the guest waits so the host's emulator is listening first
+RETRY_SECONDS = 15      # while you play, how often the app retries an unreachable matchmaker
 
 # native=True means the emulator has netplay we can start. Dolphin's must be clicked through by hand.
 SYSTEMS = {
@@ -381,6 +382,10 @@ def refresh_ports(cfg):
         port, proto, label = portmap.APP_PORTS[key]
         r = PORTS.open(port, proto)
         st = {"state": "mapped" if r["ok"] else "failed", "message": f"{label}: " + r["message"]}
+        if key == "dolphin" and not r["ok"]:
+            # Dolphin connects through its own traversal server (a host code), so no open port is needed
+            st = {"state": "traversal", "message": "Dolphin netplay: your router didn't open a port, and that's fine. "
+                  "In Dolphin's NetPlay window choose \"Traversal Server\" and share the host code it shows."}
         if proto == "TCP" and not _local_server(cfg.get("server_host")) and not cfg.get("run_server"):
             c = portmap.check_port(cfg["server_host"], int(cfg["server_port"]), port)
             if c["open"] is not None:
@@ -429,10 +434,59 @@ def _build(cfg, g, s, exe, rom, lane, role, peer):
             return "run", [exe, "-L", core, rom] + extra + (["--host"] if role == "host" else ["--connect", safe_ip(peer)])
         return "run", [exe, "-f", "-L", core, rom] + extra
     if s["emu"] == "dolphin":
-        return "run", [exe, "-b", "-e", rom] if lane == "native" else [exe, "-e", rom]
+        # Dolphin's netplay is started from its own window (Tools > NetPlay), so open the window, not just the game
+        return "run", [exe] if lane == "native" else [exe, "-e", rom]
     if s["emu"] == "pcsx2":
         return "run", [exe, "-batch", "-fullscreen", "--", rom]
     return "run", [exe, "--no-gui", rom]  # rpcs3
+
+
+def solo_cmd(cfg, g):
+    """The command that just starts the game (no netplay yet), so you play while you wait in the queue."""
+    s = SYSTEMS[g["system"]]
+    exe, rom = cfg["paths"].get(s["emu"], ""), g["rom"]
+    if s["emu"] == "retroarch":
+        argv = [exe, "-L", find_core(cfg, s["core"]), rom]
+        if p := write_ra_config(cfg):
+            argv += ["--appendconfig", p]
+    elif s["emu"] == "dolphin":
+        argv = [exe, "-b", "-e", rom]
+    elif s["emu"] == "pcsx2":
+        argv = [exe, "-batch", "-fullscreen", "--", rom]
+    else:
+        argv = [exe, "--no-gui", rom]
+    return emu_argv(exe) + argv[1:]
+
+
+def boot_problem(cfg, g):
+    """'' if the game can start on this computer, else what to fix."""
+    s = SYSTEMS[g["system"]]
+    label = EMUS[s["emu"]][0]
+    if not emu_ok(cfg["paths"].get(s["emu"], "")):
+        return f"{label} wasn't found. Open Settings and pick it (or Auto-detect emulators)."
+    if s.get("core") and not find_core(cfg, s["core"]):
+        return f"The {s['core_name']} core is missing. In RetroArch: Load Core > Download a Core > {s['core_name']}."
+    if not Path(g["rom"]).exists():
+        return "The game file moved or was deleted. Click Game folders... > Scan again."
+    return ""
+
+
+_local_mm = {"port": None}
+
+
+def ensure_local_server(cfg, note):
+    """Start the matchmaker inside this app when the player chose to run it here (once)."""
+    if cfg.get("run_server") and _local_mm["port"] != int(cfg["server_port"]):
+        _local_mm["port"] = int(cfg["server_port"])
+        start_local_server(int(cfg["server_port"]), note)
+
+
+def no_matchmaker_hint(cfg):
+    host = str(cfg.get("server_host", "")).strip()
+    if host in ("", "127.0.0.1", "localhost") and not cfg.get("run_server"):
+        return ("No matchmaker is set yet. In Settings, type the address a friend gave you, "
+                "or tick \"Run the matchmaker on this PC\".")
+    return ""
 
 
 # ----------------------------------------------------------------- matchmaking engine (no GUI)
@@ -444,7 +498,8 @@ class Engine:
         self.state, self.task, self.proc = "idle", None, None
         self.pending_join, self.last_invite = None, None
         self.stream_proc, self.mm = None, ("127.0.0.1", 7777)
-        self.ingame = None          # {"key", "game", "proc"}: a RetroArch game this app started before matching
+        self.ingame = None          # {"key", "game", "proc"}: a game this app started before matching
+        self.on_boot = None         # called before a game starts (the window starts its own matchmaker here)
         self.loop = asyncio.new_event_loop()
         threading.Thread(target=self.loop.run_forever, daemon=True).start()
 
@@ -480,6 +535,8 @@ class Engine:
         if self.state == "searching":
             self.stop()                                   # leave the queue; a running game keeps running
         elif self.state == "session" and self.ingame_alive() and not self.matched:
+            if self.task and not self.task.done():
+                self.task.cancel()
             self.task = self.loop.create_task(self.run(ingame=True))
         elif self.state == "idle":
             self._play_game()
@@ -496,19 +553,19 @@ class Engine:
             return self.set("idle", "Add a game first (Game folders or Add one).")
         g = games[min(cfg["last_game"], len(games) - 1)]
         s = SYSTEMS[g["system"]]
-        lanes, _ = readiness(cfg, g)
-        if s["emu"] != "retroarch" or "native" not in lanes or not cfg.get("auto_queue", True):
-            return await self.run()                       # these start the emulator once matched
-        exe = cfg["paths"][s["emu"]]
-        argv = emu_argv(exe) + ["-L", find_core(cfg, s["core"]), g["rom"]]
-        if p := write_ra_config(cfg):
-            argv += ["--appendconfig", p]
+        problem = boot_problem(cfg, g)
+        if problem:
+            return self.set("idle", f"Can't start {g['name']}: {problem}")
+        if self.on_boot:
+            self.on_boot(cfg)                             # e.g. start this PC's own matchmaker
         try:
-            proc = await asyncio.create_subprocess_exec(*argv)
+            proc = await asyncio.create_subprocess_exec(*solo_cmd(cfg, g))
         except OSError as e:
-            return self.set("idle", f"Couldn't start RetroArch: {e}")
+            return self.set("idle", f"Couldn't start {EMUS[s['emu']][0]}: {e}")
         self.ingame, self.matched = {"key": game_key(g), "game": g, "proc": proc}, False
         self.loop.create_task(self._watch_ingame(proc))
+        if not cfg.get("auto_queue", True):
+            return self.set("session", f"Playing {g['name']}. Hold Start + Select for 3 seconds to look for an opponent.")
         await self.run(ingame=True)
 
     async def _watch_ingame(self, proc):
@@ -662,8 +719,16 @@ class Engine:
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            return self.set("idle", f"Couldn't reach the matchmaker at {host}:{port} "
-                                    f"({e or type(e).__name__}). Check the address in Settings" + (" or ask for a new invite." if join else "."))
+            why = no_matchmaker_hint(cfg) or (f"Couldn't reach the matchmaker at {host}:{port} ({e or type(e).__name__}). "
+                                              "Check the address in Settings" + (" or ask for a new invite." if join else "."))
+            if ingame and self.ingame_alive() and not join:
+                # keep playing; try the queue again in a little while (the hotkey leaves, as usual)
+                self.set("searching", f"Playing {g['name']} while we wait. {why} Trying again in {RETRY_SECONDS} s.")
+                await asyncio.sleep(RETRY_SECONDS)
+                if self.ingame_alive() and self.state == "searching":
+                    return await self.run(ingame=True)
+                return
+            return self.set("idle", why)
         finally:
             if writer:
                 writer.close()
@@ -689,6 +754,16 @@ class Engine:
                 return
             # guest: restart the game connected to the host
             ra_cmd(f"SHOW_MSG Retro-Netplay: matched with {name}! Reconnecting to their game...")
+            proc, self.ingame = self.ingame["proc"], None
+            try:
+                proc.terminate()
+            except ProcessLookupError:
+                pass
+            await proc.wait()
+        keep = lane == "stream" and sess and role == "host" and self.ingame_alive()   # stream the game that's running
+        if self.ingame_alive() and not keep:
+            if s["emu"] == "dolphin" and lane == "native":
+                self.set("session", f"{friend}Closing the game to open Dolphin's NetPlay window...")
             proc, self.ingame = self.ingame["proc"], None
             try:
                 proc.terminate()
@@ -737,13 +812,17 @@ class Engine:
             return self.set("session", f"{friend}Opening the stream in your browser. Plug in a controller first "
                                        f"(or use the on-screen / keyboard controls). If nothing opens, go to: {url}", clip=url)
         s = SYSTEMS[g["system"]]
-        _, what = build_cmd(cfg, g, "stream", "host", {})
-        self.set("session", f"{friend}Starting {EMUS[s['emu']][0]} and the stream...")
-        try:
-            self.proc = await asyncio.create_subprocess_exec(*what)
-        except OSError as e:
-            return self.set("idle", f"Couldn't start {EMUS[s['emu']][0]}: {e}")
-        await asyncio.sleep(NATIVE_GUEST_DELAY)   # give the emulator a moment to open its window
+        if self.ingame_alive():
+            self.proc, self.ingame = self.ingame["proc"], None     # the game is already on screen: stream it
+            self.set("session", f"{friend}Starting the stream of the game you're playing...")
+        else:
+            _, what = build_cmd(cfg, g, "stream", "host", {})
+            self.set("session", f"{friend}Starting {EMUS[s['emu']][0]} and the stream...")
+            try:
+                self.proc = await asyncio.create_subprocess_exec(*what)
+            except OSError as e:
+                return self.set("idle", f"Couldn't start {EMUS[s['emu']][0]}: {e}")
+            await asyncio.sleep(NATIVE_GUEST_DELAY)   # give the emulator a moment to open its window
         cmd = [runtime.host_python(), str(runtime.host_script()), "--server", web,
                "--key", sess.get("key", ""), "--slot", "2"]
         f = social.find(cfg, str((peer or {}).get("id", ""))) if (peer or {}).get("friend") else None
@@ -887,8 +966,9 @@ def run_gui():
     engine = Engine(lambda: cfg, lambda state, msg, clip=None: msgs.put((state, msg, clip)))
     pad = Pad(lambda: cfg, engine.hotkey, lambda t: msgs.put(("note", t, None)))
     pad.start()
-    if cfg["run_server"]:
-        start_local_server(int(cfg["server_port"]), lambda t: msgs.put(("idle", t, None)))
+    mm_note = lambda t: msgs.put(("note", t, None))
+    engine.on_boot = lambda c: ensure_local_server(c, mm_note)
+    ensure_local_server(cfg, mm_note)
 
     # ---- hero: ink controller with four live heat squares (emulator, game, online, controllers)
     HW, HH = 580, (250 if tall >= 860 else 180)
@@ -1153,7 +1233,7 @@ def run_gui():
                 cfg["server_port"] = 7777
             if cfg["run_server"]:
                 cfg["server_host"] = cfg["server_host"] or "127.0.0.1"
-                start_local_server(cfg["server_port"], lambda t: msgs.put(("idle", t, None)))
+                ensure_local_server(cfg, lambda t: msgs.put(("note", t, None)))
             win.destroy()
             refresh()
 
@@ -1342,36 +1422,33 @@ def run_gui():
             status.config(text="Invite link copied. Paste it anywhere to invite people.")
 
     def join_with_link(text=None):
-        text = text or simpledialog.askstring("Join with a link", "Paste the invite link your friend sent:", parent=root)
+        text = text or simpledialog.askstring("Join with a link", "Paste an invite link, a friend link or a friend code:", parent=root)
         if not text:
             return
         f = social.parse_friend(text)
         if f and "/join" not in text:
-            res = social.add_friend(cfg, f)
-            save_cfg(cfg)
-            restart_presence()
-            status.config(text={"added": f"Added {f['name']}. You'll be friends once they add you too.",
-                                "known": f"{f['name']} is already your friend.", "self": "That's your own friend link."}[res])
-            return
+            return add_friend_from(f)
         parsed = invites.parse_link(text)
         if not parsed:
-            messagebox.showinfo("Link", "That doesn't look like a Retro-Netplay invite or friend link.")
+            messagebox.showinfo("Link", "That doesn't look like a Retro-Netplay invite, friend link or friend code.")
             return
         engine.join(parsed)
 
-    # ---- friends: online list, calls, privileges
-    social_state = {"p": None, "online": {}, "redraw": None}
+    # ---- friends: short codes, requests, online list, calls, privileges
+    social_state = {"p": None, "online": {}, "redraw": None, "up": False}
 
     def restart_presence():
+        """Connected whenever a matchmaker is set: friends see you (unless hidden) and requests reach you."""
         old = social_state["p"]
         if old:
             old.stop()
-        social_state["p"], social_state["online"] = None, {}
+        social_state["p"], social_state["online"], social_state["up"] = None, {}, False
         host = str(cfg.get("server_host", "")).strip()
-        if not host or not cfg["friends"] or not cfg.get("show_online", True):
+        if not host or no_matchmaker_hint(cfg):
             return
         p = social.Presence(host, int(cfg["server_port"]), cfg["secret"], cfg["my_name"],
-                            [f["id"] for f in cfg["friends"]], lambda ev, data: msgs.put(("social", ev, data)))
+                            [f["id"] for f in cfg["friends"]], lambda ev, data: msgs.put(("social", ev, data)),
+                            hidden=not cfg.get("show_online", True))
         social_state["p"] = p
         p.start()
 
@@ -1387,10 +1464,90 @@ def run_gui():
         g = next((x for x in cfg["games"] if game_key(x) == key), None)
         return g["name"] if g else (key.split(":", 1)[-1].replace("-", " ").title() or "a game")
 
+    def add_friend_from(f):
+        """f from parse_friend: a short code (look it up first) or an id."""
+        p = social_state["p"]
+        if f.get("code"):
+            if not p or not social_state["up"]:
+                return status.config(text="Connect to a matchmaker first (Settings), then add friends by code.")
+            social_state["want"] = f["code"]
+            p.lookup(f["code"])
+            return status.config(text=f"Looking up {social.pretty_code(f['code'])}...")
+        send_request({"id": f["id"], "name": f.get("name", "Friend"), "code": ""})
+
+    def send_request(f):
+        res = social.add_friend(cfg, {**f, "pending": True})
+        if res == "self":
+            return status.config(text="That's your own friend code.")
+        mine = social.find(cfg, f["id"])
+        if res == "known" and not mine.get("pending"):
+            return status.config(text=f"{mine['name']} is already your friend.")
+        save_cfg(cfg)
+        if social_state["p"]:
+            social_state["p"].request(f["id"])
+        restart_presence()
+        status.config(text=f"Friend request sent to {f['name']}. You'll be friends when they accept.")
+
+    def answer_request(r, ok):
+        cfg["friend_requests"] = [x for x in cfg["friend_requests"] if x["id"] != r["id"]]
+        if ok:
+            social.add_friend(cfg, {"id": r["id"], "name": r["name"], "code": r.get("code", "")})
+            if social_state["p"]:
+                social_state["p"].accept(r["id"])
+            status.config(text=f"You and {r['name']} are friends now.")
+        save_cfg(cfg)
+        restart_presence() if ok else None
+        if social_state["redraw"]:
+            social_state["redraw"]()
+
     def on_social(ev, d):
         p = social_state["p"]
-        if ev == "online":
+        if ev == "up":
+            social_state["up"] = True
+            if d.get("code") and cfg.get("my_code") != d["code"]:
+                cfg["my_code"] = d["code"]
+                save_cfg(cfg)
+        elif ev == "down":
+            social_state["up"] = False
+        elif ev == "online":
             social_state["online"] = {x["id"]: x for x in d}
+            changed = False
+            for x in d:                         # seeing each other online means both added: no longer pending
+                f = social.find(cfg, x["id"])
+                if f and (f.get("pending") or (x.get("code") and f.get("code") != x["code"])):
+                    f["pending"], f["code"], changed = False, social.pretty_code(x.get("code")) or f.get("code", ""), True
+            if changed:
+                save_cfg(cfg)
+        elif ev == "lookup":
+            if social_state.get("want") != social.short(d["code"]):
+                return
+            social_state["want"] = None
+            if not d["found"]:
+                status.config(text=f"No player has the friend code {d['code']} on this matchmaker. Check it and try again.")
+            elif d["self"]:
+                status.config(text="That's your own friend code.")
+            elif messagebox.askyesno("Add friend", f"Send a friend request to {d['name']} ({d['code']})?", parent=root):
+                send_request({"id": d["id"], "name": d["name"], "code": d["code"]})
+        elif ev == "friend_request":
+            if social.got_request(cfg, d) == "friends":
+                status.config(text=f"You and {d['name']} are friends now.")
+                if p:
+                    p.accept(d["id"])
+                restart_presence()
+            else:
+                root.bell()
+                status.config(text=f"{d['name']} ({d['code']}) wants to be friends. Open Friends... to accept.")
+            save_cfg(cfg)
+        elif ev == "friend_accept":
+            f = social.find(cfg, d["id"])
+            if f:
+                f["pending"], f["name"] = False, d["name"]
+                f["code"] = d["code"] or f.get("code", "")
+                save_cfg(cfg)
+                status.config(text=f"{d['name']} accepted your friend request.")
+                restart_presence()
+        elif ev == "soft_error":
+            status.config(text=f"Friends: {d}")
         elif ev == "call" and p:
             what = ("watch you play " if d["kind"] == "watch" else "play ") + game_title(d["game"])
             if social.auto_accept(cfg, d["from"], d["kind"]):
@@ -1412,46 +1569,66 @@ def run_gui():
 
     def friend_link_text():
         host = (cfg["invite"].get("host") or cfg.get("server_host") or "").strip()
-        return social.friend_link(host, int(cfg["server_port"]), social.id_of(cfg["secret"]), cfg["my_name"])
+        return social.friend_link(host, int(cfg["server_port"]), cfg.get("my_code", ""), cfg["my_name"])
 
     def open_friends():
         win = tk.Toplevel(root)
         win.title("Friends")
         win.transient(root)
-        body = ttk.Frame(win, padding=12)
+        body = ttk.Frame(win, padding=14)
         body.pack(fill="both", expand=True)
         top = ttk.Frame(body)
         top.pack(fill="x")
-        ttk.Label(top, text="Your name", width=12).pack(side="left")
+        ttk.Label(top, text="YOUR FRIEND CODE", font=(fam, 9, "bold")).pack(anchor="w")
+        code_lbl = ttk.Label(top, text="", font=(fam, 22, "bold"))
+        code_lbl.pack(anchor="w")
+        code_note = ttk.Label(top, text="", foreground=ink.SOFT, wraplength=520, justify="left")
+        code_note.pack(anchor="w")
+        bar0 = ttk.Frame(body)
+        bar0.pack(fill="x", pady=(8, 0))
+        def copy_code():
+            if not cfg.get("my_code"):
+                return
+            root.clipboard_clear()
+            root.clipboard_append(f"Add me on Retro-Netplay: {cfg['my_code']}  ({friend_link_text()})")
+            status.config(text="Your friend code is copied. Send it to a friend.")
+        ttk.Button(bar0, text="Copy my code", command=copy_code).pack(side="left")
+        ttk.Label(bar0, text="Name", width=6).pack(side="left", padx=(16, 0))
         name_var = tk.StringVar(value=cfg["my_name"])
-        ttk.Entry(top, textvariable=name_var, width=26).pack(side="left")
+        ttk.Entry(bar0, textvariable=name_var, width=18).pack(side="left")
         def save_name():
             n = social.clean_name(name_var.get())
             if n and n != cfg["my_name"]:
                 cfg["my_name"] = n
                 save_cfg(cfg)
                 restart_presence()
-        ttk.Button(top, text="Save", command=save_name).pack(side="left", padx=6)
-        ttk.Label(body, text="Your code: " + social.pretty(social.id_of(cfg["secret"])), foreground=ink.SOFT).pack(anchor="w", pady=(6, 0))
+                status.config(text="Name saved.")
+        ttk.Button(bar0, text="Save", command=save_name).pack(side="left", padx=6)
+
+        ttk.Label(body, text="ADD A FRIEND", font=(fam, 9, "bold")).pack(anchor="w", pady=(16, 0))
         bar = ttk.Frame(body)
-        bar.pack(fill="x", pady=8)
-        def copy_mine():
-            if not str(cfg.get("server_host", "")).strip():
-                return status.config(text="Set the matchmaker address in Settings first.")
-            root.clipboard_clear()
-            root.clipboard_append("Add me on Retro-Netplay: " + friend_link_text())
-            status.config(text="Your friend link is copied. Send it to a friend.")
-        ttk.Button(bar, text="Copy my friend link", command=copy_mine).pack(side="left")
+        bar.pack(fill="x", pady=(4, 0))
         add_var = tk.StringVar()
-        ttk.Entry(bar, textvariable=add_var, width=30).pack(side="left", padx=6)
-        def add():
-            join_with_link(add_var.get()) if social.parse_friend(add_var.get()) else status.config(
-                text="That isn't a friend link or code. Codes look like a1b2-c3d4-...")
+        ent = ttk.Entry(bar, textvariable=add_var, width=14, font=(fam, 14))
+        ent.pack(side="left")
+        def add(_e=None):
+            f = social.parse_friend(add_var.get())
+            if not f:
+                return status.config(text="Type your friend's code, like K7M-4QZ.")
             add_var.set("")
-            draw()
-        ttk.Button(bar, text="Add friend", command=add).pack(side="left")
-        lst = tk.Listbox(body, height=8, font=(fam, 10), activestyle="none")
-        lst.pack(fill="both", expand=True)
+            add_friend_from(f)
+        ent.bind("<Return>", add)
+        ttk.Button(bar, text="Send request", command=add).pack(side="left", padx=6)
+        ttk.Label(bar, text="their code, like K7M-4QZ", foreground=ink.SOFT).pack(side="left", padx=6)
+
+        req_box = ttk.Frame(body)
+        req_box.pack(fill="x", pady=(10, 0))
+
+        ttk.Label(body, text="FRIENDS", font=(fam, 9, "bold")).pack(anchor="w", pady=(12, 0))
+        lst = tk.Listbox(body, height=7, font=(fam, 11), activestyle="none", exportselection=False,
+                         bg="#efeeea", fg=ink.INK, relief="solid", borderwidth=1, highlightthickness=0,
+                         selectbackground=ink.INK, selectforeground=ink.PAPER)
+        lst.pack(fill="both", expand=True, pady=(4, 0))
         det = ttk.Frame(body)
         det.pack(fill="x", pady=(8, 0))
         pvars = {k: tk.BooleanVar() for k, _ in social.PRIVILEGES}
@@ -1505,20 +1682,35 @@ def run_gui():
             restart_presence()
         ttk.Checkbutton(opts, text="Only match me with friends", variable=fo, command=save_opts).pack(anchor="w")
         ttk.Checkbutton(opts, text="Let friends see when I'm online and what I'm playing", variable=so, command=save_opts).pack(anchor="w")
-        ttk.Label(body, text="Friends are matched with you first. Both of you have to add each other.",
-                  foreground=ink.SOFT, wraplength=460).pack(anchor="w", pady=(6, 0))
 
         def draw(keep=False):
+            code_lbl.config(text=cfg.get("my_code") or "···-···")
+            code_note.config(text=(no_matchmaker_hint(cfg) or ("" if social_state["up"] else "Connecting to the matchmaker..."))
+                             if not cfg.get("my_code") or not social_state["up"] else
+                             "Give this code to friends. They type it under Add a friend, and you accept.")
+            for w in req_box.winfo_children():
+                w.destroy()
+            for r in cfg.get("friend_requests", []):
+                row = ttk.Frame(req_box)
+                row.pack(fill="x", pady=2)
+                ttk.Label(row, text=f"{r['name']} ({r.get('code') or 'no code'}) wants to be friends").pack(side="left")
+                ttk.Button(row, text="Decline", command=lambda r=r: answer_request(r, False)).pack(side="right")
+                ttk.Button(row, text="Accept", command=lambda r=r: answer_request(r, True)).pack(side="right", padx=6)
             sel = lst.curselection()
             lst.delete(0, "end")
             for f in cfg["friends"]:
                 on = social_state["online"].get(f["id"])
-                where = "offline" if not on else ({"playing": "playing ", "queue": "queued for "}.get(on.get("state"), "online")
-                                                  + (game_title(on["game"]) if on.get("game") and on.get("state") != "idle" else ""))
+                if f.get("pending"):
+                    where = "request sent"
+                elif not on:
+                    where = "offline"
+                else:
+                    where = ({"playing": "playing ", "queue": "queued for "}.get(on.get("state"), "online")
+                             + (game_title(on["game"]) if on.get("game") and on.get("state") != "idle" else ""))
                 privs = [w for k, w in (("priority", "priority"), ("join", "can join"), ("watch", "can watch"), ("slot", "picks slot")) if f.get(k)]
-                lst.insert("end", f"{'●' if on else '○'} {f['name']} — {where}" + (f"  [{', '.join(privs)}]" if privs else ""))
+                lst.insert("end", f" {'●' if on else '○'} {f['name']}  {f.get('code', '')}  — {where}" + (f"  [{', '.join(privs)}]" if privs else ""))
             if not cfg["friends"]:
-                lst.insert("end", "No friends yet. Copy your link and send it, or paste theirs above.")
+                lst.insert("end", " No friends yet. Share your code, or type a friend's code above.")
             if keep and sel:
                 lst.selection_set(sel[0])
             show()
@@ -1527,7 +1719,7 @@ def run_gui():
             for k, _ in social.PRIVILEGES:
                 pvars[k].set(bool(f and f.get(k)))
         lst.bind("<<ListboxSelect>>", show)
-        social_state["redraw"] = lambda: draw(keep=True)
+        social_state["redraw"] = lambda: draw(keep=True) if win.winfo_exists() else None
         win.protocol("WM_DELETE_WINDOW", lambda: (social_state.__setitem__("redraw", None), win.destroy()))
         draw()
 
@@ -1642,7 +1834,8 @@ def run_gui():
         import wizard
         ctx = {"autodetect": autodetect, "emu_ok": emu_ok, "EMUS": EMUS, "SYSTEMS": SYSTEMS,
                "refresh_ports": refresh_ports, "controller_check": lambda: controller_check(),
-               "done": lambda: (refresh(), save_cfg(cfg), menu_entry(), start_background())}
+               "done": lambda: (refresh(), save_cfg(cfg), ensure_local_server(cfg, mm_note), restart_presence(),
+                                menu_entry(), start_background())}
         wizard.run(root, tk, ttk, filedialog, cfg, ctx, only=only)
 
     def menu_entry():

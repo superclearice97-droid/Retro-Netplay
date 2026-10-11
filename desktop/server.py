@@ -426,11 +426,115 @@ class Presence:
         self.friends = id_set(req.get("friends"))
         self.state, self.game = "idle", ""
         self.call_times = []
+        self.ask_times = []
+        self.hidden = bool(req.get("hidden"))      # still reachable for requests, just not shown online
         self.closed = False
+        self.code = ""
 
 
 def p_mutual(a, b):
     return a.id != b.id and a.id in b.friends and b.id in a.friends
+
+
+# ----------------------------------------------------------------- short friend codes
+# Each player gets a 6-character code on this matchmaker (shown as K7M-4QZ). The server keeps only
+# code -> player id and the name they chose, so friends can add each other by code even when offline.
+CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
+SHORT_RE = re.compile(r"^[2-9A-HJ-NP-Z]{6}$")
+REQUESTS_PER_MIN = 20
+REQUEST_DAYS = 14
+MAX_PENDING = 50
+codes = {}             # code -> {"id", "name"}
+code_of_id = {}        # id -> code
+pending = {}           # id -> {from id: {"op":..., ...message, "t": time}}
+_codes_dirty = False
+
+
+def data_dir():
+    d = os.environ.get("NETPLAY_DATA") or os.path.join(os.path.expanduser("~"), ".netplay-matchmaker", "server")
+    os.makedirs(d, mode=0o700, exist_ok=True)
+    return d
+
+
+def load_codes():
+    try:
+        with open(os.path.join(data_dir(), "friend-codes.json")) as f:
+            raw = json.load(f)
+        for c, v in raw.items():
+            if SHORT_RE.match(c) and isinstance(v, dict) and ID_RE.match(str(v.get("id", ""))):
+                codes[c] = {"id": v["id"], "name": clean_name(v.get("name")) or "Player"}
+                code_of_id[v["id"]] = c
+    except (OSError, ValueError):
+        pass
+
+
+def save_codes():
+    global _codes_dirty
+    if not _codes_dirty:
+        return
+    _codes_dirty = False
+    try:
+        path = os.path.join(data_dir(), "friend-codes.json")
+        tmp = path + ".tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump(codes, f)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def short_code(pid, salt=0):
+    h = hashlib.sha256(f"code:{pid}:{salt}".encode()).digest()
+    n = int.from_bytes(h[:4], "big") >> 2           # 30 bits
+    return "".join(CODE_ALPHABET[(n >> (5 * i)) & 31] for i in range(6))
+
+
+def assign_code(pid, name):
+    """The player's code on this server (the same every time), and remember their latest name."""
+    global _codes_dirty
+    c = code_of_id.get(pid)
+    if not c:
+        salt = 0
+        while True:
+            c = short_code(pid, salt)
+            if c not in codes:
+                break
+            salt += 1
+        code_of_id[pid] = c
+        codes[c] = {"id": pid, "name": name}
+        _codes_dirty = True
+    elif codes[c]["name"] != name:
+        codes[c]["name"] = name
+        _codes_dirty = True
+    return c
+
+
+def pretty_code(c):
+    return c[:3] + "-" + c[3:]
+
+
+def normal_code(text):
+    return re.sub(r"[\s-]", "", str(text or "")).upper()
+
+
+def deliver(to, msg):
+    """Send now if they're online, else keep it (in memory) until they connect."""
+    q = online.get(to)
+    if q and not q.closed:
+        p_send(q, msg)
+        return
+    box = pending.setdefault(to, {})
+    if len(box) >= MAX_PENDING and msg["from"] not in box:
+        return
+    box[msg["from"]] = {**msg, "t": time.time()}
+
+
+def flush_pending(p):
+    now = time.time()
+    for frm, msg in list(pending.pop(p.id, {}).items()):
+        if now - msg.get("t", now) < REQUEST_DAYS * 86400:
+            p_send(p, {k: v for k, v in msg.items() if k != "t"})
 
 
 def p_send(p, msg):
@@ -447,8 +551,8 @@ def push_friends(p):
     lst = []
     for fid in sorted(p.friends):
         q = online.get(fid)
-        if q and p_mutual(p, q):
-            lst.append({"id": q.id, "name": q.name, "state": q.state, "game": q.game})
+        if q and p_mutual(p, q) and not q.hidden:
+            lst.append({"id": q.id, "name": q.name, "state": q.state, "game": q.game, "code": pretty_code(q.code)})
     p_send(p, {"op": "friends", "v": 1, "online": lst})
 
 
@@ -519,6 +623,25 @@ def on_presence_msg(p, m):
             q = online.get(to)
             if q:
                 p_send(q, {"op": "call_cancelled", "call": cid, "from": p.id})
+    elif op in ("lookup", "friend_request", "friend_accept"):
+        p.ask_times = [t for t in p.ask_times if now - t < 60]
+        if len(p.ask_times) >= REQUESTS_PER_MIN:
+            return p_send(p, {"op": "error_soft", "about": op, "msg": "too many tries; wait a minute"})
+        p.ask_times.append(now)
+        if op == "lookup":
+            c = normal_code(m.get("code"))
+            hit = codes.get(c) if SHORT_RE.match(c) else None
+            reply = {"op": "lookup", "v": 1, "code": pretty_code(c) if SHORT_RE.match(c) else str(m.get("code", ""))[:16],
+                     "found": bool(hit)}
+            if hit:
+                reply.update(id=hit["id"], name=hit["name"], self=hit["id"] == p.id)
+            return p_send(p, reply)
+        to = m.get("to")
+        if not (isinstance(to, str) and ID_RE.match(to)) or to == p.id or to not in code_of_id:
+            return p_send(p, {"op": "error_soft", "about": op, "msg": "no player with that code"})
+        deliver(to, {"op": op, "v": 1, "from": p.id, "name": p.name, "code": pretty_code(p.code)})
+        if op == "friend_request":
+            p_send(p, {"op": "request_sent", "to": to})
 
 
 async def presence(reader, writer, req, ip):
@@ -538,7 +661,10 @@ async def presence(reader, writer, req, ip):
         old.writer.close()
     online[p.id] = p
     presence_by_ip[ip] = presence_by_ip.get(ip, 0) + 1
-    p_send(p, {"op": "hello", "v": 1, "id": p.id})
+    p.code = assign_code(p.id, p.name)
+    save_codes()
+    p_send(p, {"op": "hello", "v": 1, "id": p.id, "code": pretty_code(p.code)})
+    flush_pending(p)
     push_friends(p)
     tell_friends(p)
     last = time.monotonic()
@@ -595,19 +721,21 @@ def landing_page(host_header, tcp_port, game, code):
             "page's address.</p>")
 
 
-def friend_page(host_header, tcp_port, fid, name):
-    """HTML for a friend link. The id and name are validated and escaped; nothing is stored."""
+def friend_page(host_header, tcp_port, fid, name, code=""):
+    """HTML for a friend link (short code, or an older id link). Validated and escaped; nothing is stored."""
     host = (host_header or "").rsplit(":", 1)[0] if host_header and not host_header.endswith("]") else (host_header or "")
     name = clean_name(name) or "A player"
-    if not (HOST_RE.match(host) and ID_RE.match(fid or "")):
+    c = normal_code(code)
+    if not HOST_RE.match(host) or not (SHORT_RE.match(c) or ID_RE.match(fid or "")):
         return "<h1>Retro-Netplay</h1><p>This friend link looks incomplete or damaged. Ask your friend to send it again.</p>"
+    key = ("c", c) if SHORT_RE.match(c) else ("i", fid)
     deep = "netplay://friend?" + "&".join(f"{k}={quote(str(v), safe='')}" for k, v in
-                                          (("i", fid), ("n", name), ("host", host), ("port", tcp_port)))
+                                          (key, ("n", name), ("host", host), ("port", tcp_port)))
+    shown = f" (friend code {pretty_code(c)})" if SHORT_RE.match(c) else ""
     return (f"<h1>{html.escape(name)} wants to be friends</h1>"
             f"<p><a class='btn' href='{html.escape(deep, quote=True)}'>Add {html.escape(name)} in Retro-Netplay</a></p>"
-            "<p>Friends get matched with each other first, and you choose what each friend may do. "
-            "You both have to add each other.</p>"
-            "<p>The button does nothing? In the app open <b>Friends</b>, choose <b>Add a friend</b> and paste this page's address.</p>")
+            f"<p>Or open Retro-Netplay, go to <b>Friends</b> and type their code{html.escape(shown)}.</p>"
+            "<p>Friends get matched with each other first, and you choose what each friend may do.</p>")
 
 
 def tls_context():
@@ -729,7 +857,7 @@ async def http_handle(reader, writer, tcp_port=7777):
                               int(port) if port.isdigit() and 0 < int(port) < 65536 else tcp_port,
                               first("g"), first("c"))))
             elif u.path == "/friend":
-                out = respond("200 OK", page(friend_page(headers.get("host", ""), tcp_port, first("i"), first("n"))))
+                out = respond("200 OK", page(friend_page(headers.get("host", ""), tcp_port, first("i"), first("n"), first("c"))))
             else:
                 out = respond("200 OK", page("<h1>Netplay Matchmaker</h1><p>The matchmaker is running.</p>"))
     except (ValueError, asyncio.TimeoutError, asyncio.IncompleteReadError):
@@ -745,6 +873,7 @@ async def http_handle(reader, writer, tcp_port=7777):
 
 async def main(port, http_port=None):
     http_port = port + 1 if http_port is None else http_port
+    load_codes()
     srv = await asyncio.start_server(handle, "0.0.0.0", port, limit=MAX_LINE)
     print(f"matchmaker on :{port}", flush=True)
     if http_port:

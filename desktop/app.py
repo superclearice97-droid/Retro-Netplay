@@ -22,6 +22,7 @@ from pathlib import Path
 import controls
 import ink
 import invites
+import lan
 import library
 import portmap
 import runtime
@@ -1218,8 +1219,34 @@ def run_gui():
         field("Matchmaker address", "server_host", cfg)
         field("Matchmaker port", "server_port", cfg)
         run_var = tk.BooleanVar(value=cfg["run_server"])
-        ttk.Checkbutton(body, text="Run the matchmaker on this PC (only ONE player does this; the other\n"
-                                    "player types this PC's address above)", variable=run_var).pack(anchor="w", pady=6)
+        ttk.Checkbutton(body, text="Run the matchmaker on this PC (only ONE player does this; other devices\n"
+                                    "find it with \"Find on my network\")", variable=run_var).pack(anchor="w", pady=6)
+        lan_row = ttk.Frame(body)
+        lan_row.pack(fill="x")
+        lan_note = ttk.Label(body, text=f"This PC on your home network: {lan.lan_ip() or 'unknown'}.  " + lan.FIREWALL_HELP,
+                             wraplength=560, justify="left", foreground=ink.SOFT)
+
+        def find_mm():
+            lan_note.config(text="Looking on your home network...")
+            def work():
+                res = lan.discover()
+                def show():
+                    if not win.winfo_exists():
+                        return
+                    others = [r for r in res if r["host"] != lan.lan_ip()] or res
+                    if not others:
+                        lan_note.config(text="No matchmaker found on this network. " + lan.FIREWALL_HELP)
+                        return
+                    r = others[0]
+                    vars_[(id(cfg), "server_host")][2].set(r["host"])
+                    vars_[(id(cfg), "server_port")][2].set(str(r["port"]))
+                    if r["host"] != lan.lan_ip():
+                        run_var.set(False)
+                    lan_note.config(text=f"Found {r['name'] or 'a matchmaker'} at {r['host']}. Press Save.")
+                win.after(0, show)
+            threading.Thread(target=work, daemon=True).start()
+        ttk.Button(lan_row, text="Find on my network", command=find_mm).pack(side="left")
+        lan_note.pack(anchor="w", pady=(4, 0))
 
         def save():
             for store, key, v in vars_.values():
@@ -1522,7 +1549,8 @@ def run_gui():
                 return
             social_state["want"] = None
             if not d["found"]:
-                status.config(text=f"No player has the friend code {d['code']} on this matchmaker. Check it and try again.")
+                status.config(text=f"No player has the friend code {d['code']} on this matchmaker ({invites.link_host(cfg)}). "
+                                   "Check the code, and that your friend's app uses this same matchmaker (Find on my network).")
             elif d["self"]:
                 status.config(text="That's your own friend code.")
             elif messagebox.askyesno("Add friend", f"Send a friend request to {d['name']} ({d['code']})?", parent=root):
@@ -1686,7 +1714,8 @@ def run_gui():
             code_lbl.config(text=cfg.get("my_code") or "···-···")
             code_note.config(text=(no_matchmaker_hint(cfg) or ("" if social_state["up"] else "Connecting to the matchmaker..."))
                              if not cfg.get("my_code") or not social_state["up"] else
-                             "Give this code to friends. They type it under Add a friend, and you accept.")
+                             f"Give this code to friends. They type it under Add a friend, and you accept. "
+                             f"Their app must use the same matchmaker: {invites.link_host(cfg)}:{cfg['server_port']}.")
             for w in req_box.winfo_children():
                 w.destroy()
             for r in cfg.get("friend_requests", []):
@@ -1851,6 +1880,18 @@ def run_gui():
     def start_background():
         """Pick up new games in the folders and keep the router ports open, without slowing the window."""
         def work():
+            if no_matchmaker_hint(cfg):
+                # no matchmaker chosen yet: use one on the home network if there is one
+                found = [r for r in lan.discover() if r["host"] != lan.lan_ip()]
+                if found:
+                    r = found[0]
+                    def use():
+                        cfg["server_host"], cfg["server_port"] = r["host"], r["port"]
+                        save_cfg(cfg)
+                        restart_presence()
+                        refresh()
+                        hint.config(text=f"Using the matchmaker on {r['name'] or r['host']} ({r['host']}), found on your home network.")
+                    msgs.put(("call", None, use))
             if cfg.get("game_folders"):
                 library_games, _q = library.scan(cfg["game_folders"], cfg.get("folder_answers", {}))
                 merged = library.merge(cfg["games"], library_games)

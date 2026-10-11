@@ -41,7 +41,13 @@ def new_code(n=8):
 
 
 def link_host(cfg):
-    return (cfg["invite"]["host"].strip() or cfg["server_host"]).strip()
+    """The address other people's devices use to reach your matchmaker. Never 127.0.0.1 (that would point
+    every other device at itself): when the matchmaker runs on this computer, its home-network address is used."""
+    h = (cfg["invite"]["host"].strip() or cfg["server_host"]).strip()
+    if h.lower() in LOCAL_HOSTS or h.startswith("127."):
+        import lan
+        h = lan.lan_ip() or h
+    return h
 
 
 def link_is_shareable(cfg):

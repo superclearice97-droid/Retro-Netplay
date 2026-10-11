@@ -196,9 +196,39 @@ def online_page(body, tk, ttk, filedialog, cfg, ctx, fam, win):
     f1 = ttk.Frame(body)
     f1.pack(fill="x", pady=(10, 0))
     ttk.Radiobutton(f1, text="A friend gave me an address:", variable=mode, value="friend").pack(anchor="w")
-    e = ttk.Entry(f1, textvariable=host)
-    e.pack(fill="x", padx=(24, 0), pady=(2, 6))
+    erow = ttk.Frame(f1)
+    erow.pack(fill="x", padx=(24, 0), pady=(2, 2))
+    e = ttk.Entry(erow, textvariable=host)
+    e.pack(side="left", fill="x", expand=True)
+    found_lbl = ttk.Label(f1, text="", wraplength=470, justify="left", foreground=ink.SOFT)
+
+    def find():
+        found_lbl.config(text="Looking on your home network...")
+        def work():
+            import lan
+            res = lan.discover()
+            def show():
+                if not win.winfo_exists():
+                    return
+                if res:
+                    host.set(res[0]["host"] if res[0]["port"] == 7777 else f"{res[0]['host']}")
+                    if res[0]["port"] != 7777:
+                        cfg["server_port"] = res[0]["port"]
+                    mode.set("friend")
+                    found_lbl.config(text=f"Found {res[0]['name'] or 'a matchmaker'} at {res[0]['host']}."
+                                     + (f" ({len(res) - 1} more on this network.)" if len(res) > 1 else ""))
+                else:
+                    found_lbl.config(text="No matchmaker found on this network. Is the other computer's app open "
+                                          "with \"Run the matchmaker on this PC\" on?")
+            win.after(0, show)
+        threading.Thread(target=work, daemon=True).start()
+    ttk.Button(erow, text="Find on my network", command=find).pack(side="left", padx=(6, 0))
+    found_lbl.pack(anchor="w", padx=(24, 0), pady=(0, 6))
     ttk.Radiobutton(f1, text="I'll run it on this computer (share your address with friends)", variable=mode, value="run").pack(anchor="w")
+    import lan
+    ttk.Label(f1, wraplength=470, justify="left", foreground=ink.SOFT, text=(
+        f"Other devices at home find it with \"Find on my network\" (this computer is {lan.lan_ip() or 'on your network'}). "
+        "For friends elsewhere, your router must let port 7777 and 7778 in.\n" + lan.FIREWALL_HELP)).pack(anchor="w", padx=(24, 0))
 
     auto = tk.BooleanVar(value=cfg.get("auto_ports", True))
     ttk.Checkbutton(body, variable=auto, text="Open ports on my router automatically (recommended)").pack(anchor="w", pady=(16, 2))

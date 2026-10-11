@@ -270,7 +270,55 @@ final class Hub {
         saveFriends(l);
     }
 
-    String serverHost() { return prefs.getString("server_host", "").trim(); }
+    /** The matchmaker's address. 127.0.0.1 / localhost count as "not set": on a phone they'd mean the phone itself. */
+    String serverHost() {
+        String h = prefs.getString("server_host", "").trim();
+        return net.netplay.core.Lan.isLoopback(h) ? "" : h;
+    }
+
+    interface FoundCallback { void found(List<net.netplay.core.Lan.Found> list); }
+
+    /** Where to send the "is there a matchmaker here?" broadcast on this Wi-Fi network. */
+    List<String> broadcastTargets() {
+        List<String> t = new ArrayList<>();
+        t.add("255.255.255.255");
+        try {
+            android.net.wifi.WifiManager w = (android.net.wifi.WifiManager) app.getSystemService(Context.WIFI_SERVICE);
+            @SuppressWarnings("deprecation") android.net.DhcpInfo d = w.getDhcpInfo();
+            if (d != null && d.ipAddress != 0) {
+                int mask = d.netmask != 0 ? d.netmask : 0x00FFFFFF;
+                int b = (d.ipAddress & mask) | ~mask;
+                t.add((b & 0xFF) + "." + ((b >> 8) & 0xFF) + "." + ((b >> 16) & 0xFF) + "." + ((b >> 24) & 0xFF));
+            }
+        } catch (RuntimeException ignored) { }
+        return t;
+    }
+
+    /** Look for a matchmaker on the home network; the answer comes back on the main thread. */
+    void findOnNetwork(FoundCallback cb) {
+        final List<String> targets = broadcastTargets();
+        new Thread(() -> {
+            List<net.netplay.core.Lan.Found> res = net.netplay.core.Lan.discover(targets);
+            main.post(() -> cb.found(res));
+        }, "discover").start();
+    }
+
+    void useMatchmaker(String host, int port) {
+        prefs.edit().putString("server_host", host).putInt("server_port", port).apply();
+        restartPresence();
+        changed();
+    }
+
+    /** No matchmaker set yet? Use the one on this network if there is one. */
+    void autoFind() {
+        if (!serverHost().isEmpty()) return;
+        findOnNetwork(list -> {
+            if (list.isEmpty() || !serverHost().isEmpty()) return;
+            net.netplay.core.Lan.Found f = list.get(0);
+            useMatchmaker(f.host, f.port);
+            say("Using the matchmaker on " + f + ", found on your home network.", false);
+        });
+    }
     int serverPort() { return prefs.getInt("server_port", 7777); }
 
     /** Visible to friends (and reachable for calls) while the app or the queue is running. */

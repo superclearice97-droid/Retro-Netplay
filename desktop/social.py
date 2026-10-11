@@ -253,7 +253,7 @@ class Presence(threading.Thread):
                         m = json.loads(line)
                     except ValueError:
                         continue
-                    self._handle(m)
+                    self._on_message(m)
         finally:
             self.sock = None
             try:
@@ -261,7 +261,7 @@ class Presence(threading.Thread):
             except OSError:
                 pass
 
-    def _handle(self, m):
+    def _on_message(self, m):
         op = m.get("op")
         if op == "ping":
             self.send({"op": "ping"})

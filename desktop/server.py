@@ -23,6 +23,7 @@ import json
 import os
 import re
 import secrets
+import socket
 import ssl
 import time
 import sys
@@ -871,9 +872,49 @@ async def http_handle(reader, writer, tcp_port=7777):
         writer.close()
 
 
-async def main(port, http_port=None):
+# ----------------------------------------------------------------- finding the matchmaker on a home network
+DISCOVER_ASK = b"RETRO-NETPLAY-DISCOVER/1"
+
+
+class Discovery(asyncio.DatagramProtocol):
+    """Answers 'is there a matchmaker here?' from devices on the same network (UDP port N+2), so phones and
+    other computers find it without anyone typing an address. The answer is only the port numbers and the
+    computer's name; it never joins anyone to anything."""
+
+    def __init__(self, port, http_port):
+        self.port, self.http_port, self.times = port, http_port, {}
+
+    def connection_made(self, transport):
+        self.transport = transport
+
+    def datagram_received(self, data, addr):
+        if data.strip() != DISCOVER_ASK:
+            return
+        now = time.monotonic()
+        recent = [t for t in self.times.get(addr[0], []) if now - t < 10]
+        if len(recent) >= 20:
+            return
+        self.times[addr[0]] = recent + [now]
+        if len(self.times) > 5000:
+            self.times.clear()
+        name = re.sub(r"[^A-Za-z0-9 ._-]", "", socket.gethostname())[:40] or "Matchmaker"
+        reply = {"app": "retro-netplay", "v": 1, "port": self.port, "web": self.http_port, "name": name}
+        try:
+            self.transport.sendto(json.dumps(reply).encode(), addr)
+        except OSError:
+            pass
+
+
+async def main(port, http_port=None, discovery=True):
     http_port = port + 1 if http_port is None else http_port
     load_codes()
+    if discovery:
+        try:
+            await asyncio.get_running_loop().create_datagram_endpoint(
+                lambda: Discovery(port, http_port), local_addr=("0.0.0.0", port + 2))
+            print(f"home-network discovery on udp :{port + 2}", flush=True)
+        except OSError as e:
+            print(f"home-network discovery off ({e})", flush=True)
     srv = await asyncio.start_server(handle, "0.0.0.0", port, limit=MAX_LINE)
     print(f"matchmaker on :{port}", flush=True)
     if http_port:

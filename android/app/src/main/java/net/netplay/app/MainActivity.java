@@ -77,6 +77,7 @@ public class MainActivity extends Activity implements Hub.Ui {
         super.onStart();
         hub.addUi(this);
         if (!hub.hasPresence()) hub.restartPresence();
+        if (prefs.getBoolean("setup_done", false)) hub.autoFind();
         hubChanged();
         ticker.post(tick);
     }
@@ -127,7 +128,23 @@ public class MainActivity extends Activity implements Hub.Ui {
         if (data == null) return;
         String s = data.toString();
         Friends.Friend f = Friends.parse(s);
-        if (f != null) { addFriendFromLink(f); return; }
+        if (f != null) {
+            // a friend link names its matchmaker: use it if you don't have one yet (friends must share one)
+            String h = data.getQueryParameter("host");
+            if (h == null && ("http".equals(data.getScheme()) || "https".equals(data.getScheme()))) h = data.getHost();
+            String pt = data.getQueryParameter("port");
+            int port = 7777;
+            try { port = pt != null ? Integer.parseInt(pt) : (data.getPort() > 0 ? data.getPort() - 1 : 7777); } catch (NumberFormatException ignored) { }
+            if (hub.serverHost().isEmpty() && h != null && !net.netplay.core.Lan.isLoopback(h) && h.matches("^[A-Za-z0-9.\\-\\[\\]:]{1,255}$")) {
+                hub.useMatchmaker(h, port);
+                status.setText("Connecting to your friend's matchmaker...");
+                final Friends.Friend ff = f;
+                hero.postDelayed(() -> addFriendFromLink(ff), 2500);
+                return;
+            }
+            addFriendFromLink(f);
+            return;
+        }
         joinWithLink(s);
     }
 
@@ -509,7 +526,21 @@ public class MainActivity extends Activity implements Hub.Ui {
             status.setText("You don't have " + hub.gameTitle(inv.game) + " in your games yet. Add its folder, then open the link again.");
             return;
         }
-        if (hub.serverHost().isEmpty()) prefs.edit().putString("server_host", inv.host).putInt("server_port", inv.port).apply();
+        if (net.netplay.core.Lan.isLoopback(inv.host)) {
+            // made by a computer whose matchmaker said 127.0.0.1 (older version): that can't work from here
+            if (hub.serverHost().isEmpty()) {
+                status.setText("This link points at the other device itself (127.0.0.1), so it can't work from here. "
+                        + "Looking for the matchmaker on your home network...");
+                hub.findOnNetwork(list -> {
+                    if (list.isEmpty()) { status.setText("No matchmaker found on this Wi-Fi. Ask for a new link, or set the address in Settings."); return; }
+                    hub.useMatchmaker(list.get(0).host, list.get(0).port);
+                    joinWithLink(text);
+                });
+                return;
+            }
+        } else if (!inv.host.equalsIgnoreCase(hub.serverHost()) || inv.port != hub.serverPort()) {
+            hub.useMatchmaker(inv.host, inv.port);     // the link's matchmaker is where your friend is waiting
+        }
         if (Hub.sys(g).hasNative() && !hub.playingKey.equals(inv.game)) {
             String problem = hub.boot(this, g);
             if (!problem.isEmpty()) { status.setText(problem); return; }
@@ -766,6 +797,19 @@ public class MainActivity extends Activity implements Hub.Ui {
         box.addView(Ink.caption(this, "Port"), fill(12));
         final EditText port = Ink.field(this, "7777", String.valueOf(prefs.getInt("server_port", 7777)));
         box.addView(port, fill(6));
+        final TextView foundNote = Ink.text(this, "", 13, false, Ink.INK_SOFT);
+        InkButton findMm = new InkButton(this, Icons.SEARCH, "Find on my network", false);
+        findMm.onPress(() -> {
+            foundNote.setText("Looking on your home network...");
+            hub.findOnNetwork(list -> {
+                if (list.isEmpty()) { foundNote.setText("None found on this Wi-Fi. Is the computer's matchmaker on, and on the same Wi-Fi?"); return; }
+                host.setText(list.get(0).host);
+                port.setText(String.valueOf(list.get(0).port));
+                foundNote.setText("Found " + list.get(0) + ". Press Save.");
+            });
+        });
+        box.addView(findMm, fill(8));
+        box.addView(foundNote, fill(4));
         box.addView(Ink.caption(this, "Public address for links"), fill(12));
         final EditText inviteHost = Ink.field(this, "blank = same as above", prefs.getString("invite_host", ""));
         box.addView(inviteHost, fill(6));

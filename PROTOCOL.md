@@ -99,3 +99,6 @@ Client -> server:
 The server keeps the online list and pending calls in memory only, and forgets them when the connection closes.
 
 **Stream slot choice.** When the host allows it, its first `ctl` message is `{"t":"slot","n":2,"pick":[2,3,4]}`. The guest may answer `{"t":"want_slot","n":3}`; the host replies with a new `{"t":"slot","n":3,...}`.
+
+## Finding a matchmaker on a home network
+A client broadcasts the ASCII text `RETRO-NETPLAY-DISCOVER/1` by UDP to port N+2 (7779 by default), to `255.255.255.255` and the network's own broadcast address. A matchmaker answers to the sender with `{"app":"retro-netplay","v":1,"port":N,"web":N+1,"name":"<computer name>"}`. At most 20 answers per address per 10 seconds. Links made on the computer that runs the matchmaker use that computer's home-network address (or the public address set for links), never 127.0.0.1. Clients treat 127.0.0.1 / localhost in a link or setting as "not set".

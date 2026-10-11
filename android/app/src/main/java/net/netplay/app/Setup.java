@@ -107,11 +107,34 @@ final class Setup {
         box.addView(name, fill(6));
         box.addView(para("Players find each other through a matchmaker. A friend usually runs it and gives you its address."), fill(16));
         box.addView(Ink.caption(act, "Matchmaker address"), fill(14));
-        final EditText host = Ink.field(act, "for example 203.0.113.5", prefs.getString("server_host", ""));
+        final EditText host = Ink.field(act, "for example 192.168.1.23", prefs.getString("server_host", ""));
         box.addView(host, fill(6));
         box.addView(Ink.caption(act, "Port"), fill(12));
         final EditText port = Ink.field(act, "7777", String.valueOf(prefs.getInt("server_port", 7777)));
         box.addView(port, fill(6));
+        final TextView found = Ink.text(act, "", 13.5f, false, Ink.INK);
+        InkButton find = new InkButton(act, Icons.SEARCH, "Find on my network", true);
+        Runnable look = () -> {
+            found.setText("Looking on your home network...");
+            Hub.get(act).findOnNetwork(list -> {
+                if (list.isEmpty()) {
+                    found.setText("No matchmaker found on this Wi-Fi. On the computer, open Retro-Netplay with \"Run the matchmaker "
+                            + "on this PC\" on, and make sure both are on the same Wi-Fi. Or type the address a friend gave you.");
+                    return;
+                }
+                net.netplay.core.Lan.Found f = list.get(0);
+                host.setText(f.host);
+                port.setText(String.valueOf(f.port));
+                found.setText("Found " + f + "." + (list.size() > 1 ? " (" + (list.size() - 1) + " more on this network.)" : ""));
+            });
+        };
+        find.onPress(look);
+        box.addView(find, fill(12));
+        box.addView(found, fill(8));
+        if (net.netplay.core.Lan.isLoopback(host.getText().toString())) {
+            host.setText("");
+            look.run();          // nothing set yet: look straight away
+        }
         pendingSave = () -> {
             int p = 7777;
             try { p = Integer.parseInt(port.getText().toString().trim()); } catch (NumberFormatException ignored) { }

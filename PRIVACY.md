@@ -31,6 +31,9 @@ Your chosen name, your app label and game name, and for emulator netplay your IP
 - To connect through home routers, WebRTC asks a STUN server for your public address. By default this is Google's public STUN server (`stun.l.google.com`), which therefore sees your IP address. To avoid third parties, run the matchmaker with the environment variable `NETPLAY_ICE_JSON='[]'` (works on a local network only) or point it at your own STUN/TURN server (see PROTOCOL.md).
 - A TURN relay, if you add one, can see how much data passes through but not its content.
 
+## Finding a matchmaker on your home network
+"Find on my network" (and the automatic search when no matchmaker is set) sends one small broadcast on your Wi-Fi or home network asking whether a Retro-Netplay matchmaker is there. A matchmaker answers with its port numbers and the computer's name. Nothing leaves your home network for this. A computer running the matchmaker answers these questions from any device on the same network (UDP port 7779).
+
 ## Game folders
 When you pick game folders, the app reads the file names in them, and the first few kilobytes of .iso and .bin files to tell which console they are for. This happens on your device only. The list of games stays on your device; only the name of the game you search for is sent to the matchmaker.
 

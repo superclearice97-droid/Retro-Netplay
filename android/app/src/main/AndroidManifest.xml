@@ -53,6 +53,9 @@
             </intent-filter>
         </activity>
 
+        <activity android:name=".FriendsActivity" android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation" />
+
         <service android:name=".QueueService" android:exported="false"
             android:foregroundServiceType="dataSync" />
 

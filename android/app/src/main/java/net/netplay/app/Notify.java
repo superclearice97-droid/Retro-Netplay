@@ -99,6 +99,32 @@ final class Notify {
         } catch (RuntimeException ignored) { }
     }
 
+    static int requestNotifId(String id) { return 70000 + (id.hashCode() & 0xFFFF); }
+
+    /** A friend request, with Accept / Decline right on the notification. */
+    static void request(Context c, String id, String title, String text) {
+        try {
+            NotificationManager nm = (NotificationManager) c.getSystemService(Context.NOTIFICATION_SERVICE);
+            int n = requestNotifId(id);
+            Notification.Builder b = builder(c, CH_CALL, true).setContentTitle(title).setContentText(text)
+                    .setStyle(new Notification.BigTextStyle().bigText(text)).setAutoCancel(true)
+                    .setContentIntent(PendingIntent.getActivity(c, n, new Intent(c, FriendsActivity.class), flags()));
+            b.addAction(new Notification.Action.Builder(null, "Accept", requestAction(c, ActionReceiver.REQ_YES, id, n)).build());
+            b.addAction(new Notification.Action.Builder(null, "Decline", requestAction(c, ActionReceiver.REQ_NO, id, n + 1)).build());
+            nm.notify(n, b.build());
+        } catch (RuntimeException ignored) { }
+    }
+
+    static PendingIntent requestAction(Context c, String what, String id, int req) {
+        Intent i = new Intent(c, ActionReceiver.class).setAction(what).putExtra("friend", id);
+        return PendingIntent.getBroadcast(c, req, i, flags());
+    }
+
+    static void cancelRequest(Context c, String id) {
+        try { ((NotificationManager) c.getSystemService(Context.NOTIFICATION_SERVICE)).cancel(requestNotifId(id)); }
+        catch (RuntimeException ignored) { }
+    }
+
     static int callNotifId(String callId) { return 100 + (callId.hashCode() & 0xFFFF); }
 
     static void call(Context c, Hub.Call call, String text) {

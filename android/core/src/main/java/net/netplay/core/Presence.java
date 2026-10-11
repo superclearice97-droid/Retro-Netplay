@@ -36,6 +36,8 @@ public final class Presence {
         /** Someone accepted your request. */
         default void onFriendAccepted(String fromId, String name, String code) { }
         default void onSoftError(String msg) { }
+        /** The matchmaker took your friend request (it's delivered now, or when they next connect). */
+        default void onRequestSent(String toId) { }
     }
 
     private static final SecureRandom RNG = new SecureRandom();
@@ -143,6 +145,7 @@ public final class Presence {
                             listener.onFriendAccepted(str(m.get("from")), Friends.cleanName(str(m.get("name"))), Friends.pretty(str(m.get("code"))));
                         break;
                     case "error_soft": listener.onSoftError(str(m.get("msg"))); break;
+                    case "request_sent": listener.onRequestSent(str(m.get("to"))); break;
                     case "friends": listener.onOnline(listOfMaps(m.get("online"))); break;
                     case "call":
                         if (Friends.ID.matcher(str(m.get("from"))).matches())

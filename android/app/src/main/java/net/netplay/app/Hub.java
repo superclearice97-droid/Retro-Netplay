@@ -85,6 +85,10 @@ final class Hub {
     // friends
     private Presence presence;
     volatile boolean presenceUp;
+    /** Why the friends connection is down, in plain words ("" while connecting or connected). */
+    volatile String presenceProblem = "";
+    /** Accepts made while not connected (e.g. from a notification button), sent once connected. */
+    private final java.util.Set<String> pendingAccepts = java.util.Collections.synchronizedSet(new java.util.LinkedHashSet<>());
     final Map<String, Map<String, Object>> online = new LinkedHashMap<>();
     final List<Call> calls = new ArrayList<>();
     private String outgoingCall = "", outgoingTo = "";
@@ -195,7 +199,19 @@ final class Hub {
         return theyAsked ? "You and " + f.name + " are friends now." : "Friend request sent to " + f.name + ". You'll be friends when they accept.";
     }
 
+    static String plainProblem(String why) {
+        String w = why == null ? "" : why.toLowerCase(java.util.Locale.ROOT);
+        if (w.isEmpty()) return "";
+        if (w.contains("refused")) return "The computer answered, but nothing is listening: the matchmaker isn't running there.";
+        if (w.contains("timed out") || w.contains("timeout")) return "No answer from that address (wrong address, different Wi-Fi, or a firewall).";
+        if (w.contains("unreachable") || w.contains("no route")) return "That address can't be reached from this network.";
+        if (w.contains("unknown host") || w.contains("unable to resolve")) return "That address doesn't exist.";
+        return "Connection problem (" + why + ").";
+    }
+
     void answerRequest(String id, boolean ok) {
+        Notify.cancelRequest(app, id);
+        HotkeyService.closeCard("req:" + id);
         List<Map<String, Object>> r = requests();
         Map<String, Object> req = null;
         for (Map<String, Object> x : r) if (id.equals(x.get("id"))) req = x;
@@ -210,8 +226,7 @@ final class Hub {
                 l.add(f);
                 saveFriends(l);
             }
-            Presence p = presence;
-            if (p != null) p.accept(id);
+            pendingAccepts.add(id);              // sent as soon as the (re)connection is up
             restartPresence();
             say("You and " + Friends.cleanName(String.valueOf(req.get("name"))) + " are friends now.", false);
         }
@@ -239,8 +254,11 @@ final class Hub {
         if (r.size() > 50) r.remove(0);
         saveRequests(r);
         buzz(150);
-        Notify.info(app, name + " wants to be friends", "Open Friends in Retro-Netplay to accept." + (code.isEmpty() ? "" : " Their code: " + code));
+        Notify.request(app, id, name + " wants to be friends", (code.isEmpty() ? "" : "Code " + code + ". ") + "Accept to see each other online and join each other's games.");
+        HotkeyService.showCard(app, "Friend request", name + (code.isEmpty() ? "" : " (" + code + ")") + " wants to be friends.",
+                () -> answerRequest(id, true), () -> { }, "req:" + id);
         say(name + " wants to be friends. Open Friends to accept.", false);
+        changed();
     }
 
     /** Returns false if it's you or already a friend. */
@@ -346,11 +364,24 @@ final class Hub {
                 if (!code.isEmpty()) f.code = code;
                 saveFriends(l);
                 say(f.name + " accepted your friend request.", false);
+                buzz(150);
+                Notify.info(app, f.name + " accepted your friend request", "You're friends now. When they're playing, Join appears next to their name.");
                 restartPresence();
             }
             @Override public void onSoftError(String msg) { say("Friends: " + msg, false); }
+            @Override public void onRequestSent(String to) {
+                Friends.Friend f = Friends.find(friends(), to);
+                say("Friend request sent" + (f == null ? "" : " to " + f.name) + ". They'll get a notification to accept.", false);
+            }
             @Override public void onConnected(boolean c, String why) {
                 presenceUp = c;
+                presenceProblem = c ? "" : plainProblem(why);
+                if (c) {
+                    Presence pp = presence;
+                    List<String> todo;
+                    synchronized (pendingAccepts) { todo = new ArrayList<>(pendingAccepts); pendingAccepts.clear(); }
+                    if (pp != null) for (String id : todo) pp.accept(id);
+                }
                 if (!c) synchronized (online) { online.clear(); }
                 changed();
             }

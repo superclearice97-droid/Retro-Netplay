@@ -71,6 +71,7 @@ public class MainActivity extends Activity implements Hub.Ui {
         }
         askForNotifications();
         handleLink(getIntent());
+        if ("address".equals(getIntent().getStringExtra("open"))) hero.post(this::openAddress);
     }
 
     @Override protected void onStart() {
@@ -106,6 +107,7 @@ public class MainActivity extends Activity implements Hub.Ui {
         super.onNewIntent(intent);
         setIntent(intent);
         handleLink(intent);
+        if ("address".equals(intent.getStringExtra("open"))) openAddress();
     }
 
     @Override
@@ -260,7 +262,7 @@ public class MainActivity extends Activity implements Hub.Ui {
         body.addView(Ink.caption(this, "Friends"), fill(22));
         friendsButton = new InkButton(this, Icons.SIGNAL, "Friends", true);
         friendsButton.setMinimumHeight(dp(60));
-        friendsButton.onPress(this::openFriends);
+        friendsButton.onPress(() -> FriendsActivity.open(this));
         body.addView(friendsButton, fill(8));
 
         LinearLayout bottom = new LinearLayout(this);

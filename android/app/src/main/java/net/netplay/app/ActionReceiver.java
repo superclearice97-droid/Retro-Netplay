@@ -11,6 +11,8 @@ public class ActionReceiver extends BroadcastReceiver {
     static final String WATCH = "net.netplay.app.WATCH";
     static final String ACCEPT = "net.netplay.app.ACCEPT";
     static final String DECLINE = "net.netplay.app.DECLINE";
+    static final String REQ_YES = "net.netplay.app.REQ_YES";
+    static final String REQ_NO = "net.netplay.app.REQ_NO";
 
     @Override public void onReceive(Context c, Intent i) {
         Hub h = Hub.get(c);
@@ -22,6 +24,8 @@ public class ActionReceiver extends BroadcastReceiver {
             case WATCH: h.watchToggle(); break;
             case ACCEPT: if (call != null) h.answer(call, true); break;
             case DECLINE: if (call != null) h.answer(call, false); break;
+            case REQ_YES: if (i.getStringExtra("friend") != null) h.answerRequest(i.getStringExtra("friend"), true); break;
+            case REQ_NO: if (i.getStringExtra("friend") != null) h.answerRequest(i.getStringExtra("friend"), false); break;
             default: break;
         }
     }

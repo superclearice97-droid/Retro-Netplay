@@ -1688,6 +1688,10 @@ def run_gui():
                              ("Later", lambda: None, False)], timeout=45, key="req:" + d["id"])
                 status.config(text=f"{d['name']} ({d['code']}) wants to be friends.")
             save_cfg(cfg)
+        elif ev == "request_sent":
+            f = social.find(cfg, d)
+            toasts.show("Request sent", f"Friend request sent to {f['name'] if f else 'your friend'}. "
+                        "They'll get a notification to accept.", [("OK", lambda: None, False)], timeout=6, key="sent:" + str(d))
         elif ev == "friend_accept":
             f = social.find(cfg, d["id"])
             if f:
@@ -1695,6 +1699,8 @@ def run_gui():
                 f["code"] = d["code"] or f.get("code", "")
                 save_cfg(cfg)
                 status.config(text=f"{d['name']} accepted your friend request.")
+                toasts.show("Friends now", f"{d['name']} accepted your friend request. When they're playing, "
+                            "double-click them in Friends to join.", [("OK", lambda: None, False)], timeout=10, key="acc:" + d["id"])
                 restart_presence()
         elif ev == "soft_error":
             status.config(text=f"Friends: {d}")

@@ -974,7 +974,7 @@ def run_gui():
     ttk.Button(bottom, text="Settings...", command=lambda: open_settings()).pack(side="left")
     ttk.Button(bottom, text="Controllers...", command=lambda: open_controllers()).pack(side="left", padx=(6, 0))
     ttk.Button(bottom, text="Set controller hotkey", command=lambda: set_hotkey()).pack(side="left", padx=(6, 0))
-    hot_lbl = ttk.Label(hot_row, text="", foreground=ink.SOFT)
+    hot_lbl = ttk.Label(hot_row, text="", foreground=ink.SOFT, wraplength=530, justify="left")
     hot_lbl.pack(side="left")
 
     def current():

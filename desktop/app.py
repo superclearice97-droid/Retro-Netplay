@@ -874,8 +874,10 @@ def run_gui():
 
     root = tk.Tk(className="Retro-Netplay")
     root.title("Retro-Netplay")
-    root.geometry("580x940")
-    root.minsize(560, 820)
+    # fit small laptop screens too (the window scrolls nothing, so keep it within the screen)
+    tall = max(680, min(900, root.winfo_screenheight() - 90))
+    root.geometry(f"580x{tall}")
+    root.minsize(560, min(tall, 760))
     fam = ink.apply_theme(root)
     try:
         root.iconphoto(True, tk.PhotoImage(file=str(HERE / "icon-256.png")))
@@ -889,7 +891,7 @@ def run_gui():
         start_local_server(int(cfg["server_port"]), lambda t: msgs.put(("idle", t, None)))
 
     # ---- hero: ink controller with four live heat squares (emulator, game, online, controllers)
-    HW, HH = 580, 250
+    HW, HH = 580, (250 if tall >= 860 else 180)
     hero = tk.Canvas(root, width=HW, height=HH, bg=ink.PAPER, highlightthickness=0)
     hero.pack(fill="x")
     ink.draw_hero(hero, HW, HH, fam)
@@ -931,7 +933,7 @@ def run_gui():
     ttk.Button(row, text="Game folders...", command=lambda: open_wizard(only=0)).pack(side="right", padx=(0, 6))
     lb_row = ttk.Frame(frame)
     lb_row.pack(fill="x", pady=(6, 10))
-    games_lb = tk.Listbox(lb_row, height=6, font=(fam, 11), activestyle="none", exportselection=False,
+    games_lb = tk.Listbox(lb_row, height=(6 if tall >= 860 else 4), font=(fam, 11), activestyle="none", exportselection=False,
                           bg="#efeeea", fg=ink.INK, relief="solid", borderwidth=1, highlightthickness=2,
                           highlightcolor=ink.INK, highlightbackground=ink.PAPER,
                           selectbackground=ink.INK, selectforeground=ink.PAPER)
@@ -1125,7 +1127,7 @@ def run_gui():
         ttk.Label(body, text="Online", font=("", 10, "bold")).pack(anchor="w", pady=(10, 0))
         be = ttk.Frame(body)
         be.pack(fill="x", pady=3)
-        ttk.Label(be, text="Streaming (PS2/PS3)", width=18).pack(side="left")
+        ttk.Label(be, text="Streaming (PS2/PS3)", width=22).pack(side="left")
         be_var = tk.StringVar(value="Built-in (recommended)" if cfg.get("stream_backend", "own") == "own" else "Parsec")
         ttk.Combobox(be, textvariable=be_var, values=["Built-in (recommended)", "Parsec"], state="readonly", width=31).pack(side="left")
         field("Your Parsec peer ID", "parsec_peer_id", cfg)

@@ -97,7 +97,7 @@ def draw_hero(canvas, w, h, family):
     body = ICONS["pad"][0]
     ang = math.radians(-9)
     ca, sa = math.cos(ang), math.sin(ang)
-    s = w * 0.0345
+    s = min(w * 0.0345, h * 0.08)   # also fits a shorter picture on small screens
 
     def tf(p):
         x, y = (p[0] - 12) * s, (p[1] - 12) * s

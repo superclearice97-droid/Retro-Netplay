@@ -12,8 +12,10 @@ This project contains no games, BIOS files or console firmware. You must own the
 ## Software this project uses (not included in the package unless noted)
 | Component | How it is used | License (check each project for the current terms) |
 |---|---|---|
-| Python and tkinter | runs the desktop app | Python Software Foundation License |
-| pygame | installed on first start by `start.sh` for controller input | LGPL 2.1 |
+| Python and tkinter (Tcl/Tk) | runs the desktop app; **included** in the Linux download | Python Software Foundation License; Tcl/Tk BSD-style licence |
+| pygame and SDL2 | controller input; **included** in the Linux download (installed by `start.sh` when run from source) | pygame LGPL 2.1 (source: https://github.com/pygame/pygame), SDL2 zlib licence |
+| PyInstaller bootloader | packs the Linux download | GPL 2.0 with an exception that allows packing any program |
+| AppImage runtime (appimagetool) | makes the single-file Linux download | MIT |
 | GStreamer and plugins, PyGObject | used from the host's own system for streaming | LGPL (some plugin sets, such as x264 in plugins-ugly, carry other licenses: check your distro's packages) |
 | Android SDK, Gradle, Android Gradle Plugin | build the Android app (GitHub Actions or your machine) | Apache 2.0 (SDK components have their own terms) |
 | Chromium, Playwright | used only by the automated tests in `desktop/tests/` | BSD-style / Apache 2.0 |
@@ -22,6 +24,8 @@ This project contains no games, BIOS files or console firmware. You must own the
 | Google STUN server | optional default for connecting through routers (see PRIVACY.md) | a public service, no software included |
 
 The Android app and desktop app only launch the emulators above as separate programs; no emulator code is part of this package.
+
+In the Linux download, pygame/SDL2 and the other libraries are separate shared library files inside the app's `_internal` folder, so you can replace them with your own builds as the LGPL allows. The source code of Retro-Netplay itself, for every download, is this repository at the commit named in the release notes.
 
 This notice is a good-faith summary, not legal advice. Have a lawyer review it before commercial distribution.
 

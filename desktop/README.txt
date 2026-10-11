@@ -16,20 +16,23 @@ SETUP (about 5 minutes)
                     To HOST a stream from Linux run  python3 stream_host.py --doctor  and follow it.
                     (Parsec still works: pick it in Settings > Streaming.)
      You need your own game files.
-  2. Windows: double-click "Start (Windows).bat" (or the .exe, if someone gave you one).
-       It needs Python from python.org first (tick "Add python.exe to PATH").
-     Linux:   run  sh install-linux.sh  once, then open "Netplay Matchmaker" from your app menu.
-       (Or run  sh start.sh .) If it says tkinter is missing, it tells you the one command to run.
-       RetroArch, Dolphin, PCSX2 or RPCS3 installed as a Flatpak are found automatically.
-  3. The Settings window opens. Emulators are found automatically; fix any that are not.
-     Paste your Parsec peer ID only if you chose Parsec for Streaming.
-  4. Click "Add game...", pick your game file, and give it a name.
-     YOUR OPPONENT MUST ADD THE SAME GAME WITH THE EXACT SAME NAME.
+  2. Linux (easiest): download Retro-Netplay-x86_64.AppImage from the project's Releases page and
+       double-click it. If it doesn't open: right-click it > Properties > Permissions > "Allow executing
+       file as program", then double-click again. Or download the .zip, unzip it, open the folder and
+       double-click "Retro-Netplay". Nothing else to install: Python is inside.
+     Linux from source: run  sh install-linux.sh  once (or  sh start.sh ).
+     Windows: double-click "Start (Windows).bat". It needs Python from python.org first
+       (tick "Add python.exe to PATH"). A one-click Windows download is coming next.
+     RetroArch, Dolphin, PCSX2 or RPCS3 installed as a Flatpak are found automatically.
+  3. The first time, a short setup opens: pick your game FOLDERS (every game inside is found and
+     named for you, so it matches the other player's name), check your emulators, the online
+     settings, and your controllers. It can also add Retro-Netplay to your app menu.
+  4. Paste your Parsec peer ID in Settings only if you chose Parsec for Streaming.
   5. Decide who runs the matchmaker. ONE of you opens Settings and ticks
      "Run the matchmaker on this PC". The other types that PC's address in
      "Matchmaker address". Over the internet, the host must allow port 7777 (TCP)
      through the router/firewall. The default 127.0.0.1 only works on one PC.
-  6. Both of you click "Play". RetroArch games start right away and you're queued; other games
+  6. Double-click your game (or select it and click "Play"). RetroArch games start right away and you're queued; other games
      start when you're matched. Hold Start + Select for 3 seconds to join or leave the queue.
 
 CONTROLLERS (2 to 4 players)

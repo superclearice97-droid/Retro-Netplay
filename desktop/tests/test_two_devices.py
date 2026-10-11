@@ -102,6 +102,76 @@ check("phone connects", res.get("up") == "up", res.get("up"))
 check("phone finds the desktop by its short code", res.get("lookup") == "lookup true Desk", res.get("lookup"))
 check("desktop accepted: phone is told", res.get("accepted") == "accepted Desk", res.get("accepted"))
 check("phone reads the desktop's invite link with a real address", res.get("invite", "").startswith(f"{host}:{P} loop=false"), res.get("invite"))
-dp.stop()
+
+# the phone asks to join the desktop, which is playing (and can stream); the desktop accepts on its card
+import json as _j
+dp2_events = []
+dp2 = social.Presence("127.0.0.1", P, dsk_secret, "Desk", [server.player_id(phone_secret)], lambda ev, d: dp2_events.append((ev, d)))
+dp.stop(); time.sleep(0.3); dp2.start(); time.sleep(0.6)
+dp2.status("playing", "ps2:urban-reign", {"native": False, "stream": True})
+prog2 = f"""
+import net.netplay.core.*; import java.util.*; import java.util.concurrent.*;
+public class TJ {{
+  public static void main(String[] a) throws Exception {{
+    final BlockingQueue<String> ev = new LinkedBlockingQueue<>();
+    final String[] code = {{""}};
+    final Map<String, Object> seen = new HashMap<>();
+    Presence p = new Presence("127.0.0.1", {P}, "{phone_secret}", "Odin", Arrays.asList("{social.id_of(dsk_secret)}"), new Presence.Listener() {{
+      public void onConnected(boolean c, String w) {{ if (c) ev.add("up"); }}
+      public void onOnline(List<Map<String, Object>> o) {{ if (!o.isEmpty()) {{ seen.putAll(o.get(0)); ev.add("online " + o.get(0).get("state") + " " + o.get(0).get("can")); }} }}
+      public void onCall(String a1, String b, String c, String d, String e) {{ }}
+      public void onStart(String id, String c, String g, String k, String as, String wid, String wn) {{ code[0] = c; ev.add("start " + as + " " + wn); }}
+      public void onDeclined(String a1, String b) {{ ev.add("declined"); }}
+      public void onCallFailed(String a1, String b) {{ ev.add("failed " + b); }}
+      public void onCallCancelled(String a1, String b) {{ }}
+    }});
+    p.start();
+    String l; do {{ l = ev.poll(6, TimeUnit.SECONDS); }} while (l != null && !l.startsWith("online playing"));
+    System.out.println("seen=" + l);
+    p.call("{social.id_of(dsk_secret)}", "ps2:urban-reign", "play");
+    do {{ l = ev.poll(8, TimeUnit.SECONDS); }} while (l != null && !l.startsWith("start"));
+    System.out.println("start=" + l);
+    Map<String, Boolean> ch = new HashMap<>(); ch.put("stream", false);
+    Map<String, Object> info = new HashMap<>(); info.put("stream", Plan.streamInfo(false));
+    MatchClient.Match m = new MatchClient().search("127.0.0.1", {P}, "ps2:urban-reign", Arrays.asList("stream"), info, ch, "android",
+        code[0], true, Friends.searchFields("{phone_secret}", "Odin", new ArrayList<Friends.Friend>(), false, 15, false));
+    System.out.println("match=" + m.lane + " " + m.role + " " + (m.play.startsWith("/play?t=")));
+    p.stop();
+  }}
+}}"""
+with tempfile.TemporaryDirectory() as out:
+    open(os.path.join(out, "TJ.java"), "w").write(prog2)
+    subprocess.run(["javac", "-d", out, "-sourcepath", root, os.path.join(out, "TJ.java")], check=True, stderr=subprocess.DEVNULL)
+    proc = subprocess.Popen(["java", "-cp", out, "TJ"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    end = time.time() + 15
+    call = None
+    while time.time() < end and not call:
+        call = next((d for ev, d in dp2_events if ev == "call"), None); time.sleep(0.05)
+    check("desktop gets the phone's join request", call and call["name"] == "Odin" and call["kind"] == "play", call)
+    if call:
+        dp2.answer(call["from"], call["call"], True)            # the host taps Accept on the corner card
+    st = None
+    while time.time() < end and not st:
+        st = next((d for ev, d in dp2_events if ev == "start"), None); time.sleep(0.05)
+    msg = None
+    if st:   # the desktop (host, already playing) searches in the call's room, able to host a stream
+        c = socket.create_connection(("127.0.0.1", P), 5)
+        c.sendall((_j.dumps({"v": 1, "op": "search", "game": "ps2:urban-reign", "lanes": ["stream"], "invite": st["code"],
+                              "invite_only": True, "can_host": {"stream": True}, "info": {"stream": {"backend": "own"}},
+                              "client": "desktop-linux", **social.search_fields({"secret": dsk_secret, "my_name": "Desk",
+                              "friends": [{"id": server.player_id(phone_secret)}]}, prefer_host=True)}) + "\n").encode())
+        f = c.makefile("r")
+        while True:
+            line = f.readline()
+            if not line or _j.loads(line).get("op") != "ping":
+                msg = _j.loads(line) if line else None; break
+        c.close()
+    so, _ = proc.communicate(timeout=40)
+r2 = dict(l.split("=", 1) for l in so.strip().splitlines() if "=" in l)
+check("phone sees the desktop is playing and can stream", "online playing" in r2.get("seen", "") and "stream=true" in r2.get("seen", ""), r2.get("seen"))
+check("after Accept both start", r2.get("start") == "start caller Desk", r2.get("start"))
+check("desktop hosts the stream", msg and msg.get("role") == "host" and msg.get("lane") == "stream", msg)
+check("phone gets the stream page to open", r2.get("match") == "stream guest true", r2.get("match"))
+dp2.stop()
 print("ALL PASSED" if not fails else f"{len(fails)} FAILED")
 sys.exit(1 if fails else 0)

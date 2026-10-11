@@ -194,9 +194,12 @@ class Presence(threading.Thread):
         except OSError:
             return False
 
-    def status(self, state, game=""):
-        self.state, self.game = state, game or ""
-        self.send({"op": "status", "state": state, "game": self.game})
+    def status(self, state, game="", can=None):
+        self.state, self.game, self.can = state, game or "", can
+        m = {"op": "status", "state": state, "game": self.game}
+        if can is not None:
+            m["can"] = can
+        self.send(m)
 
     def call(self, fid, game, kind):
         cid = secrets.token_hex(6)
@@ -236,7 +239,7 @@ class Presence(threading.Thread):
             self.send({"v": 1, "op": "hello", "me": self.secret, "name": self.name, "friends": self.friend_ids,
                        "hidden": self.hidden})
             if self.state != "idle":
-                self.status(self.state, self.game)
+                self.status(self.state, self.game, getattr(self, "can", None))
             buf = b""
             while not self.stopped:
                 try:

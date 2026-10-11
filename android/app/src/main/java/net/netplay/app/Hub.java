@@ -386,6 +386,7 @@ final class Hub {
             @Override public void onCallCancelled(String id, String from) {
                 synchronized (calls) { calls.removeIf(c -> c.id.equals(id)); }
                 Notify.cancelCall(app, id);
+                HotkeyService.closeCard(id);
                 changed();
             }
         }, !prefs.getBoolean("show_online", true));
@@ -403,12 +404,50 @@ final class Hub {
     private void sendStatus() {
         Presence p = presence;
         if (p == null) return;
-        if (state == State.QUEUE) p.status("queue", queueKey);
-        else if (!playingKey.isEmpty()) p.status("playing", playingKey);
+        if (state == State.QUEUE) p.status("queue", queueKey, abilities(queueKey));
+        else if (!playingKey.isEmpty()) p.status("playing", playingKey, abilities(playingKey));
         else p.status("idle", "");
     }
 
     Map<String, Object> onlineInfo(String id) { synchronized (online) { return online.get(id); } }
+
+    /** What this phone can host for a game: emulator netplay if RetroArch, the file and the router allow; never a stream. */
+    Map<String, Object> abilities(String key) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        Map<String, Object> g = gameByKey(key);
+        boolean nat = g != null && sys(g).hasNative() && retroArchPackage() != null && !((String) g.get("rom")).isEmpty() && canHostNative();
+        m.put("native", nat);
+        m.put("stream", false);
+        return m;
+    }
+
+    /** "" if joining a friend hosting gameKey (with abilities can) should work from this phone, else why not. */
+    String joinProblem(Map<String, Object> can, String gameKey, String friendName) {
+        if (can == null || can.isEmpty()) return "";                       // an older app that doesn't say: just try
+        Games.Sys s = Games.SYSTEMS.get(gameKey.contains(":") ? gameKey.substring(0, gameKey.indexOf(':')) : "");
+        if (s == null) return "That game's system isn't supported here.";
+        if (Boolean.TRUE.equals(can.get("stream"))) return "";               // the phone joins the stream
+        Map<String, Object> g = gameByKey(gameKey);
+        boolean iCan = g != null && s.hasNative() && retroArchPackage() != null && !((String) g.get("rom")).isEmpty();
+        if (Boolean.TRUE.equals(can.get("native")) && iCan) return "";
+        if (!s.hasNative()) return friendName + "'s computer can't stream " + gameTitle(gameKey) + " yet. On their computer: Settings > "
+                + "Streaming check shows what to install.";
+        if (!iCan) return "To join " + gameTitle(gameKey) + " you need RetroArch and the game on this phone, or " + friendName
+                + "'s computer needs the streaming tools (Settings > Streaming check).";
+        return friendName + " can't host right now (their router port is closed and they can't stream). Ask them to try "
+                + "joining you instead.";
+    }
+
+    /** A game you don't have, to join a friend's stream of it (nothing to run on this phone). */
+    Map<String, Object> streamOnly(String key) {
+        String sysId = key.contains(":") ? key.substring(0, key.indexOf(':')) : "";
+        if (!Games.SYSTEMS.containsKey(sysId)) return null;
+        Map<String, Object> g = new LinkedHashMap<>();
+        g.put("name", gameTitle(key));
+        g.put("system", sysId);
+        g.put("rom", "");
+        return g;
+    }
 
     // ================================================================ games
     @SuppressWarnings("unchecked")
@@ -716,12 +755,22 @@ final class Hub {
     String callFriend(Friends.Friend f, String gameKey, String kind) {
         Presence p = presence;
         if (p == null || !presenceUp) return "You're not connected to the matchmaker. Check Settings.";
-        if (gameByKey(gameKey) == null) return "You need " + gameTitle(gameKey) + " in your games first.";
+        Map<String, Object> on = onlineInfo(f.id);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> can = on != null && on.get("can") instanceof Map ? (Map<String, Object>) on.get("can") : null;
+        boolean theyHost = on != null && gameKey.equals(on.get("game"));
+        if (theyHost && "play".equals(kind)) {
+            String problem = joinProblem(can, gameKey, f.name);
+            if (!problem.isEmpty()) return problem;
+        }
+        boolean viaStream = theyHost && can != null && Boolean.TRUE.equals(can.get("stream"));
+        if (gameByKey(gameKey) == null && !viaStream) return "You need " + gameTitle(gameKey) + " in your games first.";
         String id = p.call(f.id, gameKey, kind);
         if (id.isEmpty()) return "Couldn't reach the matchmaker.";
         outgoingCall = id;
         outgoingTo = f.id;
-        say((kind.equals("watch") ? "Asking " + f.name + " if you can watch..." : "Asking " + f.name + " to play " + gameTitle(gameKey) + "..."), false);
+        say((kind.equals("watch") ? "Asking " + f.name + " if you can watch..."
+                : "Asking " + f.name + " to let you into " + gameTitle(gameKey) + "... (they'll see a card to accept)"), false);
         return "";
     }
 
@@ -745,6 +794,8 @@ final class Hub {
         synchronized (calls) { calls.add(c); }
         buzz(250);
         Notify.call(app, c, c.name + " " + c.what(this));
+        HotkeyService.showCard(app, ("watch".equals(c.kind) ? "Watch request" : "Join request"), c.name + " " + c.what(this),
+                () -> answer(c.id, true), () -> answer(c.id, false), c.id);
         RetroCmd.showMsg("Retro-Netplay: " + c.name + " " + c.what(this) + ". Answer on your phone's notification.");
         main.post(() -> { for (Ui u : uiList()) u.incomingCall(c); });
         changed();
@@ -757,6 +808,7 @@ final class Hub {
             if (c != null) calls.remove(c);
         }
         Notify.cancelCall(app, callId);
+        HotkeyService.closeCard(callId);
         Presence p = presence;
         if (c != null && p != null) p.answer(c.from, c.id, ok);
         changed();
@@ -764,6 +816,7 @@ final class Hub {
 
     private void started(String code, String game, String kind, String as, String withName) {
         Map<String, Object> g = gameByKey(game);
+        if (g == null && "caller".equals(as)) g = streamOnly(game);    // joining their stream: nothing to run here
         if (g == null) {
             say("You don't have " + gameTitle(game) + " in your games, so " + withName + " can't join.", false);
             return;
@@ -774,7 +827,7 @@ final class Hub {
             queue(g, inGame, code, withName, kind, true);
         } else {
             // you called: start the game first if you're going to play it, then meet them in the private room
-            if (sys(g).hasNative() && !playingKey.equals(game)) {   // netplay needs the game running, even to watch
+            if (sys(g).hasNative() && !((String) g.get("rom")).isEmpty() && !playingKey.equals(game)) {   // netplay needs the game running
                 String problem = boot(app, g);
                 if (!problem.isEmpty()) { say(problem, false); return; }
             }

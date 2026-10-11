@@ -43,6 +43,8 @@ grep -q "Retro-Netplay" "$H2/.local/share/applications/retro-netplay.desktop" 2>
 shot friends 12 HOME="$H2" NETPLAY_SHOW=friends
 shot settings 12 HOME="$H2" NETPLAY_SHOW=settings
 shot controllers 12 HOME="$H2" NETPLAY_SHOW=controllers
+shot address 12 HOME="$H2" NETPLAY_SHOW=address
+shot card 12 HOME="$H2" NETPLAY_SHOW=card
 
 # 3) the bundled matchmaker works from the packaged app's Python? (run_server path)
 cat "$OUT"/*.log | head -50

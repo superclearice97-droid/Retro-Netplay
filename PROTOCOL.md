@@ -102,3 +102,9 @@ The server keeps the online list and pending calls in memory only, and forgets t
 
 ## Finding a matchmaker on a home network
 A client broadcasts the ASCII text `RETRO-NETPLAY-DISCOVER/1` by UDP to port N+2 (7779 by default), to `255.255.255.255` and the network's own broadcast address. A matchmaker answers to the sender with `{"app":"retro-netplay","v":1,"port":N,"web":N+1,"name":"<computer name>"}`. At most 20 answers per address per 10 seconds. Links made on the computer that runs the matchmaker use that computer's home-network address (or the public address set for links), never 127.0.0.1. Clients treat 127.0.0.1 / localhost in a link or setting as "not set".
+
+## Joining a friend, and "whoami"
+- `status` may carry `"can":{"native":bool,"stream":bool}`: what that player can host right now. It is passed on in friends' online lists so their app can tell whether joining will work before asking.
+- A join is a `call` with `kind:"play"`; the host's app shows an approval card (or accepts on its own with the "join anytime" privilege).
+- In a private room (invite or call), if the two players can never be paired (no shared lane, or nobody can host), the server answers both with `{"op":"error","msg":"...","why":"no_common_lane"}` instead of letting them wait.
+- `{"v":1,"op":"whoami"}` as the only line: the server answers `{"op":"whoami","v":1,"ip":"<the address it sees>"}` and closes. Apps use it to show your internet address.

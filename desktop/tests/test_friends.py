@@ -10,7 +10,7 @@ def check(name, ok, info=""):
 def free_port():
     s = socket.socket(); s.bind(("127.0.0.1", 0)); p = s.getsockname()[1]; s.close(); return p
 
-SECRETS = {n: hashlib.sha256(n.encode()).hexdigest()[:32] for n in "ABCDSTUVWXYZ"}
+SECRETS = {n: hashlib.sha256(n.encode()).hexdigest()[:32] for n in "ABCDHJSTUVWXYZ"}
 def pid(n): return hashlib.sha256(SECRETS[n].encode()).hexdigest()[:24]
 
 port = free_port()
@@ -200,6 +200,23 @@ try:
     q.send({"op": "lookup", "code": code_w})
     check("codes survive a matchmaker restart", (q.wait("lookup") or {}).get("found") is True)
     q.close()
+
+    # 8c. joining a friend: their abilities are visible; a private room that can't work says so at once
+    ph, _ = hello2("H", ["J"]); pj, _ = hello2("J", ["H"])
+    ph.send({"op": "status", "state": "playing", "game": "gamecube:f-zero-gx", "can": {"native": False, "stream": False}})
+    st = pj.wait("friends", pred=lambda m: m["online"] and m["online"][0].get("state") == "playing")
+    check("friends see what the host can host", st and st["online"][0]["can"] == {"native": False, "stream": False}, st)
+    host = search("gamecube:f-zero-gx", "H", friends=["J"], extra={"invite": "room1234", "invite_only": True, "lanes": ["native", "stream"],
+                  "can_host": {"native": False, "stream": False}})
+    time.sleep(0.3)
+    joiner = search("gamecube:f-zero-gx", "J", friends=["H"], extra={"invite": "room1234", "invite_only": True, "lanes": ["stream"],
+                    "can_host": {"stream": False}})
+    ej, eh = joiner.wait("error"), host.wait("error")
+    check("two who can't connect are told right away (both)", ej and eh and ej.get("why") == "no_common_lane" and "stream" in ej["msg"], (ej, eh))
+    for x in (ph, pj, host, joiner): x.close()
+    w = Conn({"v": 1, "op": "whoami"})
+    check("whoami tells you the address the matchmaker sees", (w.wait("whoami") or {}).get("ip") == "127.0.0.1")
+    w.close()
 
     # 9. friend link page
     with urllib.request.urlopen(f"http://127.0.0.1:{port + 1}/friend?i={pid('A')}&n=%3Cb%3EAl", timeout=5) as r:

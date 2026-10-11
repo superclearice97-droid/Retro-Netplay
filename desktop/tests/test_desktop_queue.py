@@ -161,6 +161,12 @@ social.add_friend(cr, {"id": fa["id"], "name": "Ann", "pending": True})
 check("request to someone who asked you too makes you friends", social.got_request(cr, {"id": fa["id"], "name": "Ann"}) == "friends"
       and not social.find(cr, fa["id"])["pending"])
 dol = app.refresh_ports.__code__.co_consts
+gc = {"name": "F-Zero GX", "system": "gamecube", "rom": "/x"}; gba = {"name": "Sonic Battle", "system": "gba", "rom": "/x"}
+check("join check: host can stream -> fine", app.join_problem({"stream": True, "native": False}, gc) == "")
+check("join check: GameCube host can't stream or host -> explains streaming tools", "Streaming check" in app.join_problem({"stream": False, "native": False}, {"name": "Urban Reign", "system": "ps2", "rom": ""}))
+check("join check: netplay host -> fine", app.join_problem({"stream": False, "native": True}, gba) == "")
+check("join check: nothing works -> suggests you host", "you hosting" in app.join_problem({"stream": False, "native": False}, gba))
+check("join check: older app says nothing -> just try", app.join_problem({}, gba) == "")
 old = json.loads(json.dumps(app.DEFAULT_CFG)); old.pop("hold_v2"); old["hold"] = 1.0
 app.CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True); app.CONFIG_PATH.write_text(json.dumps(old))
 check("old 1 s hotkey hold becomes 3 s", app.load_cfg()["hold"] == 3.0)

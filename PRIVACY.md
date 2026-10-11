@@ -34,6 +34,12 @@ Your chosen name, your app label and game name, and for emulator netplay your IP
 ## Finding a matchmaker on your home network
 "Find on my network" (and the automatic search when no matchmaker is set) sends one small broadcast on your Wi-Fi or home network asking whether a Retro-Netplay matchmaker is there. A matchmaker answers with its port numbers and the computer's name. Nothing leaves your home network for this. A computer running the matchmaker answers these questions from any device on the same network (UDP port 7779).
 
+## Your address
+"Your address" shows the addresses friends can use to reach you: your home-network address (worked out on your device), and your internet address, which the app first asks your own router for (UPnP) or the matchmaker you use. Only if you press **Look it up online** does it ask a public service (api.ipify.org), which then sees your internet address like any website would. Copying an address and sending it to someone is your choice; anyone with it can try to connect to your matchmaker.
+
+## Joining friends
+While you play or wait in the queue, your mutual friends also see whether your device can host (emulator netplay and/or a stream), so their app can tell them whether joining will work. A friend's join request shows on your screen as a card; nothing happens unless you (or a "join anytime" privilege you gave them) accept it.
+
 ## Game folders
 When you pick game folders, the app reads the file names in them, and the first few kilobytes of .iso and .bin files to tell which console they are for. This happens on your device only. The list of games stays on your device; only the name of the game you search for is sent to the matchmaker.
 

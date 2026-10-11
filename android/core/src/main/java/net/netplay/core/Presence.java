@@ -108,7 +108,7 @@ public final class Presence {
             hello.put("friends", friends);
             hello.put("hidden", hidden);
             write(hello);
-            if (!"idle".equals(state) || !game.isEmpty()) status(state, game);
+            if (!"idle".equals(state) || !game.isEmpty()) status(state, game, can);
             BufferedReader in = new BufferedReader(new InputStreamReader(s.getInputStream(), StandardCharsets.UTF_8));
             boolean said = false;
             while (!stopped) {
@@ -196,15 +196,22 @@ public final class Presence {
     }
 
     /** state: idle, queue or playing. game: a game key or "". Remembered and re-sent after a reconnect. */
-    public void status(String state, String game) {
+    public void status(String state, String game) { status(state, game, null); }
+
+    /** can: what you can host right now ({"native": bool, "stream": bool}), so friends can tell if joining will work. */
+    public void status(String state, String game, Map<String, Object> can) {
         this.state = state;
         this.game = game == null ? "" : game;
+        this.can = can;
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("op", "status");
         m.put("state", state);
         m.put("game", this.game);
+        if (can != null) m.put("can", can);
         quiet(m);
     }
+
+    private volatile Map<String, Object> can;
 
     /** Ask a friend to play (kind "play") or to watch them ("watch"). Returns the call id, or "" if not connected. */
     public String call(String friendId, String gameKey, String kind) {

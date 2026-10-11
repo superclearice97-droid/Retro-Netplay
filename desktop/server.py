@@ -331,6 +331,28 @@ def do_match(w, key, lane, hg):
     print(f"matched on {lane} ({w.game}, {via}{', friends' if mutual(host, guest) else ''}) host={host.client} guest={guest.client}", flush=True)
 
 
+def dead_end(w):
+    """(other, reason) if w is in a private room with someone it can never be paired with, else None."""
+    for key in w.keys:
+        if "#" not in key:
+            continue
+        others = {o for lane in LANES for o in pools.get((key, lane), []) if o is not w and not o.done}
+        for o in others:
+            common = [l for l in LANES if l in w.lanes and l in o.lanes]
+            if any(compatible(o, w, l) and roles(w, o, l) for l in common):
+                continue
+            if not common:
+                why = ("You can't play this game together: one of you can only join a stream, and the other can't host "
+                       "one or play it with emulator netplay.")
+            elif "stream" in common and not ("native" in common):
+                why = ("Neither of you can host a stream of this game. The computer playing it needs the streaming tools "
+                       "(Settings > Streaming check), or both need emulator netplay for this game.")
+            else:
+                why = "Neither of you can host this game right now (check the router port, or try the other person hosting)."
+            return o, why
+    return None
+
+
 def retry(w):
     """A player's friends-only head start just ended: try again, now with strangers allowed."""
     w.timer = None
@@ -376,6 +398,11 @@ async def handle(reader, writer):
             writer.write((json.dumps(reply) + "\n").encode())
             await writer.drain()
             return
+        if isinstance(req, dict) and req.get("op") == "whoami":
+            # "what address do you see for me?" so a player can share it with friends
+            writer.write((json.dumps({"op": "whoami", "v": 1, "ip": ip}) + "\n").encode())
+            await writer.drain()
+            return
         if isinstance(req, dict) and req.get("op") == "hello":
             await presence(reader, writer, req, ip)
             return
@@ -390,6 +417,20 @@ async def handle(reader, writer):
         m = find_match(w)
         if m:
             do_match(w, *m)
+            await writer.drain()
+            return
+        stuck = dead_end(w)
+        if stuck:
+            # a private room (a friend's join, an invite) where the two can never connect: say so now, not never
+            other, why = stuck
+            for x in (w, other):
+                try:
+                    send(x, {"op": "error", "msg": why, "why": "no_common_lane"})
+                except Exception:
+                    pass
+            other.done = True
+            leave_all(other)
+            other.writer.close()
             await writer.drain()
             return
         for key in w.keys:
@@ -429,6 +470,7 @@ class Presence:
         self.call_times = []
         self.ask_times = []
         self.hidden = bool(req.get("hidden"))      # still reachable for requests, just not shown online
+        self.can = {}
         self.closed = False
         self.code = ""
 
@@ -553,7 +595,7 @@ def push_friends(p):
     for fid in sorted(p.friends):
         q = online.get(fid)
         if q and p_mutual(p, q) and not q.hidden:
-            lst.append({"id": q.id, "name": q.name, "state": q.state, "game": q.game, "code": pretty_code(q.code)})
+            lst.append({"id": q.id, "name": q.name, "state": q.state, "game": q.game, "code": pretty_code(q.code), "can": q.can})
     p_send(p, {"op": "friends", "v": 1, "online": lst})
 
 
@@ -582,6 +624,9 @@ def on_presence_msg(p, m):
         st, game = m.get("state"), m.get("game") or ""
         if st in STATES and isinstance(game, str) and (game == "" or GAME_RE.match(game)):
             p.state, p.game = st, game
+            can = m.get("can")
+            if isinstance(can, dict):     # what this player can host now: lets friends see if joining will work
+                p.can = {k: bool(can.get(k)) for k in ("native", "stream")}
             tell_friends(p)
     elif op == "call":
         to, game, kind, cid = m.get("to"), m.get("game"), m.get("kind"), m.get("call")

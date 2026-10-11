@@ -83,3 +83,63 @@ def discover(timeout=1.5, port=DEFAULT_PORT + 2):
 FIREWALL_HELP = ("If another device can't find this computer, its firewall may be blocking the matchmaker. "
                  "Fedora/Nobara: sudo firewall-cmd --permanent --add-port=7777-7778/tcp --add-port=7779/udp && "
                  "sudo firewall-cmd --reload.  Ubuntu/Mint: sudo ufw allow 7777:7778/tcp && sudo ufw allow 7779/udp.")
+
+
+# ----------------------------------------------------------------- your internet (public) address
+IPV4 = __import__("re").compile(r"^\d{1,3}(\.\d{1,3}){3}$")
+LOOKUP_URL = "https://api.ipify.org"     # only used when the player presses "Look it up online"
+
+
+def public_ip_from_router(timeout=2.5):
+    """Ask your own router (UPnP) for the internet address. Nothing leaves your home network. "" if it won't say."""
+    try:
+        import portmap
+        gw = portmap.discover_upnp(timeout=timeout)
+        ip = gw.external_ip() if gw else ""
+        return ip if IPV4.match(ip or "") and not is_private(ip) else ""
+    except Exception:
+        return ""
+
+
+def public_ip_from_matchmaker(host, port, timeout=4):
+    """A matchmaker on the internet tells you the address it sees ("whoami"). "" if it's on your home network."""
+    if is_loopback(host) or is_private(host):
+        return ""
+    try:
+        with socket.create_connection((host, int(port)), timeout) as c:
+            c.settimeout(timeout)
+            c.sendall(b'{"v":1,"op":"whoami"}\n')
+            data = c.makefile("r").readline()
+        ip = json.loads(data).get("ip", "")
+        return ip if IPV4.match(ip) and not is_private(ip) else ""
+    except (OSError, ValueError, AttributeError):
+        return ""
+
+
+def public_ip_online(timeout=5):
+    """Ask a public "what's my IP" service. Only on request: that service sees your address."""
+    import urllib.request
+    try:
+        with urllib.request.urlopen(LOOKUP_URL, timeout=timeout) as r:
+            ip = r.read(64).decode("ascii", "ignore").strip()
+        return ip if IPV4.match(ip) else ""
+    except Exception:
+        return ""
+
+
+def parse_address(text):
+    """'192.168.1.23', '1.2.3.4:7777' or 'Retro-Netplay: connect to 1.2.3.4:7777' -> (host, port) or None."""
+    import re
+    m = re.search(r"(?<![\w.])((?:\d{1,3}\.){3}\d{1,3}|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)(?::(\d{2,5}))?(?![\w.])", text or "")
+    if not m:
+        return None
+    host, port = m.group(1), int(m.group(2) or DEFAULT_PORT)
+    if IPV4.match(host) and any(int(x) > 255 for x in host.split(".")):
+        return None
+    if not 0 < port < 65536 or is_loopback(host):
+        return None
+    return host, port
+
+
+def share_text(host, port):
+    return f"Retro-Netplay: connect to {host}:{port}"

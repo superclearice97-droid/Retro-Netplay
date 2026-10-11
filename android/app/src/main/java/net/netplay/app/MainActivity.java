@@ -510,12 +510,111 @@ public class MainActivity extends Activity implements Hub.Ui {
 
     // ================================================================ links
     private void askForLink() {
-        final EditText box = Ink.field(this, "Paste an invite or friend link", "");
-        Ink.sheet(this, "Join a link", box, "Go", () -> {
+        final EditText box = Ink.field(this, "Invite link, friend code or address", "");
+        Ink.sheet(this, "Join a link or address", box, "Go", () -> {
             String t = box.getText().toString();
             Friends.Friend f = Friends.parse(t);
-            if (f != null && !t.contains("/join")) addFriendFromLink(f); else joinWithLink(t);
+            if (f != null && !t.contains("/join")) { addFriendFromLink(f); return; }
+            if (Invite.parse(t) == null) {
+                String[] addr = net.netplay.core.Lan.parseAddress(t);
+                if (addr != null) { connectTo(addr[0], Integer.parseInt(addr[1])); return; }
+            }
+            joinWithLink(t);
         }, "Cancel").show();
+    }
+
+    /** Use a friend's matchmaker by the address they copied from "Your address". */
+    private void connectTo(String host, int port) {
+        hub.useMatchmaker(host, port);
+        status.setText("Connected to the matchmaker at " + host + ":" + port + ". Add each other with friend codes, then Join.");
+    }
+
+    private String wifiAddress() {
+        try {
+            android.net.wifi.WifiManager w = (android.net.wifi.WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+            @SuppressWarnings("deprecation") int ip = w.getConnectionInfo().getIpAddress();
+            if (ip == 0) return "";
+            return (ip & 0xFF) + "." + ((ip >> 8) & 0xFF) + "." + ((ip >> 16) & 0xFF) + "." + ((ip >> 24) & 0xFF);
+        } catch (RuntimeException e) { return ""; }
+    }
+
+    private void copyText(String label, String text) {
+        android.content.ClipboardManager cm = (android.content.ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+        cm.setPrimaryClip(android.content.ClipData.newPlainText(label, text));
+        status.setText("Copied: " + text);
+    }
+
+    private void openAddress() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        final String mm = hub.serverHost();
+        final int port = hub.serverPort();
+        if (!mm.isEmpty()) {
+            box.addView(Ink.caption(this, "Matchmaker you use"));
+            box.addView(addressRow(mm + ":" + port, true), fill(4));
+            box.addView(Ink.text(this, "Everyone who plays together uses this same one: pass it on.", 12.5f, false, Ink.INK_SOFT), fill(2));
+        }
+        String home = wifiAddress();
+        box.addView(Ink.caption(this, "This phone on your Wi-Fi"), fill(16));
+        box.addView(addressRow(home.isEmpty() ? "not on Wi-Fi" : home, !home.isEmpty()), fill(4));
+        box.addView(Ink.text(this, "For RetroArch's Connect to Netplay Host when this phone hosts at home.", 12.5f, false, Ink.INK_SOFT), fill(2));
+        box.addView(Ink.caption(this, "This phone on the internet"), fill(16));
+        final LinearLayout pubRow = new LinearLayout(this);
+        pubRow.setOrientation(LinearLayout.VERTICAL);
+        box.addView(pubRow, fill(4));
+        final TextView asking = Ink.text(this, "Asking the matchmaker...", 14, false, Ink.INK);
+        pubRow.addView(asking);
+        new Thread(() -> {
+            String ip = net.netplay.core.Lan.whoami(mm, port);
+            runOnUiThread(() -> {
+                pubRow.removeAllViews();
+                if (!ip.isEmpty()) { pubRow.addView(addressRow(ip, true)); return; }
+                pubRow.addView(Ink.text(this, "Your matchmaker is on your home network, so it can't tell.", 13, false, Ink.INK_SOFT));
+                InkButton look = new InkButton(this, Icons.SEARCH, "Look it up online", false);
+                look.onPress(() -> {
+                    pubRow.removeAllViews();
+                    pubRow.addView(Ink.text(this, "Asking online...", 14, false, Ink.INK));
+                    new Thread(() -> {
+                        String v = net.netplay.core.Lan.lookupOnline();
+                        runOnUiThread(() -> {
+                            pubRow.removeAllViews();
+                            pubRow.addView(v.isEmpty() ? Ink.text(this, "Couldn't find out.", 14, false, Ink.INK) : addressRow(v, true));
+                        });
+                    }).start();
+                });
+                pubRow.addView(look, fill(6));
+                pubRow.addView(Ink.text(this, "That asks " + net.netplay.core.Lan.LOOKUP_URL + ", which sees your address. Only when you tap it.",
+                        12, false, Ink.INK_SOFT), fill(4));
+            });
+        }).start();
+        box.addView(Ink.caption(this, "Got an address from a friend?"), fill(18));
+        final EditText field = Ink.field(this, "for example 192.168.1.23 or 203.0.113.5:7777", "");
+        box.addView(field, fill(4));
+        Ink.sheet(this, "Your address", box, "Connect", () -> {
+            String t = field.getText().toString().trim();
+            if (t.isEmpty()) return;
+            String[] addr = net.netplay.core.Lan.parseAddress(t);
+            if (addr == null) status.setText("That isn't an address. It looks like 192.168.1.23 or 203.0.113.5:7777.");
+            else connectTo(addr[0], Integer.parseInt(addr[1]));
+        }, "Close").show();
+    }
+
+    private View addressRow(final String value, boolean copyable) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        TextView v = Ink.text(this, value, 18, true, Ink.INK);
+        v.setTextIsSelectable(true);
+        row.addView(v, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        if (copyable) {
+            InkButton copy = new InkButton(this, Icons.SHARE, "Copy", false);
+            copy.onPress(() -> {
+                String[] a = net.netplay.core.Lan.parseAddress(value);
+                copyText("address", a != null && value.contains(":") ? net.netplay.core.Lan.shareText(a[0], Integer.parseInt(a[1])) : value);
+            });
+            row.addView(copy);
+        }
+        return row;
     }
 
     private void joinWithLink(String text) {
@@ -663,7 +762,21 @@ public class MainActivity extends Activity implements Hub.Ui {
         names.addView(Ink.text(this, (f.pending ? "Request sent" : describe(on)) + (f.code.isEmpty() ? "" : " \u00b7 " + f.code)
                 + privilegesShort(f), 12.5f, false, Ink.INK_SOFT));
         row.addView(names, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        row.addView(new IconView(this, Icons.CHEVRON, Ink.INK), new LinearLayout.LayoutParams(dp(22), dp(22)));
+        final String theirGame = on == null ? "" : String.valueOf(on.get("game"));
+        boolean joinable = !f.pending && on != null && !theirGame.isEmpty() && !"null".equals(theirGame)
+                && ("playing".equals(on.get("state")) || "queue".equals(on.get("state")));
+        if (joinable) {
+            InkButton join = new InkButton(this, Icons.PLAY, "Join", true);
+            join.setMinimumHeight(dp(44));
+            join.setContentDescription("Join " + f.name + " in " + hub.gameTitle(theirGame));
+            join.onPress(() -> {
+                if (openFriends != null) openFriends.dismiss();
+                callFriend(f, theirGame, "play");
+            });
+            row.addView(join);
+        } else {
+            row.addView(new IconView(this, Icons.CHEVRON, Ink.INK), new LinearLayout.LayoutParams(dp(22), dp(22)));
+        }
         row.setOnClickListener(v -> friendSheet(f));
         return row;
     }
@@ -694,8 +807,9 @@ public class MainActivity extends Activity implements Hub.Ui {
         final Dialog[] d = new Dialog[1];
         if (on != null) {
             final String theirGame = String.valueOf(on.get("game"));
-            boolean busy = !theirGame.isEmpty() && hub.gameByKey(theirGame) != null;
-            InkButton play = new InkButton(this, Icons.PAD, busy ? "Play " + hub.gameTitle(theirGame) + " with them" : "Ask them to play", true);
+            boolean busy = !theirGame.isEmpty() && !"null".equals(theirGame)
+                    && ("playing".equals(on.get("state")) || "queue".equals(on.get("state")) || hub.gameByKey(theirGame) != null);
+            InkButton play = new InkButton(this, Icons.PAD, busy ? "Join " + hub.gameTitle(theirGame) : "Ask them to play", true);
             play.onPress(() -> {
                 d[0].dismiss();
                 if (busy) callFriend(f, theirGame, "play");
@@ -809,6 +923,9 @@ public class MainActivity extends Activity implements Hub.Ui {
             });
         });
         box.addView(findMm, fill(8));
+        InkButton addrBtn = new InkButton(this, Icons.LINK, "My address / connect by address", false);
+        addrBtn.onPress(this::openAddress);
+        box.addView(addrBtn, fill(8));
         box.addView(foundNote, fill(4));
         box.addView(Ink.caption(this, "Public address for links"), fill(12));
         final EditText inviteHost = Ink.field(this, "blank = same as above", prefs.getString("invite_host", ""));

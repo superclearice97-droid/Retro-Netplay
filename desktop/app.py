@@ -1029,8 +1029,7 @@ def run_gui():
     go_btn.pack(fill="x")
     status = ttk.Label(frame, text="Ready.", wraplength=530, justify="left")
     status.pack(anchor="w", pady=(10, 4))
-    link_row = ttk.Frame(frame)
-    link_row.pack(fill="x")
+    link_row = ttk.Frame(frame)      # packed under the status line only while an invite link exists
     link_var = tk.StringVar()
     ttk.Entry(link_row, textvariable=link_var, state="readonly").pack(side="left", fill="x", expand=True)
     ttk.Button(link_row, text="Copy link", command=lambda: copy_link()).pack(side="left", padx=(6, 0))
@@ -1091,7 +1090,7 @@ def run_gui():
             hint.config(text="Double-click a game (or select it and press Play) to start it and join the queue.")
         update_squares(g)
         combo_name = "Start + Select" if sorted(cfg["hotkey"]) == [6, 7] else "buttons " + " + ".join(str(b) for b in cfg["hotkey"])
-        hot_lbl.config(text=f"Controller hotkey: hold {combo_name} for {cfg['hold']:g} s to join or leave the queue")
+        hot_lbl.config(text=f"In a game: hold {combo_name} for {cfg['hold']:g} s to join or leave the queue")
         save_cfg(cfg)
 
     def update_squares(g):
@@ -1806,6 +1805,10 @@ def run_gui():
                     continue
                 if state == "link":
                     link_var.set(text)
+                    if text:
+                        link_row.pack(fill="x", after=status)    # only shown while there's an invite link
+                    else:
+                        link_row.pack_forget()
                     if text:
                         root.clipboard_clear()
                         root.clipboard_append(text)

@@ -30,7 +30,7 @@ public class HotkeyService extends AccessibilityService {
     private boolean start, select, armed;
     private final Runnable fire = () -> {
         armed = false;
-        if (card != null && cardYes != null) { Runnable y = cardYes; removeCard(); y.run(); return; }   // accept the open card
+        if (this.card != null && this.cardYes != null) { Runnable y = this.cardYes; this.removeCard(); y.run(); return; }   // accept the open card
         Hub.get(this).hotkey();
     };
 

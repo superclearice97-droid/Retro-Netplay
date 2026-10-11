@@ -8,9 +8,11 @@ When you join the queue (by starting a game, with the controller shortcut, or by
 ## Friends
 Friends are optional. To make them work, each install creates a random secret code that stays on your device. Your **friend code** (shown in the app) is made from it, so nobody can pretend to be you. When you search or go online, the app sends the matchmaker your secret, your chosen name, the friend codes of the people you added, and which of them you marked "priority". The matchmaker uses this only to match friends first and keeps it in memory only while you're connected.
 
-- Two people are friends only when **both** add each other. Someone who adds you on their own sees nothing about you.
+- The matchmaker gives you a short **friend code** (like K7M-4QZ). To make codes work when you're offline, it saves your code, your hidden player id and the name you chose in a small file on the matchmaker; nothing else (no IP address, no friends list). Anyone who knows your code can send you a friend request and see your chosen name; nothing more until you accept.
+- Friend requests wait on the matchmaker (in memory, up to 14 days) until you connect. They're deleted when delivered, or when the matchmaker restarts.
+- Two people are friends only when **both** add each other (sending a request and accepting it does that). Someone who adds you on their own sees nothing about you.
 - Your friend code is shown only to your mutual friends, never to a stranger you're matched with. Strangers see the name you chose, so don't use your real full name if you'd rather not.
-- **Online list:** while the app is open, or while you're queued or playing through it, your mutual friends can see that you're online, your name, and which game you're queued for or playing. Turn this off in Settings ("Let friends see when I'm online").
+- **Online list:** while the app is open, or while you're queued or playing through it, your mutual friends can see that you're online, your name, and which game you're queued for or playing. Turn this off in Settings ("Let friends see when I'm online"); requests and calls still reach you.
 - **Privileges** you give a friend (join anytime, watch, pick a controller slot) are stored only on your device and never sent anywhere. "Priority" is sent to the matchmaker, because it does the matching.
 - **Calls** ("play with me", "let me watch") pass through the matchmaker to that one friend and are forgotten after a minute.
 

@@ -265,7 +265,9 @@ public class MainActivity extends Activity implements Hub.Ui {
         int on;
         synchronized (hub.online) { on = hub.online.size(); }
         int n = hub.friends().size();
-        friendsButton.set(Icons.SIGNAL, n == 0 ? "Friends" : "Friends  ·  " + on + " of " + n + " online");
+        int rq = hub.requests().size();
+        friendsButton.set(Icons.SIGNAL, (n == 0 ? "Friends" : "Friends  ·  " + on + " of " + n + " online")
+                + (rq == 0 ? "" : "  ·  " + rq + " request" + (rq == 1 ? "" : "s")));
         if (friendsRefresher != null) friendsRefresher.run();
     }
 

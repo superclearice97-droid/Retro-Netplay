@@ -62,7 +62,11 @@ Everything here is optional; a client that sends none of it behaves exactly as b
 
 **Identity.** Each install makes a random secret `me` (32 lowercase hex digits) and keeps it on the device. Its public id is the first 24 hex digits of `SHA-256(me)` (hashing the ASCII text). Friends share ids, never secrets, so nobody can act as you. A display `name` (up to 24 characters) is chosen by the player.
 
-**Friend links.** Web: `http://<host>:<N+1>/friend?i=<id>&n=<name>`. App: `netplay://friend?i=<id>&n=<name>&host=<host>&port=<N>`. Adding a friend is local to the device. Two players are friends only when **both** have added each other (mutual); one-sided adds count for nothing on the server.
+**Friend codes.** The matchmaker gives each player a short code, 6 characters from `23456789ABCDEFGHJKLMNPQRSTUVWXYZ`, shown as `K7M-4QZ` (the `hello` reply carries it). It is the same every time on that matchmaker; the server stores only code -> player id and the player's chosen name (`friend-codes.json` in `NETPLAY_DATA`, default `~/.netplay-matchmaker/server/`).
+
+**Friend links.** Web: `http://<host>:<N+1>/friend?c=<code>&n=<name>`. App: `netplay://friend?c=<code>&n=<name>&host=<host>&port=<N>`. Older links with `i=<id>` still work. Two players are friends only when **both** have each other in their lists (mutual); one-sided adds count for nothing on the server.
+
+**Requests (on the `hello` connection).** `{"op":"lookup","code":"K7M4QZ"}` -> `{"op":"lookup","code":"K7M-4QZ","found":true,"id":"...","name":"Sam","self":false}`. `{"op":"friend_request","to":"<id>"}` -> the other player gets `{"op":"friend_request","from":"<id>","name":"...","code":"..."}` (now, or when they next connect; kept in memory for 14 days), and you get `{"op":"request_sent"}`. Accepting: `{"op":"friend_accept","to":"<id>"}` -> they get `{"op":"friend_accept","from":...,"name":...,"code":...}`. Lookups, requests and accepts together are limited to 20 a minute (`{"op":"error_soft"}` after that). The client adds the friend to its own list when it sends a request (marked "request sent") or accepts one, and reconnects so the server sees the new list. `"hidden":true` in `hello` keeps you out of friends' online lists while still receiving requests and calls.
 
 **Search fields.**
 ```json

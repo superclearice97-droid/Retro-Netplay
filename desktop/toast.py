@@ -48,7 +48,8 @@ class Toasts:
                           highlightbackground=ink.INK, cursor="hand2",
                           command=lambda cb=cb: self._run(entry, cb))
             b.pack(side="left", padx=(0, 8))
-        timer = tk.Label(box, text="", bg=ink.PAPER, fg=ink.SOFT, font=(self.fam, 9), anchor="w")
+        timer = tk.Label(box, text="", bg=ink.PAPER, fg=ink.SOFT, font=(self.fam, 9), anchor="w",
+                         wraplength=WIDTH - 40, justify="left")
         timer.pack(fill="x", pady=(8, 0))
         primary = next((a for a in actions if a[2]), None)
 

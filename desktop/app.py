@@ -1529,7 +1529,7 @@ def run_gui():
                 if v and v != "unknown" and not v.startswith("asking"):
                     root.clipboard_clear()
                     root.clipboard_append(lan.share_text(*v.rsplit(":", 1)) if ":" in v else v)
-                    status.config(text=f"Copied. Paste it to your friend; they paste it into Join with a link... (or the app's Connect by address).")
+                    status.config(text="Copied. Send it to your friend; they paste it into Join / address... (phone: Settings > My address / connect by address).")
             ttk.Button(row, text="Copy", command=copy).pack(side="right")
             if note:
                 ttk.Label(body, text=note, foreground=ink.SOFT, wraplength=520, justify="left").pack(anchor="w")
@@ -1538,7 +1538,7 @@ def run_gui():
         if hosting:
             ttk.Label(body, wraplength=520, justify="left", text=(
                 "This computer runs the matchmaker. Give friends one of these addresses; they paste it in their app "
-                "(Join with a link... on a computer, Settings > Connect by address on a phone).")).pack(anchor="w")
+                "(Join / address... on a computer; Settings > My address / connect by address on a phone).")).pack(anchor="w")
             home = lan.lan_ip()
             line("Friends on your Wi-Fi", f"{home}:{port}" if home else "", "Same home network only.")
             pub = line("Friends anywhere else", "asking your router...",

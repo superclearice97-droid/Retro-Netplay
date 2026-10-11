@@ -30,11 +30,12 @@ mkdir -p "$H2/.netplay-matchmaker" "$H2/Games/GBA"
 : > "$H2/Games/GBA/Sonic Battle (USA).gba"
 : > "$H2/Games/GBA/Mario Kart - Super Circuit (USA).gba"
 cat > "$H2/.netplay-matchmaker/config.json" <<CFG
-{"setup_done": true, "menu_entry": true, "server_host": "203.0.113.5", "game_folders": ["$H2/Games"],
+{"setup_done": true, "menu_entry": true, "server_host": "127.0.0.1", "run_server": true, "server_port": 17777, "game_folders": ["$H2/Games"],
  "games": [{"name": "Urban Reign", "system": "ps2", "rom": "/nope/Urban Reign.iso"}],
  "my_name": "Sam", "secret": "0123456789abcdef0123456789abcdef",
  "friends": [{"id": "aaaaaaaaaaaaaaaaaaaaaaaa", "name": "Bea", "priority": true, "join": true},
-             {"id": "bbbbbbbbbbbbbbbbbbbbbbbb", "name": "Cy"}]}
+             {"id": "bbbbbbbbbbbbbbbbbbbbbbbb", "name": "Cy", "code": "K7M-4QZ", "pending": true}],
+ "friend_requests": [{"id": "cccccccccccccccccccccccc", "name": "Dee", "code": "P2X-9HN"}]}
 CFG
 shot main 12 HOME="$H2"
 grep -q "Retro-Netplay" "$H2/.local/share/applications/retro-netplay.desktop" 2>/dev/null \

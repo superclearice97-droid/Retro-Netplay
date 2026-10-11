@@ -558,8 +558,38 @@ NEEDED_PLUGINS = [("webrtcbin", "gstreamer1.0-plugins-bad"), ("nicesrc", "gstrea
                   ("rtpopuspay", "gstreamer1.0-plugins-good")]
 
 
-def doctor_lines(elements, session_type, uinput_msg, have_pactl, display=True):
+ARCH_NAMES = {"gstreamer1.0-plugins-base": "gst-plugins-base", "gstreamer1.0-plugins-good": "gst-plugins-good",
+              "gstreamer1.0-plugins-bad": "gst-plugins-bad", "gstreamer1.0-plugins-ugly": "gst-plugins-ugly",
+              "gstreamer1.0-nice": "libnice", "gstreamer1.0-pipewire": "gst-plugin-pipewire", "gstreamer1.0-x": "gst-plugins-base",
+              "gstreamer1.0-vaapi": "gstreamer-vaapi", "gstreamer1.0-libav": "gst-libav"}
+
+
+def is_arch_like():
+    try:
+        t = open("/etc/os-release").read().lower()
+    except OSError:
+        return False
+    return any(n in t for n in ("arch", "cachyos", "manjaro", "endeavouros", "steamos"))
+
+
+def doctor_lines(elements, session_type, uinput_msg, have_pactl, display=True, arch=None):
     """Pure function: describe what's ready and what isn't. elements = set of GStreamer element names or None."""
+    arch = is_arch_like() if arch is None else arch
+    lines = _doctor_lines(elements, session_type, uinput_msg, have_pactl, display)
+    if not arch:
+        return lines
+    out = []
+    for l in lines:
+        for deb, a in ARCH_NAMES.items():
+            l = l.replace(deb, a)
+        out.append(l)
+    missing = sorted({a for l in out if "(package: " in l for a in [l.split("(package: ")[1].rstrip(")")]})
+    if missing:
+        out.append("    Install the missing parts: sudo pacman -S --needed " + " ".join(missing))
+    return out
+
+
+def _doctor_lines(elements, session_type, uinput_msg, have_pactl, display=True):
     out = []
     if elements is None:
         out.append("[X] GStreamer for Python is not installed.")
@@ -567,7 +597,8 @@ def doctor_lines(elements, session_type, uinput_msg, have_pactl, display=True):
                    "gstreamer1.0-plugins-{base,good,bad,ugly} gstreamer1.0-nice gstreamer1.0-vaapi")
         out.append("    Fedora: sudo dnf install python3-gobject gstreamer1-plugins-{base,good,bad-free,ugly} "
                    "gstreamer1-plugin-libav libnice-gstreamer1")
-        out.append("    Arch: sudo pacman -S python-gobject gst-plugins-{base,good,bad,ugly} libnice gstreamer-vaapi")
+        out.append("    Arch / CachyOS / Manjaro: sudo pacman -S --needed python-gobject gst-plugins-base gst-plugins-good "
+                   "gst-plugins-bad gst-plugins-ugly gst-libav gst-plugin-pipewire libnice gstreamer-vaapi")
         return out
     for el, pkg in NEEDED_PLUGINS:
         out.append(f"[{'OK' if el in elements else 'X '}] {el}" + ("" if el in elements else f"   (package: {pkg})"))

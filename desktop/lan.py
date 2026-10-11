@@ -80,9 +80,31 @@ def discover(timeout=1.5, port=DEFAULT_PORT + 2):
     return sorted(found.values(), key=lambda x: (is_loopback(x["host"]), x["host"]))
 
 
-FIREWALL_HELP = ("If another device can't find this computer, its firewall may be blocking the matchmaker. "
-                 "Fedora/Nobara: sudo firewall-cmd --permanent --add-port=7777-7778/tcp --add-port=7779/udp && "
-                 "sudo firewall-cmd --reload.  Ubuntu/Mint: sudo ufw allow 7777:7778/tcp && sudo ufw allow 7779/udp.")
+def _distro():
+    try:
+        txt = open("/etc/os-release").read().lower()
+    except OSError:
+        return ""
+    for name in ("cachyos", "endeavouros", "manjaro", "arch", "bazzite", "nobara", "fedora", "ubuntu", "pop", "mint", "debian", "opensuse"):
+        if name in txt:
+            return name
+    return ""
+
+
+def firewall_help():
+    """The one command that lets phones and other computers reach this computer's matchmaker, for this Linux."""
+    d = _distro()
+    ufw = "sudo ufw allow 7777:7778/tcp && sudo ufw allow 7779/udp"
+    fwd = "sudo firewall-cmd --permanent --add-port=7777-7778/tcp --add-port=7779/udp && sudo firewall-cmd --reload"
+    if d in ("cachyos", "endeavouros", "manjaro", "arch", "ubuntu", "pop", "mint", "debian"):
+        return f"If another device can't find this computer, its firewall is blocking it. Run once in a terminal: {ufw}"
+    if d in ("fedora", "nobara", "bazzite", "opensuse"):
+        return f"If another device can't find this computer, its firewall is blocking it. Run once in a terminal: {fwd}"
+    return ("If another device can't find this computer, its firewall may be blocking it. "
+            f"With ufw: {ufw}   With firewalld: {fwd}")
+
+
+FIREWALL_HELP = firewall_help()
 
 
 # ----------------------------------------------------------------- your internet (public) address

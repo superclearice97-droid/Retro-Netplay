@@ -66,16 +66,15 @@ Everything here is optional; a client that sends none of it behaves exactly as b
 
 **Friend links.** Web: `http://<host>:<N+1>/friend?c=<code>&n=<name>`. App: `netplay://friend?c=<code>&n=<name>&host=<host>&port=<N>`. Older links with `i=<id>` still work. Two players are friends only when **both** have each other in their lists (mutual); one-sided adds count for nothing on the server.
 
-**Requests (on the `hello` connection).** `{"op":"lookup","code":"K7M4QZ"}` -> `{"op":"lookup","code":"K7M-4QZ","found":true,"id":"...","name":"Sam","self":false}`. `{"op":"friend_request","to":"<id>"}` -> the other player gets `{"op":"friend_request","from":"<id>","name":"...","code":"..."}` (now, or when they next connect; kept in memory for 14 days), and you get `{"op":"request_sent"}`. Accepting: `{"op":"friend_accept","to":"<id>"}` -> they get `{"op":"friend_accept","from":...,"name":...,"code":...}`. Lookups, requests and accepts together are limited to 20 a minute (`{"op":"error_soft"}` after that). The client adds the friend to its own list when it sends a request (marked "request sent") or accepts one, and reconnects so the server sees the new list. `"hidden":true` in `hello` keeps you out of friends' online lists while still receiving requests and calls.
+**Requests (on the `hello` connection).** `{"op":"lookup","code":"K7M4QZ"}` -> `{"op":"lookup","code":"K7M-4QZ","found":true,"id":"...","name":"Sam","self":false}`. `{"op":"friend_request","to":"<id>"}` -> the other player gets `{"op":"friend_request","from":"<id>","name":"...","code":"..."}` (now, or when they next connect; kept in memory for 14 days), and you get `{"op":"request_sent"}`. Accepting: `{"op":"friend_accept","to":"<id>"}` -> they get `{"op":"friend_accept","from":...,"name":...,"code":...}`. Lookups, requests and accepts together are limited to 20 a minute (`{"op":"error_soft"}` after that). The client adds the friend to its own list when it sends a request (marked "request sent") or accepts one, and sends `{"op":"set_friends","friends":["<id>",...]}` on the same connection so the server sees the new list (no reconnect). `"hidden":true` in `hello` (older apps) keeps you out of friends' online lists while still receiving requests and calls.
 
 **Search fields.**
 ```json
-{"me":"<secret>", "name":"Sam", "friends":["<id>",...], "priority":["<id>",...],
- "friend_wait":15, "friends_only":false, "prefer_host":true}
+{"me":"<secret>", "name":"Sam", "prefer_host":true}
 ```
-- Public pool order: a mutual friend marked priority (by either side) first, then other mutual friends (longest waiting first), then strangers.
-- A player with friends waits `friend_wait` seconds (default 15, max 60) before strangers are allowed. `friends_only` never allows strangers. Invite rooms ignore all of this.
-- `prefer_host`: when both players can host, this one hosts (the app sets it when you are already in the game).
+- `me` tells the server who you are, so in a friend's join it knows which player said yes (that player hosts).
+- `prefer_host`: when both players can host, this one hosts (the app sets it when you are already in the game, or when you allowed a friend in).
+- Current apps send only these. The server still understands the older friends-first fields (`friends`, `priority`, `friend_wait`, `friends_only`): mutual friends first (priority before others), strangers only after `friend_wait` seconds (default 15, max 60), never with `friends_only`. Invite rooms ignore all of this.
 - `matched.peer` gains `name` (if sent). Only for a mutual friend does it also carry `"friend":true` and `"id"`. A stranger never learns your id.
 - At most 200 ids per list. Privileges other than priority are never sent to the server.
 
@@ -84,17 +83,16 @@ Everything here is optional; a client that sends none of it behaves exactly as b
 Server -> client:
 - `{"op":"hello","v":1,"id":"<your id>"}` once.
 - `{"op":"friends","v":1,"online":[{"id","name","state","game"}]}` now and whenever a mutual friend comes online, goes offline or changes status. Only mutual friends are listed.
-- `{"op":"call","v":1,"from":"<id>","name":"...","game":"<key>","kind":"play"|"watch","call":"<call id>"}`: a friend wants to join or watch.
-- `{"op":"start","v":1,"call":"...","code":"<invite code>","game":"...","kind":"...","as":"caller"|"callee","with":{"id","name"}}`: the call was accepted. Both sides now run a normal search with `invite=code, invite_only=true` (the callee also sends `prefer_host:true`).
-- `{"op":"declined","call":"...","name":"..."}`, `{"op":"call_failed","call":"...","msg":"..."}`, `{"op":"call_cancelled","call":"...","from":"<id>"}`, `{"op":"ping"}`.
+- `{"op":"call","v":1,"from":"<id>","name":"...","game":"<key>","kind":"play","call":"<call id>"}`: a friend wants to join you (Join in their Friends list).
+- `{"op":"start","v":1,"call":"...","code":"<invite code>","game":"...","kind":"play","as":"caller"|"callee","with":{"id","name"}}`: the join was allowed. Both sides now run a normal search with `invite=code, invite_only=true`. The callee (who allowed it) hosts on every lane it can host; the caller connects to it. The server enforces this for 10 minutes using `me` from the searches; the callee also sends `prefer_host:true` and the caller `false`.
+- `{"op":"declined","call":"...","name":"...","msg":"..."}` (`msg` optional: why, e.g. the friend doesn't have the game), `{"op":"call_failed","call":"...","msg":"..."}`, `{"op":"call_cancelled","call":"...","from":"<id>"}`, `{"op":"ping"}`.
 
 Client -> server:
 - `{"op":"status","state":"idle"|"queue"|"playing","game":"<key or empty>"}`
-- `{"op":"call","to":"<id>","game":"<key>","kind":"play"|"watch","call":"<6-32 letters/digits>"}`. Fails unless the friend is mutual and online. At most 10 calls a minute; calls expire after 60 s.
-- `{"op":"answer","to":"<caller id>","call":"...","ok":true|false}`. The callee's app decides; it may accept on its own when the caller has the matching privilege (join anytime for `play`, watch for `watch`).
+- `{"op":"call","to":"<id>","game":"<key>","kind":"play","call":"<6-32 letters/digits>"}`. Fails unless the friend is mutual and online. At most 10 calls a minute; calls expire after 60 s. (`"watch"` from older apps is still passed on.)
+- `{"op":"answer","to":"<caller id>","call":"...","ok":true|false,"msg":"..."}`. The person being joined always decides (Allow / Deny). Their app says no by itself, with `msg`, when it doesn't have the game or is already playing with someone.
 - `{"op":"cancel_call","to":"<id>","call":"..."}`
-
-**Privileges** live only on the device of the person who grants them: *join anytime* (auto-accept `play` calls), *watch* (auto-accept `watch` calls), *priority* (sent as `priority` in searches), *pick controller slot* (a stream host lets that friend choose Player 2-4).
+- `{"op":"set_friends","friends":["<id>",...]}`: replace your friend list; online lists are re-sent to you and to everyone added or removed.
 
 The server keeps the online list and pending calls in memory only, and forgets them when the connection closes.
 
@@ -104,6 +102,7 @@ The server keeps the online list and pending calls in memory only, and forgets t
 A client broadcasts the ASCII text `RETRO-NETPLAY-DISCOVER/1` by UDP to port N+2 (7779 by default), to `255.255.255.255` and the network's own broadcast address. A matchmaker answers to the sender with `{"app":"retro-netplay","v":1,"port":N,"web":N+1,"name":"<computer name>"}`. At most 20 answers per address per 10 seconds. Links made on the computer that runs the matchmaker use that computer's home-network address (or the public address set for links), never 127.0.0.1. Clients treat 127.0.0.1 / localhost in a link or setting as "not set".
 
 ## Joining a friend, and "whoami"
+- Emulator netplay address: `matched.peer.ip` is the host's address as the matchmaker sees it. If the host runs on the matchmaker's own computer (127.0.0.1), the guest gets the address the guest used to reach the matchmaker instead (for a phone at home: the PC's Wi-Fi address). If the host is on the matchmaker's home network and the guest is not, `peer` also has `"at_matchmaker":true`, and the guest connects to the matchmaker's address (the router must forward the netplay port).
 - `status` may carry `"can":{"native":bool,"stream":bool}`: what that player can host right now. It is passed on in friends' online lists so their app can tell whether joining will work before asking.
 - A join is a `call` with `kind:"play"`; the host's app shows an approval card (or accepts on its own with the "join anytime" privilege).
 - In a private room (invite or call), if the two players can never be paired (no shared lane, or nobody can host), the server answers both with `{"op":"error","msg":"...","why":"no_common_lane"}` instead of letting them wait.

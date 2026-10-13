@@ -8,7 +8,6 @@ import android.content.Intent;
 public class ActionReceiver extends BroadcastReceiver {
     static final String LEAVE = "net.netplay.app.LEAVE";
     static final String STOP = "net.netplay.app.STOP";
-    static final String WATCH = "net.netplay.app.WATCH";
     static final String ACCEPT = "net.netplay.app.ACCEPT";
     static final String DECLINE = "net.netplay.app.DECLINE";
     static final String REQ_YES = "net.netplay.app.REQ_YES";
@@ -21,7 +20,6 @@ public class ActionReceiver extends BroadcastReceiver {
         switch (a) {
             case LEAVE: h.leave(); break;
             case STOP: h.leave(); h.doneSession(); h.stopPresence(); break;
-            case WATCH: h.watchToggle(); break;
             case ACCEPT: if (call != null) h.answer(call, true); break;
             case DECLINE: if (call != null) h.answer(call, false); break;
             case REQ_YES: if (i.getStringExtra("friend") != null) h.answerRequest(i.getStringExtra("friend"), true); break;

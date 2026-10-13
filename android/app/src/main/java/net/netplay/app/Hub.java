@@ -45,14 +45,13 @@ final class Hub {
         default void friendLookup(String code, boolean found, String id, String name, boolean self) { }
     }
 
+    /** A friend asking to join you. */
     static final class Call {
-        final String from, name, game, kind, id;
-        Call(String from, String name, String game, String kind, String id) {
-            this.from = from; this.name = name; this.game = game; this.kind = kind; this.id = id;
+        final String from, name, game, id;
+        Call(String from, String name, String game, String id) {
+            this.from = from; this.name = name; this.game = game; this.id = id;
         }
-        String what(Hub h) {
-            return (kind.equals("watch") ? "wants to watch you play " : "wants to play ") + h.gameTitle(game);
-        }
+        String what(Hub h) { return "wants to join you in " + h.gameTitle(game); }
     }
 
     static final String[] RETROARCH_PACKAGES = {"com.retroarch.aarch64", "com.retroarch", "com.retroarch.ra32"};
@@ -105,8 +104,22 @@ final class Hub {
     }
 
     // ================================================================ listeners
-    void addUi(Ui u) { synchronized (uis) { if (!uis.contains(u)) uis.add(u); } }
-    void removeUi(Ui u) { synchronized (uis) { uis.remove(u); } }
+    void addUi(Ui u) {
+        synchronized (uis) { if (!uis.contains(u)) uis.add(u); }
+        main.removeCallbacks(stopWhenUnused);
+    }
+
+    /** When the last screen closes (and you're not queued or playing), stop being online a moment later. Waiting a
+     *  moment matters: going from one screen to another closes the first one after the second opens. */
+    void removeUi(Ui u) {
+        boolean none;
+        synchronized (uis) { uis.remove(u); none = uis.isEmpty(); }
+        if (none) { main.removeCallbacks(stopWhenUnused); main.postDelayed(stopWhenUnused, 3000); }
+    }
+
+    private final Runnable stopWhenUnused = () -> {
+        if (uiList().isEmpty() && state == State.IDLE && playingKey.isEmpty()) stopPresence();
+    };
 
     private List<Ui> uiList() { synchronized (uis) { return new ArrayList<>(uis); } }
 
@@ -193,9 +206,10 @@ final class Hub {
         List<Map<String, Object>> r = requests();
         boolean theyAsked = r.removeIf(x -> id.equals(x.get("id")));
         if (theyAsked) { f.pending = false; updateFriend(f); saveRequests(r); }
+        friendsChanged();
         Presence p = presence;
         if (p != null) { if (theyAsked) p.accept(id); else p.request(id); }
-        restartPresence();
+        changed();
         return theyAsked ? "You and " + f.name + " are friends now." : "Friend request sent to " + f.name + ". You'll be friends when they accept.";
     }
 
@@ -226,8 +240,10 @@ final class Hub {
                 l.add(f);
                 saveFriends(l);
             }
-            pendingAccepts.add(id);              // sent as soon as the (re)connection is up
-            restartPresence();
+            friendsChanged();
+            Presence p = presence;
+            if (p != null && presenceUp) p.accept(id);
+            else pendingAccepts.add(id);         // sent as soon as the connection is up
             say("You and " + Friends.cleanName(String.valueOf(req.get("name"))) + " are friends now.", false);
         }
         changed();
@@ -240,9 +256,9 @@ final class Hub {
             f.pending = false;
             if (!code.isEmpty()) f.code = code;
             saveFriends(l);
+            friendsChanged();
             Presence p = presence;
             if (p != null) p.accept(id);
-            restartPresence();
             say("You and " + f.name + " are friends now.", false);
             return;
         }
@@ -272,14 +288,20 @@ final class Hub {
         }
         l.add(f);
         saveFriends(l);
-        restartPresence();
+        friendsChanged();
         return true;
     }
 
     void removeFriend(String id) {
         List<Friends.Friend> l = friends();
         Friends.Friend f = Friends.find(l, id);
-        if (f != null) { l.remove(f); saveFriends(l); restartPresence(); }
+        if (f != null) { l.remove(f); saveFriends(l); friendsChanged(); }
+    }
+
+    /** Tell the matchmaker your new friend list on the open connection (no reconnect, so nothing in flight is lost). */
+    private void friendsChanged() {
+        Presence p = presence;
+        if (p != null) p.setFriends(Friends.ids(friends()));
     }
 
     void updateFriend(Friends.Friend f) {
@@ -365,8 +387,8 @@ final class Hub {
                 saveFriends(l);
                 say(f.name + " accepted your friend request.", false);
                 buzz(150);
-                Notify.info(app, f.name + " accepted your friend request", "You're friends now. When they're playing, Join appears next to their name.");
-                restartPresence();
+                Notify.info(app, f.name + " accepted your friend request", "You're friends now. When they're online, tap Join next to their name.");
+                changed();
             }
             @Override public void onSoftError(String msg) { say("Friends: " + msg, false); }
             @Override public void onRequestSent(String to) {
@@ -402,13 +424,13 @@ final class Hub {
                 if (dirty) saveFriends(l);
                 changed();
             }
-            @Override public void onCall(String from, String name, String game, String kind, String id) { incoming(new Call(from, name, game, kind, id)); }
-            @Override public void onStart(String id, String code, String game, String kind, String as, String withId, String withName) {
-                started(code, game, kind, as, withName);
+            @Override public void onCall(String from, String name, String game, String id) { incoming(new Call(from, name, game, id)); }
+            @Override public void onStart(String id, String code, String game, String as, String withId, String withName) {
+                started(code, game, as, withName);
             }
-            @Override public void onDeclined(String id, String name) {
+            @Override public void onDeclined(String id, String name, String why) {
                 outgoingCall = "";
-                say((name.isEmpty() ? "Your friend" : name) + " can't play right now.", false);
+                say(!why.isEmpty() ? why : (name.isEmpty() ? "Your friend" : name) + " said no this time.", false);
             }
             @Override public void onCallFailed(String id, String msg) {
                 outgoingCall = "";
@@ -420,7 +442,7 @@ final class Hub {
                 HotkeyService.closeCard(id);
                 changed();
             }
-        }, !prefs.getBoolean("show_online", true));
+        });
         presence.start();
         sendStatus();
     }
@@ -582,10 +604,10 @@ final class Hub {
         if (s.hasNative()) {
             String problem = boot(from, g);
             if (!problem.isEmpty()) { say(problem, false); return; }
-            if (queueToo) queue(g, true, null, "", "play", true);
+            if (queueToo) queue(g, true, null, "", "", true);
             else say("Playing " + g.get("name") + ". Hold Start + Select for 3 seconds to look for an opponent.", false);
         } else {
-            queue(g, false, null, "", "play", true);
+            queue(g, false, null, "", "", true);
         }
     }
 
@@ -621,15 +643,16 @@ final class Hub {
             }
             buzz(120);
             if (inGame) { playingKey = key(g); hostingNow = hostingNow && playingKey.equals(key(g)); }
-            queue(g, inGame, null, "", "play", true);
+            queue(g, inGame, null, "", "", true);
         });
     }
 
     /**
      * Join the matchmaker queue for a game. inGame: you're already playing it (so you host if you can).
-     * invite: a private room (a friend's call or an invite link), or null for the public queue.
+     * invite: a private room (a friend's join or an invite link), or null for the public queue.
+     * as: in a friend's join, "callee" (you allowed it: you host) or "caller" (you asked: you connect); else "".
      */
-    void queue(Map<String, Object> g, boolean inGame, String invite, String with, String kind, boolean announce) {
+    void queue(Map<String, Object> g, boolean inGame, String invite, String with, String as, boolean announce) {
         if (serverHost().isEmpty()) {
             say("Set the matchmaker address first (Settings).", inGame);
             return;
@@ -643,7 +666,6 @@ final class Hub {
         final Plan.Offer offer = Plan.offer(s, retroArchPackage() != null, !rom.isEmpty(), canHostNative());
         final String host = serverHost();
         final int port = serverPort();
-        final boolean friendsOnly = prefs.getBoolean("friends_only", false);
         final MatchClient mc = new MatchClient();
         search = mc;
         state = State.QUEUE;
@@ -658,7 +680,6 @@ final class Hub {
                     : "You're in the queue for " + queueName + "." + (inGame ? " Hold Start + Select for 3 seconds to leave." : ""), inGame);
         }
         QueueService.start(app);
-        final String kindF = kind;
         new Thread(() -> {
             try {
                 Map<String, Object> info = new LinkedHashMap<>();
@@ -669,11 +690,11 @@ final class Hub {
                 }
                 info.put("native", nat);
                 info.put("stream", Plan.streamInfo(prefs.getBoolean("use_parsec", false)));
-                boolean preferHost = inGame && Boolean.TRUE.equals(offer.canHost.get("native"));
-                Map<String, Object> extra = Friends.searchFields(secret(), myName(), friends(), friendsOnly && invite == null, 15, preferHost);
+                boolean preferHost = "callee".equals(as) || (!"caller".equals(as) && inGame && Boolean.TRUE.equals(offer.canHost.get("native")));
+                Map<String, Object> extra = Friends.searchFields(secret(), myName(), preferHost);
                 MatchClient.Match m = mc.search(host, port, queueKey, offer.lanes, info, offer.canHost, "android",
                         invite, invite != null, extra);
-                if (search == mc) matched(g, m, host, port, inGame, kindF);
+                if (search == mc) matched(g, m, host, port, inGame);
             } catch (MatchClient.Cancelled c) {
                 // left the queue on purpose
             } catch (Exception e) {
@@ -699,7 +720,7 @@ final class Hub {
         changed();
     }
 
-    private void matched(Map<String, Object> g, MatchClient.Match m, String host, int port, boolean inGame, String kind) {
+    private void matched(Map<String, Object> g, MatchClient.Match m, String host, int port, boolean inGame) {
         search = null;
         state = State.IDLE;
         Games.Sys s = sys(g);
@@ -708,7 +729,10 @@ final class Hub {
         boolean friend = "true".equals(m.peerString("friend"));
         playingWith = who;
         String playUrl = Plan.playUrl(host, port, m.play, m.secureWeb);
-        Plan plan = Plan.make(s, m.lane, m.role, m.peer, playUrl);
+        Map<String, Object> peer = new LinkedHashMap<>(m.peer);
+        // the host is on the matchmaker's own network: reach it at the matchmaker's address
+        if ("true".equals(m.peerString("at_matchmaker")) && !net.netplay.core.Lan.isLoopback(host)) peer.put("ip", host);
+        Plan plan = Plan.make(s, m.lane, m.role, peer, playUrl);
         buzz(400);
         if (plan.kind == Plan.Kind.ERROR) {
             playingWith = "";
@@ -739,17 +763,14 @@ final class Hub {
             Notify.matched(app, hello, text, "");
             say(text, ra);
         } else {
-            String ip = m.peerString("ip"), nick = m.peerString("nick");
+            String ip = plan.clipboard, nick = m.peerString("nick");
             if (!ip.isEmpty()) copy(ip);
             String find = nick.isEmpty() ? "" : "pick " + nick + " in Netplay > Refresh Netplay Host List, or ";
-            String text = hello + " In RetroArch's menu: " + find + "Netplay > Connect to Netplay Host > " + ip + " (copied)."
-                    + ("watch".equals(kind) ? " Then use Switch to watching." : "");
+            String text = hello + " In RetroArch's menu: " + find + "Netplay > Connect to Netplay Host > " + ip + " (copied).";
             Notify.matched(app, hello, text, "");
             say(text, ra);
         }
     }
-
-    void watchToggle() { work.execute(RetroCmd::watchToggle); }
 
     private void copy(String text) {
         main.post(() -> {
@@ -781,27 +802,28 @@ final class Hub {
         changed();
     }
 
-    // ================================================================ calls
-    /** Ask a friend to play (or to watch them). Their app may accept on its own if they gave you that privilege. */
-    String callFriend(Friends.Friend f, String gameKey, String kind) {
+    // ================================================================ joining a friend
+    /** Ask a friend to let you into their game. They tap Allow; then they host and this phone connects to them. */
+    String callFriend(Friends.Friend f, String gameKey) {
         Presence p = presence;
-        if (p == null || !presenceUp) return "You're not connected to the matchmaker. Check Settings.";
+        if (p == null || !presenceUp) return "You're not connected to the matchmaker. See the top of the Friends screen.";
+        if (f.pending) return f.name + " hasn't accepted your friend request yet.";
         Map<String, Object> on = onlineInfo(f.id);
+        if (on == null) return f.name + " isn't online right now.";
         @SuppressWarnings("unchecked")
-        Map<String, Object> can = on != null && on.get("can") instanceof Map ? (Map<String, Object>) on.get("can") : null;
-        boolean theyHost = on != null && gameKey.equals(on.get("game"));
-        if (theyHost && "play".equals(kind)) {
+        Map<String, Object> can = on.get("can") instanceof Map ? (Map<String, Object>) on.get("can") : null;
+        boolean theirGame = gameKey.equals(on.get("game"));
+        if (theirGame) {
             String problem = joinProblem(can, gameKey, f.name);
             if (!problem.isEmpty()) return problem;
         }
-        boolean viaStream = theyHost && can != null && Boolean.TRUE.equals(can.get("stream"));
-        if (gameByKey(gameKey) == null && !viaStream) return "You need " + gameTitle(gameKey) + " in your games first.";
-        String id = p.call(f.id, gameKey, kind);
+        boolean viaStream = theirGame && can != null && Boolean.TRUE.equals(can.get("stream"));
+        if (gameByKey(gameKey) == null && !viaStream) return "You need " + gameTitle(gameKey) + " in your games first (same name).";
+        String id = p.call(f.id, gameKey);
         if (id.isEmpty()) return "Couldn't reach the matchmaker.";
         outgoingCall = id;
         outgoingTo = f.id;
-        say((kind.equals("watch") ? "Asking " + f.name + " if you can watch..."
-                : "Asking " + f.name + " to let you into " + gameTitle(gameKey) + "... (they'll see a card to accept)"), false);
+        say("Asking " + f.name + " to let you into " + gameTitle(gameKey) + "... They'll see Allow / Deny.", false);
         return "";
     }
 
@@ -811,23 +833,23 @@ final class Hub {
         outgoingCall = "";
     }
 
+    /** A friend wants to join: always ask (Allow / Deny), unless this phone can't play that game at all. */
     private void incoming(Call c) {
         Friends.Friend f = Friends.find(friends(), c.from);
         Presence p = presence;
         if (p == null) return;
         if (f == null) { p.answer(c.from, c.id, false); return; }
-        boolean auto = ("play".equals(c.kind) && f.join) || ("watch".equals(c.kind) && f.watch);
-        if (auto && (state == State.QUEUE ? queueKey.equals(c.game) : (playingKey.isEmpty() || playingKey.equals(c.game)))) {
-            p.answer(c.from, c.id, true);
-            say(f.name + ("watch".equals(c.kind) ? " is coming to watch." : " is joining you."), !playingKey.isEmpty());
+        if (gameByKey(c.game) == null) {
+            p.answer(c.from, c.id, false, myName() + " doesn't have " + gameTitle(c.game) + " in their games.");
+            say(c.name + " wanted to join you in " + gameTitle(c.game) + ", but it isn't in your games.", false);
             return;
         }
         synchronized (calls) { calls.add(c); }
         buzz(250);
         Notify.call(app, c, c.name + " " + c.what(this));
-        HotkeyService.showCard(app, ("watch".equals(c.kind) ? "Watch request" : "Join request"), c.name + " " + c.what(this),
+        HotkeyService.showCard(app, "Join request", c.name + " " + c.what(this),
                 () -> answer(c.id, true), () -> answer(c.id, false), c.id);
-        RetroCmd.showMsg("Retro-Netplay: " + c.name + " " + c.what(this) + ". Answer on your phone's notification.");
+        work.execute(() -> RetroCmd.showMsg("Retro-Netplay: " + c.name + " " + c.what(this) + ". Answer on your phone's notification."));
         main.post(() -> { for (Ui u : uiList()) u.incomingCall(c); });
         changed();
     }
@@ -845,7 +867,7 @@ final class Hub {
         changed();
     }
 
-    private void started(String code, String game, String kind, String as, String withName) {
+    private void started(String code, String game, String as, String withName) {
         Map<String, Object> g = gameByKey(game);
         if (g == null && "caller".equals(as)) g = streamOnly(game);    // joining their stream: nothing to run here
         if (g == null) {
@@ -855,14 +877,14 @@ final class Hub {
         outgoingCall = "";
         if ("callee".equals(as)) {
             boolean inGame = playingKey.equals(game);
-            queue(g, inGame, code, withName, kind, true);
+            queue(g, inGame, code, withName, "callee", true);
         } else {
             // you called: start the game first if you're going to play it, then meet them in the private room
             if (sys(g).hasNative() && !((String) g.get("rom")).isEmpty() && !playingKey.equals(game)) {   // netplay needs the game running
                 String problem = boot(app, g);
                 if (!problem.isEmpty()) { say(problem, false); return; }
             }
-            queue(g, playingKey.equals(game), code, withName, kind, true);
+            queue(g, playingKey.equals(game), code, withName, "caller", true);
         }
     }
 }

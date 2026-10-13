@@ -65,9 +65,9 @@ public class TD {{
     Presence p = new Presence("127.0.0.1", port, "{phone_secret}", "Odin", new ArrayList<String>(), new Presence.Listener() {{
       public void onConnected(boolean c, String w) {{ if (c) ev.add("up"); }}
       public void onOnline(List<Map<String, Object>> o) {{ ev.add("online " + o.size()); }}
-      public void onCall(String a1, String b, String c, String d, String e) {{ }}
-      public void onStart(String a1, String b, String c, String d, String e, String f1, String g) {{ }}
-      public void onDeclined(String a1, String b) {{ }}
+      public void onCall(String a1, String b, String c, String d) {{ }}
+      public void onStart(String a1, String b, String c, String e, String f1, String g) {{ }}
+      public void onDeclined(String a1, String b, String c) {{ }}
       public void onCallFailed(String a1, String b) {{ }}
       public void onCallCancelled(String a1, String b) {{ }}
       public void onLookup(String code, boolean found, String id, String name, boolean self) {{ deskId[0] = id; ev.add("lookup " + found + " " + name); }}
@@ -119,22 +119,22 @@ public class TJ {{
     Presence p = new Presence("127.0.0.1", {P}, "{phone_secret}", "Odin", Arrays.asList("{social.id_of(dsk_secret)}"), new Presence.Listener() {{
       public void onConnected(boolean c, String w) {{ if (c) ev.add("up"); }}
       public void onOnline(List<Map<String, Object>> o) {{ if (!o.isEmpty()) {{ seen.putAll(o.get(0)); ev.add("online " + o.get(0).get("state") + " " + o.get(0).get("can")); }} }}
-      public void onCall(String a1, String b, String c, String d, String e) {{ }}
-      public void onStart(String id, String c, String g, String k, String as, String wid, String wn) {{ code[0] = c; ev.add("start " + as + " " + wn); }}
-      public void onDeclined(String a1, String b) {{ ev.add("declined"); }}
+      public void onCall(String a1, String b, String c, String d) {{ }}
+      public void onStart(String id, String c, String g, String as, String wid, String wn) {{ code[0] = c; ev.add("start " + as + " " + wn); }}
+      public void onDeclined(String a1, String b, String c) {{ ev.add("declined"); }}
       public void onCallFailed(String a1, String b) {{ ev.add("failed " + b); }}
       public void onCallCancelled(String a1, String b) {{ }}
     }});
     p.start();
     String l; do {{ l = ev.poll(6, TimeUnit.SECONDS); }} while (l != null && !l.startsWith("online playing"));
     System.out.println("seen=" + l);
-    p.call("{social.id_of(dsk_secret)}", "ps2:urban-reign", "play");
+    p.call("{social.id_of(dsk_secret)}", "ps2:urban-reign");
     do {{ l = ev.poll(8, TimeUnit.SECONDS); }} while (l != null && !l.startsWith("start"));
     System.out.println("start=" + l);
     Map<String, Boolean> ch = new HashMap<>(); ch.put("stream", false);
     Map<String, Object> info = new HashMap<>(); info.put("stream", Plan.streamInfo(false));
     MatchClient.Match m = new MatchClient().search("127.0.0.1", {P}, "ps2:urban-reign", Arrays.asList("stream"), info, ch, "android",
-        code[0], true, Friends.searchFields("{phone_secret}", "Odin", new ArrayList<Friends.Friend>(), false, 15, false));
+        code[0], true, Friends.searchFields("{phone_secret}", "Odin", false));
     System.out.println("match=" + m.lane + " " + m.role + " " + (m.play.startsWith("/play?t=")));
     p.stop();
   }}
@@ -147,7 +147,7 @@ with tempfile.TemporaryDirectory() as out:
     call = None
     while time.time() < end and not call:
         call = next((d for ev, d in dp2_events if ev == "call"), None); time.sleep(0.05)
-    check("desktop gets the phone's join request", call and call["name"] == "Odin" and call["kind"] == "play", call)
+    check("desktop gets the phone's join request", call and call["name"] == "Odin" and call["game"] == "ps2:urban-reign", call)
     if call:
         dp2.answer(call["from"], call["call"], True)            # the host taps Accept on the corner card
     st = None
@@ -158,8 +158,8 @@ with tempfile.TemporaryDirectory() as out:
         c = socket.create_connection(("127.0.0.1", P), 5)
         c.sendall((_j.dumps({"v": 1, "op": "search", "game": "ps2:urban-reign", "lanes": ["stream"], "invite": st["code"],
                               "invite_only": True, "can_host": {"stream": True}, "info": {"stream": {"backend": "own"}},
-                              "client": "desktop-linux", **social.search_fields({"secret": dsk_secret, "my_name": "Desk",
-                              "friends": [{"id": server.player_id(phone_secret)}]}, prefer_host=True)}) + "\n").encode())
+                              "client": "desktop-linux", **social.search_fields({"secret": dsk_secret, "my_name": "Desk"},
+                              prefer_host=True)}) + "\n").encode())
         f = c.makefile("r")
         while True:
             line = f.readline()
@@ -173,5 +173,30 @@ check("after Accept both start", r2.get("start") == "start caller Desk", r2.get(
 check("desktop hosts the stream", msg and msg.get("role") == "host" and msg.get("lane") == "stream", msg)
 check("phone gets the stream page to open", r2.get("match") == "stream guest true", r2.get("match"))
 dp2.stop()
+
+# emulator netplay with the host on the matchmaker's own computer: the phone must get the PC's Wi-Fi address,
+# not 127.0.0.1 (which would be the phone itself)
+home = lan.lan_ip()
+if home:
+    def search(addr, can_host, prefer):
+        c = socket.create_connection((addr, P), 5)
+        c.sendall((_j.dumps({"v": 1, "op": "search", "game": "gba:sonic-battle", "lanes": ["native"], "invite": "HOMETEST1",
+                             "invite_only": True, "can_host": {"native": can_host}, "client": "x", "prefer_host": prefer}) + "\n").encode())
+        return c
+    def matched(c):
+        f = c.makefile("r")
+        while True:
+            line = f.readline()
+            if not line or _j.loads(line).get("op") != "ping":
+                return _j.loads(line) if line else {}
+    pc = search("127.0.0.1", True, True)          # the desktop app talks to its own matchmaker at 127.0.0.1
+    time.sleep(0.2)
+    phone = search(home, False, False)           # the phone uses the PC's Wi-Fi address
+    mp, mpc = matched(phone), matched(pc)
+    check("phone joins the PC hosting next to the matchmaker at the PC's Wi-Fi address", mp.get("role") == "guest"
+          and mp.get("peer", {}).get("ip") == home and mpc.get("role") == "host", (mp, home))
+    pc.close(); phone.close()
+else:
+    print("SKIP home-network address check (no network)")
 print("ALL PASSED" if not fails else f"{len(fails)} FAILED")
 sys.exit(1 if fails else 0)

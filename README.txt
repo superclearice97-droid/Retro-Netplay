@@ -15,12 +15,13 @@ HOW YOU PLAY (new)
   - RetroArch on Android can't be told to join someone else's game by another app, so when the
     PHONE is the joining player, RetroArch shows exactly what to pick (Netplay > Refresh Netplay
     Host List > the host's name, or Connect to Netplay Host, address already copied).
-  - FRIENDS: share your friend link (or your 24-character friend code). Once you've both added each other,
-    friends are matched with you first (15 seconds before strangers), you see who's online and
-    what they're playing, and you can ask a friend to play or to watch. For each friend you
-    choose: Priority (matched before anyone), Join anytime (no need to accept), Watch, and
-    Pick a controller slot (Player 2-4 on a stream you host). Settings has "Only match me with
-    friends".
+  - FRIENDS: kept simple. Share your 6-character friend code (like K7M-4QZ); your friend types it
+    under Add a friend and you accept. Then you see each other online and what you're playing.
+    Tap Join next to a friend: they get Allow / Deny, and once they allow it they host and you
+    connect straight to their game. Both apps must use the same matchmaker. If the matchmaker runs
+    on the host's PC, a phone on the same Wi-Fi connects with Friends > Find on my network (or the
+    PC's address shown in the PC's Friends window). On Linux, open the firewall once:
+    sudo ufw allow 7777:7778/tcp && sudo ufw allow 7779/udp
 
 HOW THEY WORK TOGETHER
   Both apps connect to the same matchmaker (desktop/server.py). Pick the same game with the

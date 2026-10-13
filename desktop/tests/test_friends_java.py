@@ -37,13 +37,13 @@ import net.netplay.core.*; import java.util.*; import java.util.concurrent.*;
 public class FJ {
   static void p(String k, Object v) { System.out.println(k + "=" + v); }
   static class L implements Presence.Listener {
-    final String who; final BlockingQueue<String> ev = new LinkedBlockingQueue<>(); Presence me;
+    final String who; final BlockingQueue<String> ev = new LinkedBlockingQueue<>(); Presence me; volatile String refuse = "";
     L(String w) { who = w; }
     public void onConnected(boolean c, String why) { if (c) ev.add("up"); }
     public void onOnline(List<Map<String, Object>> o) { StringBuilder b = new StringBuilder(); for (Map<String,Object> m : o) b.append(m.get("name")).append(':').append(m.get("state")).append(','); ev.add("online " + b); }
-    public void onCall(String from, String name, String game, String kind, String id) { ev.add("call " + name + " " + game + " " + kind); me.answer(from, id, true); }
-    public void onStart(String id, String code, String game, String kind, String as, String wid, String wname) { ev.add("start " + code + " " + as + " " + wname); }
-    public void onDeclined(String id, String n) { ev.add("declined"); }
+    public void onCall(String from, String name, String game, String id) { ev.add("call " + name + " " + game); if (refuse.isEmpty()) me.answer(from, id, true); else me.answer(from, id, false, refuse); }
+    public void onStart(String id, String code, String game, String as, String wid, String wname) { ev.add("start " + code + " " + as + " " + wname); }
+    public void onDeclined(String id, String n, String why) { ev.add("declined " + n + "|" + why); }
     public void onCallFailed(String id, String msg) { ev.add("failed " + msg); }
     public void onCallCancelled(String id, String from) { ev.add("cancelled"); }
     public void onMyCode(String c) { ev.add("code " + c); }
@@ -68,16 +68,18 @@ public class FJ {
     p("typed", f3 == null ? "null" : f3.id);
     p("junk", Friends.parse("http://x/join?i=%IDB%") == null && Friends.parse("abc") == null && Friends.parse("netplay://friend?i=zz") == null);
     p("link", Friends.link("203.0.113.5", 7777, "K7M-4QZ", "Sam B"));
-    List<Friends.Friend> l = new ArrayList<>(); Friends.Friend fb = new Friends.Friend("%IDB%", "Bea"); fb.priority = true; fb.join = true; fb.code = "K7M-4QZ"; fb.pending = true; l.add(fb);
+    List<Friends.Friend> l = new ArrayList<>(); Friends.Friend fb = new Friends.Friend("%IDB%", "Bea"); fb.code = "K7M-4QZ"; fb.pending = true; l.add(fb);
     List<Friends.Friend> back = Friends.load(Friends.save(l) );
-    p("roundtrip", back.size() == 1 && back.get(0).priority && back.get(0).join && !back.get(0).watch && back.get(0).name.equals("Bea")
+    p("roundtrip", back.size() == 1 && back.get(0).name.equals("Bea")
         && back.get(0).code.equals("K7M-4QZ") && back.get(0).pending);
     p("badload", Friends.load("[{\"id\":\"nope\"}, 5, \"x\"]").size() + "|" + Friends.load("garbage").size());
 
     L la = new L("A"), lb = new L("B");
     Presence pa = new Presence("127.0.0.1", %MM%, "%A%", "Ann", Arrays.asList("%IDB%"), la); la.me = pa;
-    Presence pb = new Presence("127.0.0.1", %MM%, "%B%", "Bea", Arrays.asList("%IDA%"), lb); lb.me = pb;
+    Presence pb = new Presence("127.0.0.1", %MM%, "%B%", "Bea", new ArrayList<String>(), lb); lb.me = pb;
     pa.start(); String codeA = la.next("code"); p("aUp", la.next("up")); pb.start(); String codeB = lb.next("code"); p("bUp", lb.next("up"));
+    p("notYet", la.next("online Bea"));
+    pb.setFriends(Arrays.asList("%IDA%"));      // B adds A on the open connection: no reconnect needed
     p("aSeesB", la.next("online Bea"));
     p("codes", codeA + "|" + codeB);
     pa.lookup(codeB.substring(5).toLowerCase());
@@ -88,7 +90,11 @@ public class FJ {
     p("codeB", codeB.substring(5));
     pb.status("playing", "gba:sonic-battle");
     p("aSeesPlaying", la.next("online Bea:playing"));
-    String cid = pa.call("%IDB%", "gba:sonic-battle", "play");
+    lb.refuse = "Bea doesn't have that game";
+    pa.call("%IDB%", "gba:sonic-battle");
+    p("refused", la.next("declined"));
+    lb.refuse = "";
+    String cid = pa.call("%IDB%", "gba:sonic-battle");
     p("bGetsCall", lb.next("call"));
     String sa = la.next("start"), sb = lb.next("start");
     p("starts", sa + " / " + sb);
@@ -97,18 +103,18 @@ public class FJ {
     Thread t = new Thread(() -> { try {
         Map<String, Boolean> ch = new HashMap<>(); ch.put("native", true);
         mA[0] = new MatchClient().search("127.0.0.1", %MM%, "gba:sonic-battle", Arrays.asList("native"), new HashMap<String, Object>(), ch, "android", code, true,
-            Friends.searchFields("%A%", "Ann", Arrays.asList(new Friends.Friend("%IDB%", "Bea")), false, 15, false));
+            Friends.searchFields("%A%", "Ann", true));      // even asking to host, the caller doesn't
     } catch (Exception e) { p("errA", e); } });
     t.start(); Thread.sleep(300);
     Map<String, Boolean> ch = new HashMap<>(); ch.put("native", true);
     Map<String, Object> info = new HashMap<>(); Map<String, Object> nat = new HashMap<>(); nat.put("nick", RetroCmd.nickname()); info.put("native", nat);
     MatchClient.Match mB = new MatchClient().search("127.0.0.1", %MM%, "gba:sonic-battle", Arrays.asList("native"), info, ch, "android", code, true,
-        Friends.searchFields("%B%", "Bea", Arrays.asList(new Friends.Friend("%IDA%", "Ann")), false, 15, true));
+        Friends.searchFields("%B%", "Bea", false));
     t.join(5000);
     p("roleB", mB.role + "|" + mB.via);
     p("aSeesFriend", mA[0] == null ? "null" : mA[0].peerString("name") + "|" + mA[0].peerString("friend") + "|" + mA[0].peerString("nick"));
     p("failedCall", la.next("x").equals("none") ? "" : "");
-    pa.call("0123456789abcdef01234567", "gba:x", "watch");
+    pa.call("0123456789abcdef01234567", "gba:x");
     p("strangerCall", la.next("failed"));
     pb.stop();
     p("bOffline", la.next("online "));
@@ -135,7 +141,7 @@ try:
         except OSError: time.sleep(0.1)
     with tempfile.TemporaryDirectory() as out:
         open(os.path.join(out, "FJ.java"), "w").write(prog)
-        subprocess.run(["javac", "-d", out, "-sourcepath", src_root, os.path.join(out, "FJ.java")], check=True, stderr=subprocess.DEVNULL)
+        subprocess.run(["javac", "-d", out, "-sourcepath", src_root, os.path.join(out, "FJ.java")], check=True, )
         r = subprocess.run(["java", "-cp", out, "FJ"], capture_output=True, text=True, timeout=90)
     res = dict(l.split("=", 1) for l in r.stdout.strip().splitlines() if "=" in l)
     if r.returncode: print(r.stdout, r.stderr)
@@ -153,15 +159,17 @@ try:
     check("older long codes still accepted", res.get("typed") == idb)
     check("junk is not a friend", res.get("junk") == "true")
     check("friend link uses the short code", res.get("link") == "http://203.0.113.5:7778/friend?c=K7M4QZ&n=Sam+B", res.get("link"))
-    check("friends and privileges save and load", res.get("roundtrip") == "true")
+    check("friends save and load", res.get("roundtrip") == "true")
     check("damaged friend lists load as empty", res.get("badload") == "0|0")
     check("both come online", res.get("aUp") == "up" and res.get("bUp") == "up")
     check("A sees B online", res.get("aSeesB", "").startswith("online Bea"))
     check("A sees what B is playing", res.get("aSeesPlaying", "").startswith("online Bea:playing"))
-    check("B gets A's call", res.get("bGetsCall") == "call Ann gba:sonic-battle play", res.get("bGetsCall"))
+    check("B isn't listed before B adds A", res.get("notYet") == "none", res.get("notYet"))
+    check("B gets A's join request", res.get("bGetsCall") == "call Ann gba:sonic-battle", res.get("bGetsCall"))
+    check("a refused join says why", res.get("refused") == "declined Bea|Bea doesn't have that game", res.get("refused"))
     check("accepted call starts both", res.get("starts", "").startswith("start ") and " caller Bea" in res.get("starts", "") and " callee Ann" in res.get("starts", ""), res.get("starts"))
-    check("callee (already in game) hosts the friend match", res.get("roleB") == "host|invite", res.get("roleB"))
-    check("A sees B as a friend, with B's RetroArch nickname", res.get("aSeesFriend") == "Bea|true|OdinSam", res.get("aSeesFriend"))
+    check("the friend who allowed the join hosts, whatever the searches asked", res.get("roleB") == "host|invite", res.get("roleB"))
+    check("A sees B's name and RetroArch nickname", res.get("aSeesFriend") == "Bea||OdinSam", res.get("aSeesFriend"))
     check("calling a non-friend fails", res.get("strangerCall") == "failed not online", res.get("strangerCall"))
     check("A sees B go offline", res.get("bOffline", "").startswith("online"))
     check("RetroArch answers", res.get("raUp") == "true")

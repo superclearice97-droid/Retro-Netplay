@@ -63,6 +63,7 @@ STATES = ("idle", "queue", "playing")
 online = {}                # player id -> Presence (only while connected)
 presence_by_ip = {}
 pending_calls = {}         # (caller id, callee id, call id) -> (game, kind, expiry)
+call_hosts = {}            # private-room code of an accepted call -> (callee id, expiry): the one who said yes hosts
 
 
 def player_id(secret):
@@ -254,7 +255,27 @@ def peer_view(other, lane, me=None):
         v["id"] = other.id
     if lane == "native":
         v["ip"] = other.ip
+        if me is not None and is_local(other.ip):
+            if is_loopback(other.ip):
+                # the host runs on the matchmaker's own computer: the guest reaches it at the address the guest
+                # used for the matchmaker (the PC's Wi-Fi address for a phone at home), not at 127.0.0.1
+                here = (me.writer.get_extra_info("sockname") or [""])[0]
+                if here and not is_loopback(here):
+                    v["ip"] = here
+            if not is_local(me.ip):
+                v["at_matchmaker"] = True     # host is behind the matchmaker's router: use the matchmaker's address
     return v
+
+
+def is_loopback(ip):
+    return ip == "::1" or ip.startswith("127.") or ip.startswith("::ffff:127.")
+
+
+def is_local(ip):
+    """Loopback or a home-network (private) address."""
+    if is_loopback(ip):
+        return True
+    return bool(re.match(r"^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)", ip))
 
 
 def mutual(a, b):
@@ -276,8 +297,15 @@ def rank(a, b, key, now):
     return None
 
 
-def roles(w, other, lane):
-    """(host, guest) or None. The player who waited longer hosts, unless only one can, or one asked to."""
+def roles(w, other, lane, key=""):
+    """(host, guest) or None. The player who waited longer hosts, unless only one can, or one asked to.
+    In a friend's join, the friend who accepted hosts whenever they can."""
+    code = key.split("#", 1)[1] if "#" in key else ""
+    callee = call_hosts.get(code, ("", 0))[0] if code else ""
+    if callee:
+        for a, b in ((w, other), (other, w)):
+            if a.id == callee and a.can_host[lane]:
+                return a, b
     if other.can_host[lane] and w.can_host[lane]:
         return (w, other) if (w.prefer_host and not other.prefer_host) else (other, w)
     if other.can_host[lane]:
@@ -295,7 +323,7 @@ def find_match(w):
             for other in pools.get((key, lane), []):
                 if other is w or other.done or not compatible(other, w, lane):
                     continue
-                hg = roles(w, other, lane)
+                hg = roles(w, other, lane, key)
                 r = rank(w, other, key, now)
                 if hg is None or r is None:
                     continue
@@ -339,7 +367,7 @@ def dead_end(w):
         others = {o for lane in LANES for o in pools.get((key, lane), []) if o is not w and not o.done}
         for o in others:
             common = [l for l in LANES if l in w.lanes and l in o.lanes]
-            if any(compatible(o, w, l) and roles(w, o, l) for l in common):
+            if any(compatible(o, w, l) and roles(w, o, l, key) for l in common):
                 continue
             if not common:
                 why = ("You can't play this game together: one of you can only join a stream, and the other can't host "
@@ -615,6 +643,8 @@ def validate_hello(req):
 def prune_calls(now):
     for k in [k for k, v in pending_calls.items() if v[2] < now]:
         pending_calls.pop(k, None)
+    for k in [k for k, v in call_hosts.items() if v[1] < now]:
+        call_hosts.pop(k, None)
 
 
 def on_presence_msg(p, m):
@@ -657,12 +687,25 @@ def on_presence_msg(p, m):
         game, kind, _ = entry
         if m.get("ok") is True:
             code = secrets.token_hex(8)
+            call_hosts[code] = (p.id, now + 10 * 60)
             p_send(c, {"op": "start", "v": 1, "call": cid, "code": code, "game": game, "kind": kind, "as": "caller",
                        "with": {"id": p.id, "name": p.name}})
             p_send(p, {"op": "start", "v": 1, "call": cid, "code": code, "game": game, "kind": kind, "as": "callee",
                        "with": {"id": c.id, "name": c.name}})
         else:
-            p_send(c, {"op": "declined", "call": cid, "name": p.name})
+            why = m.get("msg")
+            msg = {"op": "declined", "call": cid, "name": p.name}
+            if isinstance(why, str) and why.isprintable():
+                msg["msg"] = why[:160]
+            p_send(c, msg)
+    elif op == "set_friends":
+        # the friend list changed (request sent, accepted, removed): no need to reconnect
+        old, p.friends = p.friends, id_set(m.get("friends"))
+        push_friends(p)
+        for fid in old | p.friends:
+            q = online.get(fid)
+            if q and q is not p:
+                push_friends(q)
     elif op == "cancel_call":
         to, cid = m.get("to"), m.get("call")
         if isinstance(to, str) and isinstance(cid, str) and pending_calls.pop((p.id, to, cid), None):

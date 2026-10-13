@@ -68,7 +68,6 @@ final class Notify {
             title = "Playing " + h.gameTitle(h.playingKey) + (h.playingWith.isEmpty() ? "" : " with " + h.playingWith);
             text = h.hasPresence() ? "Friends can see you're playing. Hold Start + Select for 3 seconds to find an opponent."
                     : "Hold Start + Select for 3 seconds to find an opponent.";
-            b.addAction(new Notification.Action.Builder(null, "Switch to watching", action(c, ActionReceiver.WATCH, null, 3)).build());
         } else {
             title = "Retro-Netplay";
             text = h.message.isEmpty() ? "Ready." : h.message;
@@ -133,8 +132,8 @@ final class Notify {
             int id = callNotifId(call.id);
             Notification.Builder b = builder(c, CH_CALL, true).setContentTitle(call.name).setContentText(text)
                     .setAutoCancel(true).setContentIntent(openApp(c));
-            b.addAction(new Notification.Action.Builder(null, "Accept", action(c, ActionReceiver.ACCEPT, call.id, id)).build());
-            b.addAction(new Notification.Action.Builder(null, "Decline", action(c, ActionReceiver.DECLINE, call.id, id + 50000)).build());
+            b.addAction(new Notification.Action.Builder(null, "Allow", action(c, ActionReceiver.ACCEPT, call.id, id)).build());
+            b.addAction(new Notification.Action.Builder(null, "Deny", action(c, ActionReceiver.DECLINE, call.id, id + 50000)).build());
             if (Build.VERSION.SDK_INT >= 21) b.setCategory(Notification.CATEGORY_CALL);
             nm.notify(id, b.build());
         } catch (RuntimeException ignored) { }

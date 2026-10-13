@@ -12,19 +12,26 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 
 /**
- * The "hello" connection: keeps you visible to your (mutual) friends and carries calls between you.
+ * The "hello" connection: keeps you visible to your (mutual) friends and carries joins between you.
  * Reconnects by itself. All callbacks run on this class's own thread; hop to the UI thread yourself.
+ * Every method may be called from any thread, including the UI thread: messages are sent from a background thread
+ * (Android doesn't allow network use on the UI thread).
  */
 public final class Presence {
     public interface Listener {
         void onConnected(boolean connected, String problem);
         void onOnline(List<Map<String, Object>> online);
-        void onCall(String fromId, String name, String game, String kind, String callId);
-        /** The call was accepted (by you or them). as = "caller" or "callee"; withId/withName = the friend. */
-        void onStart(String callId, String code, String game, String kind, String as, String withId, String withName);
-        void onDeclined(String callId, String name);
+        /** A friend wants to join you in this game. Answer with answer(). */
+        void onCall(String fromId, String name, String game, String callId);
+        /** The join was allowed. as = "caller" (you asked; you connect) or "callee" (you allowed; you host). */
+        void onStart(String callId, String code, String game, String as, String withId, String withName);
+        /** why: the friend's app's reason (e.g. they don't have the game), or "". */
+        void onDeclined(String callId, String name, String why);
         void onCallFailed(String callId, String msg);
         void onCallCancelled(String callId, String fromId);
         /** Your own friend code on this matchmaker (K7M-4QZ). */
@@ -45,22 +52,21 @@ public final class Presence {
 
     private final String host, secret, name;
     private final int port;
-    private final List<String> friends;
-    private final boolean hidden;
+    private volatile List<String> friends;
     private final Listener listener;
+    private final ExecutorService sender = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "presence-send");
+        t.setDaemon(true);
+        return t;
+    });
     private volatile boolean stopped;
     private volatile Socket socket;
     private volatile String state = "idle", game = "";
     private Thread thread;
 
     public Presence(String host, int port, String secret, String name, List<String> friendIds, Listener l) {
-        this(host, port, secret, name, friendIds, l, false);
-    }
-
-    /** hidden: friends don't see you online, but requests and calls still reach you. */
-    public Presence(String host, int port, String secret, String name, List<String> friendIds, Listener l, boolean hidden) {
         this.host = host; this.port = port; this.secret = secret; this.name = name;
-        this.friends = new ArrayList<>(friendIds); this.listener = l; this.hidden = hidden;
+        this.friends = new ArrayList<>(friendIds); this.listener = l;
     }
 
     public synchronized void start() {
@@ -70,10 +76,16 @@ public final class Presence {
         thread.start();
     }
 
+    /** Messages already handed over are still sent first, then the connection closes. */
     public void stop() {
         stopped = true;
-        Socket s = socket;
-        if (s != null) try { s.close(); } catch (IOException ignored) { }
+        try {
+            sender.execute(() -> { Socket s = socket; if (s != null) try { s.close(); } catch (IOException ignored) { } });
+            sender.shutdown();
+        } catch (RejectedExecutionException e) {
+            Socket s = socket;
+            if (s != null) try { s.close(); } catch (IOException ignored) { }
+        }
     }
 
     public boolean isConnected() { Socket s = socket; return s != null && s.isConnected() && !s.isClosed(); }
@@ -108,7 +120,6 @@ public final class Presence {
             hello.put("me", secret);
             hello.put("name", name);
             hello.put("friends", friends);
-            hello.put("hidden", hidden);
             write(hello);
             if (!"idle".equals(state) || !game.isEmpty()) status(state, game, can);
             BufferedReader in = new BufferedReader(new InputStreamReader(s.getInputStream(), StandardCharsets.UTF_8));
@@ -149,15 +160,19 @@ public final class Presence {
                     case "friends": listener.onOnline(listOfMaps(m.get("online"))); break;
                     case "call":
                         if (Friends.ID.matcher(str(m.get("from"))).matches())
-                            listener.onCall(str(m.get("from")), Friends.cleanName(str(m.get("name"))), str(m.get("game")), str(m.get("kind")), str(m.get("call")));
+                            listener.onCall(str(m.get("from")), Friends.cleanName(str(m.get("name"))), str(m.get("game")), str(m.get("call")));
                         break;
                     case "start": {
                         Map<?, ?> w = m.get("with") instanceof Map ? (Map<?, ?>) m.get("with") : new LinkedHashMap<>();
-                        listener.onStart(str(m.get("call")), str(m.get("code")), str(m.get("game")), str(m.get("kind")), str(m.get("as")),
+                        listener.onStart(str(m.get("call")), str(m.get("code")), str(m.get("game")), str(m.get("as")),
                                 str(w.get("id")), Friends.cleanName(str(w.get("name"))));
                         break;
                     }
-                    case "declined": listener.onDeclined(str(m.get("call")), Friends.cleanName(str(m.get("name")))); break;
+                    case "declined": {
+                        String why = str(m.get("msg"));
+                        listener.onDeclined(str(m.get("call")), Friends.cleanName(str(m.get("name"))), why.length() > 160 ? why.substring(0, 160) : why);
+                        break;
+                    }
                     case "call_failed": listener.onCallFailed(str(m.get("call")), str(m.get("msg"))); break;
                     case "call_cancelled": listener.onCallCancelled(str(m.get("call")), str(m.get("from"))); break;
                     default: break;
@@ -178,18 +193,30 @@ public final class Presence {
         return out;
     }
 
+    /** Only on a background thread (the connection's own, or the sender). */
     private void write(Map<String, Object> m) throws IOException {
         Socket s = socket;
         if (s == null) throw new IOException("not connected");
-        synchronized (this) {
-            OutputStream out = s.getOutputStream();
-            out.write((Json.stringify(m) + "\n").getBytes(StandardCharsets.UTF_8));
-            out.flush();
-        }
+        writeTo(s, Json.stringify(m) + "\n");
     }
 
+    private synchronized void writeTo(Socket s, String line) throws IOException {
+        OutputStream out = s.getOutputStream();
+        out.write(line.getBytes(StandardCharsets.UTF_8));
+        out.flush();
+    }
+
+    /** Hand a message to the sender thread. False if not connected right now. */
     private boolean quiet(Map<String, Object> m) {
-        try { write(m); return true; } catch (IOException | RuntimeException e) { return false; }
+        final Socket s = socket;
+        if (s == null || stopped) return false;
+        final String line = Json.stringify(m) + "\n";
+        try {
+            sender.execute(() -> { try { writeTo(s, line); } catch (IOException | RuntimeException ignored) { } });
+            return true;
+        } catch (RejectedExecutionException e) {
+            return false;
+        }
     }
 
     private void ping() {
@@ -216,25 +243,38 @@ public final class Presence {
 
     private volatile Map<String, Object> can;
 
-    /** Ask a friend to play (kind "play") or to watch them ("watch"). Returns the call id, or "" if not connected. */
-    public String call(String friendId, String gameKey, String kind) {
+    /** Your friend list changed: tell the matchmaker on this connection (also sent again after a reconnect). */
+    public void setFriends(List<String> friendIds) {
+        friends = new ArrayList<>(friendIds);
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("op", "set_friends");
+        m.put("friends", friends);
+        quiet(m);
+    }
+
+    /** Ask a friend to let you join their game. Returns the call id, or "" if not connected. */
+    public String call(String friendId, String gameKey) {
         StringBuilder id = new StringBuilder();
         for (int i = 0; i < 12; i++) id.append(CALL_CHARS.charAt(RNG.nextInt(CALL_CHARS.length())));
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("op", "call");
         m.put("to", friendId);
         m.put("game", gameKey);
-        m.put("kind", kind);
+        m.put("kind", "play");
         m.put("call", id.toString());
         return quiet(m) ? id.toString() : "";
     }
 
-    public void answer(String callerId, String callId, boolean ok) {
+    public void answer(String callerId, String callId, boolean ok) { answer(callerId, callId, ok, ""); }
+
+    /** why: shown to the friend when you say no (e.g. "Sam doesn't have this game"). */
+    public void answer(String callerId, String callId, boolean ok, String why) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("op", "answer");
         m.put("to", callerId);
         m.put("call", callId);
         m.put("ok", ok);
+        if (why != null && !why.isEmpty()) m.put("msg", why);
         quiet(m);
     }
 

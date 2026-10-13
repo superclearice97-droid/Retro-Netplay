@@ -243,9 +243,8 @@ public class FriendsActivity extends Activity implements Hub.Ui {
     @Override public void friendLookup(String code, boolean found, String id, String name, boolean self) {
         if (!found) { say("No player has the code " + code + " on this matchmaker (" + hub.serverHost() + "). Check the code, and that both of you use the same matchmaker."); return; }
         if (self) { say("That's your own friend code."); return; }
-        Ink.sheet(this, "Add " + name + "?", Ink.text(this, "Send a friend request to " + name + " (" + code + ")? "
-                        + "They'll get a notification to accept.", 14.5f, false, Ink.INK),
-                "Send request", () -> { codeField.setText(""); say(hub.sendRequest(id, name, code)); }, "Cancel").show();
+        codeField.setText("");
+        say(hub.sendRequest(id, name, code));
     }
 
     private void shareCode() {
@@ -265,7 +264,7 @@ public class FriendsActivity extends Activity implements Hub.Ui {
 
     @Override public void incomingCall(Hub.Call c) {
         Ink.sheet(this, c.name, Ink.text(this, c.name + " " + c.what(hub) + ".", 15, false, Ink.INK),
-                "Accept", () -> hub.answer(c.id, true), "Decline", () -> hub.answer(c.id, false)).show();
+                "Allow", () -> hub.answer(c.id, true), "Deny", () -> hub.answer(c.id, false)).show();
     }
 
     @Override public void hubChanged() {
@@ -297,7 +296,7 @@ public class FriendsActivity extends Activity implements Hub.Ui {
         sig.append('|');
         for (Friends.Friend f : fl) {
             Map<String, Object> on = hub.onlineInfo(f.id);
-            sig.append(f.id).append(f.pending).append(f.priority).append(f.join).append(f.watch).append(f.slot)
+            sig.append(f.id).append(f.pending)
                     .append(on == null ? "-" : on.get("state") + "" + on.get("game") + on.get("can")).append(';');
         }
         if (sig.toString().equals(lastSig)) return;
@@ -337,9 +336,10 @@ public class FriendsActivity extends Activity implements Hub.Ui {
         }
         if (fl.isEmpty()) {
             list.addView(Ink.caption(this, "Your friends"), fill(rq.isEmpty() ? 0 : 18));
-            list.addView(Ink.text(this, "No friends yet. Share your code, or type a friend's code under Add a friend.", 14, false, Ink.INK), fill(6));
+            list.addView(Ink.text(this, "No friends yet. Share your code, or type a friend's code under Add a friend. "
+                    + "Then tap Join next to them: they allow it, and you connect to their game.", 14, false, Ink.INK), fill(6));
         }
-        section("Playing now · tap Join", playing);
+        section("Playing now", playing);
         section("Online", online);
         section("Request sent", pending);
         section("Offline", offline);
@@ -374,16 +374,12 @@ public class FriendsActivity extends Activity implements Hub.Ui {
         names.setPadding(dp(12), 0, 0, 0);
         names.addView(Ink.text(this, f.name, 16, true, Ink.INK));
         String state = f.pending ? "Waiting for them to accept" : describe(on);
-        names.addView(Ink.text(this, state + (f.code.isEmpty() ? "" : " · " + f.code) + privileges(f), 12.5f, false, Ink.INK_SOFT));
+        names.addView(Ink.text(this, state + (f.code.isEmpty() ? "" : " · " + f.code), 12.5f, false, Ink.INK_SOFT));
         row.addView(names, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        if (!f.pending && on != null && joinable(on)) {
-            final String game = String.valueOf(on.get("game"));
+        if (!f.pending && on != null) {
             InkButton join = new InkButton(this, Icons.PLAY, "Join", true);
-            join.setContentDescription("Join " + f.name + " in " + hub.gameTitle(game));
-            join.onPress(() -> {
-                String problem = hub.callFriend(f, game, "play");
-                if (!problem.isEmpty()) say(problem);
-            });
+            join.setContentDescription(joinable(on) ? "Join " + f.name + " in " + hub.gameTitle(String.valueOf(on.get("game"))) : "Join " + f.name);
+            join.onPress(() -> join(f));
             row.addView(join);
         } else {
             row.addView(new IconView(this, Icons.CHEVRON, Ink.INK), new LinearLayout.LayoutParams(dp(22), dp(22)));
@@ -392,21 +388,48 @@ public class FriendsActivity extends Activity implements Hub.Ui {
         return row;
     }
 
+    /** Join a friend: their game if they're in one, else pick one of yours. They tap Allow, then they host. */
+    private void join(final Friends.Friend f) {
+        Map<String, Object> on = hub.onlineInfo(f.id);
+        if (on == null) { say(f.name + " isn't online right now."); return; }
+        if (joinable(on)) {
+            String p = hub.callFriend(f, String.valueOf(on.get("game")));
+            if (!p.isEmpty()) say(p);
+            return;
+        }
+        pickGameThen(g -> { String p = hub.callFriend(f, Hub.key(g)); if (!p.isEmpty()) say(p); });
+    }
+
+    interface GamePick { void picked(Map<String, Object> g); }
+
+    private void pickGameThen(final GamePick then) {
+        List<Map<String, Object>> games = hub.games();
+        if (games.isEmpty()) { say("Add your games first."); return; }
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        final Dialog[] d = new Dialog[1];
+        for (final Map<String, Object> g : games) {
+            TextView row = Ink.text(this, g.get("name") + "\n" + Hub.sys(g).label, 15, false, Ink.INK);
+            row.setPadding(dp(14), dp(10), dp(14), dp(10));
+            row.setMinimumHeight(dp(56));
+            row.setFocusable(true);
+            row.setClickable(true);
+            row.setBackground(Ink.surface(this, false));
+            row.setOnClickListener(v -> { d[0].dismiss(); then.picked(g); });
+            box.addView(row, fill(box.getChildCount() == 0 ? 0 : 8));
+        }
+        ScrollView sv = new ScrollView(this);
+        sv.addView(box);
+        d[0] = Ink.sheet(this, "Which game?", sv, null, null, "Cancel");
+        d[0].show();
+    }
+
     private String describe(Map<String, Object> on) {
         if (on == null) return "Offline";
         String st = String.valueOf(on.get("state")), game = String.valueOf(on.get("game"));
         if ("playing".equals(st) && !game.isEmpty()) return "Playing " + hub.gameTitle(game);
-        if ("queue".equals(st) && !game.isEmpty()) return "In the queue for " + hub.gameTitle(game);
+        if ("queue".equals(st) && !game.isEmpty()) return "Playing " + hub.gameTitle(game);
         return "Online";
-    }
-
-    private static String privileges(Friends.Friend f) {
-        List<String> p = new ArrayList<>();
-        if (f.priority) p.add("priority");
-        if (f.join) p.add("can join");
-        if (f.watch) p.add("can watch");
-        if (f.slot) p.add("picks slot");
-        return p.isEmpty() ? "" : " · " + android.text.TextUtils.join(", ", p);
     }
 
     private void friendSheet(final Friends.Friend f) {
@@ -416,28 +439,15 @@ public class FriendsActivity extends Activity implements Hub.Ui {
         box.addView(Ink.text(this, (f.pending ? "Request sent, waiting for them to accept" : describe(on))
                 + (f.code.isEmpty() ? "" : "\nFriend code: " + f.code), 13, false, Ink.INK_SOFT));
         final Dialog[] d = new Dialog[1];
-        if (on != null && joinable(on)) {
-            final String game = String.valueOf(on.get("game"));
-            InkButton join = new InkButton(this, Icons.PAD, "Join " + hub.gameTitle(game), true);
-            join.onPress(() -> { d[0].dismiss(); String p = hub.callFriend(f, game, "play"); if (!p.isEmpty()) say(p); });
+        if (!f.pending && on != null) {
+            String label = joinable(on) ? "Join " + hub.gameTitle(String.valueOf(on.get("game"))) : "Join (pick a game)";
+            InkButton join = new InkButton(this, Icons.PAD, label, true);
+            join.onPress(() -> { d[0].dismiss(); join(f); });
             box.addView(join, fill(14));
-            if ("playing".equals(on.get("state")) && hub.gameByKey(game) != null) {
-                InkButton watch = new InkButton(this, Icons.MONITOR, "Watch them play", false);
-                watch.onPress(() -> { d[0].dismiss(); String p = hub.callFriend(f, game, "watch"); if (!p.isEmpty()) say(p); });
-                box.addView(watch, fill(8));
-            }
-        } else if (on != null) {
-            box.addView(Ink.text(this, "They're online but not in a game. When they start one, Join appears here.", 13.5f, false, Ink.INK), fill(10));
+            box.addView(Ink.text(this, f.name + " gets Allow / Deny. Once they allow it, they host and you connect.", 12.5f, false, Ink.INK_SOFT), fill(6));
+        } else if (!f.pending) {
+            box.addView(Ink.text(this, "When they're online you can join them from here.", 13.5f, false, Ink.INK), fill(10));
         }
-        box.addView(Ink.caption(this, "What " + f.name + " may do"), fill(20));
-        final InkCheck pri = new InkCheck(this, "Priority: matched with me before anyone else", f.priority);
-        final InkCheck join = new InkCheck(this, "Join anytime: can drop into my game without asking", f.join);
-        final InkCheck watch = new InkCheck(this, "Watch: can watch my games without asking", f.watch);
-        final InkCheck slot = new InkCheck(this, "Pick a controller slot (Player 2-4) on streams I host", f.slot);
-        box.addView(pri, fill(8));
-        box.addView(join, fill(2));
-        box.addView(watch, fill(2));
-        box.addView(slot, fill(2));
         InkButton remove = new InkButton(this, Icons.TRASH, "Remove friend", false);
         remove.onPress(() -> {
             d[0].dismiss();
@@ -445,12 +455,7 @@ public class FriendsActivity extends Activity implements Hub.Ui {
                     "Remove", () -> { hub.removeFriend(f.id); lastSig = ""; hubChanged(); }, "Cancel").show();
         });
         box.addView(remove, fill(16));
-        d[0] = Ink.sheet(this, f.name, box, "Save", () -> {
-            f.priority = pri.isOn(); f.join = join.isOn(); f.watch = watch.isOn(); f.slot = slot.isOn();
-            hub.updateFriend(f);
-            lastSig = "";
-            hubChanged();
-        }, "Close");
+        d[0] = Ink.sheet(this, f.name, box, null, null, "Close");
         d[0].show();
     }
 

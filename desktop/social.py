@@ -1,7 +1,6 @@
-"""Friends for the desktop app: your id, friend links, privileges, the friends-online connection and calls.
-Same rules as the Android app (android/core/.../Friends.java, Presence.java) and PROTOCOL.md, Friends.
-
-Privileges stay in your own settings file. Only "priority" is sent to the matchmaker, because it does the matching.
+"""Friends for the desktop app, kept simple: your friend code, adding a friend by code (they accept), seeing who's
+online and what they're playing, and Join. Joining asks the friend, who taps Allow; then the friend hosts and you
+connect to them. Same rules as the Android app (android/core/.../Friends.java, Presence.java) and PROTOCOL.md.
 """
 import hashlib
 import json
@@ -15,12 +14,6 @@ from urllib.parse import parse_qs, quote, urlsplit
 ID_RE = re.compile(r"^[0-9a-f]{24}$")
 SHORT_RE = re.compile(r"^[2-9A-HJ-NP-Z]{6}$")      # friend codes like K7M-4QZ (no 0/O/1/I to mix up)
 SECRET_RE = re.compile(r"^[0-9a-f]{32,64}$")
-PRIVILEGES = (
-    ("priority", "Priority: matched with me before anyone else"),
-    ("join", "Join anytime: can drop into my game without asking"),
-    ("watch", "Watch: can watch my games without asking"),
-    ("slot", "Pick a controller slot (Player 2-4) on streams I host"),
-)
 
 
 def new_secret():
@@ -62,11 +55,8 @@ def ensure_identity(cfg):
 def norm_friend(f):
     if not isinstance(f, dict) or not ID_RE.match(str(f.get("id", ""))):
         return None
-    out = {"id": f["id"], "name": clean_name(f.get("name")) or "Friend", "code": pretty_code(f.get("code")),
-           "pending": bool(f.get("pending"))}
-    for k, _ in PRIVILEGES:
-        out[k] = bool(f.get(k))
-    return out
+    return {"id": f["id"], "name": clean_name(f.get("name")) or "Friend", "code": pretty_code(f.get("code")),
+            "pending": bool(f.get("pending"))}
 
 
 def short(code):
@@ -146,32 +136,28 @@ def find(cfg, fid):
     return next((f for f in cfg.get("friends", []) if f["id"] == fid), None)
 
 
-def search_fields(cfg, prefer_host=False, friends_only=None):
-    """Extra fields for a search request."""
+def friend_ids(cfg):
+    return [f["id"] for f in cfg.get("friends", [])]
+
+
+def search_fields(cfg, prefer_host=False):
+    """Extra fields for a search: who you are (so a friend's join knows who hosts) and your name."""
     m = {"prefer_host": bool(prefer_host)}
     if SECRET_RE.match(str(cfg.get("secret", ""))):
-        fl = cfg.get("friends", [])
-        m.update(me=cfg["secret"], name=clean_name(cfg.get("my_name", "")),
-                 friends=[f["id"] for f in fl], priority=[f["id"] for f in fl if f.get("priority")],
-                 friend_wait=15, friends_only=bool(cfg.get("friends_only") if friends_only is None else friends_only))
+        m.update(me=cfg["secret"], name=clean_name(cfg.get("my_name", "")))
     return m
-
-
-def auto_accept(cfg, from_id, kind):
-    f = find(cfg, from_id)
-    return bool(f and ((kind == "play" and f.get("join")) or (kind == "watch" and f.get("watch"))))
 
 
 class Presence(threading.Thread):
     """The "hello" connection. Calls on(event, data) from its own thread; events: up, down, online, call,
-    start, declined, failed, cancelled."""
+    start, declined, failed, cancelled, lookup, friend_request, friend_accept, request_sent, soft_error."""
 
-    def __init__(self, host, port, secret, name, friend_ids, on, hidden=False):
+    def __init__(self, host, port, secret, name, friend_ids, on):
         super().__init__(daemon=True)
-        self.host, self.port, self.secret, self.name, self.hidden = host, int(port), secret, name, hidden
+        self.host, self.port, self.secret, self.name = host, int(port), secret, name
         self.friend_ids, self.on = list(friend_ids), on
         self.sock, self.stopped, self.lock = None, False, threading.Lock()
-        self.state, self.game = "idle", ""
+        self.state, self.game, self.can = "idle", "", None
 
     def stop(self):
         self.stopped = True
@@ -201,12 +187,33 @@ class Presence(threading.Thread):
             m["can"] = can
         self.send(m)
 
-    def call(self, fid, game, kind):
-        cid = secrets.token_hex(6)
-        return cid if self.send({"op": "call", "to": fid, "game": game, "kind": kind, "call": cid}) else ""
+    def set_friends(self, ids):
+        """The friend list changed: tell the matchmaker on this same connection (it's re-sent after a reconnect)."""
+        self.friend_ids = list(ids)
+        self.send({"op": "set_friends", "friends": self.friend_ids})
 
-    def answer(self, caller, cid, ok):
-        self.send({"op": "answer", "to": caller, "call": cid, "ok": bool(ok)})
+    def set_name(self, name):
+        """A new name only shows after reconnecting, so do that."""
+        self.name = name
+        s = self.sock
+        if s:
+            try:
+                s.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+    def call(self, fid, game):
+        cid = secrets.token_hex(6)
+        return cid if self.send({"op": "call", "to": fid, "game": game, "kind": "play", "call": cid}) else ""
+
+    def answer(self, caller, cid, ok, why=""):
+        m = {"op": "answer", "to": caller, "call": cid, "ok": bool(ok)}
+        if why:
+            m["msg"] = why
+        self.send(m)
+
+    def cancel(self, fid, cid):
+        self.send({"op": "cancel_call", "to": fid, "call": cid})
 
     def lookup(self, code):
         return self.send({"op": "lookup", "code": short(code)})
@@ -229,17 +236,16 @@ class Presence(threading.Thread):
             if self.stopped:
                 break
             time.sleep(backoff)
-            backoff = min(60, backoff * 2)
+            backoff = min(30, backoff * 2)
 
     def _session(self):
         s = socket.create_connection((self.host, self.port), 8)
         s.settimeout(30)
         self.sock = s
         try:
-            self.send({"v": 1, "op": "hello", "me": self.secret, "name": self.name, "friends": self.friend_ids,
-                       "hidden": self.hidden})
+            self.send({"v": 1, "op": "hello", "me": self.secret, "name": self.name, "friends": self.friend_ids})
             if self.state != "idle":
-                self.status(self.state, self.game, getattr(self, "can", None))
+                self.status(self.state, self.game, self.can)
             buf = b""
             while not self.stopped:
                 try:
@@ -285,13 +291,15 @@ class Presence(threading.Thread):
             self.on("request_sent", str(m.get("to", "")))
         elif op == "call" and ID_RE.match(str(m.get("from", ""))):
             self.on("call", {"from": m["from"], "name": clean_name(m.get("name")) or "A friend", "game": str(m.get("game", "")),
-                             "kind": m.get("kind"), "call": str(m.get("call", ""))})
+                             "call": str(m.get("call", ""))})
         elif op == "start":
             w = m.get("with") if isinstance(m.get("with"), dict) else {}
-            self.on("start", {"code": str(m.get("code", "")), "game": str(m.get("game", "")), "kind": m.get("kind"),
-                              "as": m.get("as"), "with": clean_name(w.get("name")) or "your friend", "with_id": str(w.get("id", ""))})
+            self.on("start", {"code": str(m.get("code", "")), "game": str(m.get("game", "")), "as": m.get("as"),
+                              "with": clean_name(w.get("name")) or "your friend", "with_id": str(w.get("id", ""))})
         elif op == "declined":
-            self.on("declined", clean_name(m.get("name")) or "Your friend")
+            why = m.get("msg")
+            self.on("declined", {"name": clean_name(m.get("name")) or "Your friend",
+                                 "why": why[:160] if isinstance(why, str) and why.isprintable() else ""})
         elif op == "call_failed":
             self.on("failed", str(m.get("msg", "")))
         elif op == "call_cancelled":

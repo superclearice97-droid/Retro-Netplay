@@ -47,10 +47,8 @@ public class MainActivity extends Activity implements Hub.Ui {
     private LinearLayout gameList;
     private EditText filter;
     private final String[] checkHelp = {"", "", "", ""};
-    private Dialog openFriends;
     private int buttonMode = -1;
     private String listSignature = "";
-    private Runnable friendsRefresher;
     private final android.os.Handler ticker = new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable tick = new Runnable() {
         @Override public void run() { showState(); ticker.postDelayed(this, 1000); }
@@ -84,10 +82,8 @@ public class MainActivity extends Activity implements Hub.Ui {
     }
 
     @Override protected void onStop() {
-        hub.removeUi(this);
+        hub.removeUi(this);     // the hub goes offline by itself once no screen is open and you're not playing
         ticker.removeCallbacks(tick);
-        // stay visible to friends only while the queue or a game keeps the background service running
-        if (hub.state == Hub.State.IDLE && hub.playingKey.isEmpty()) hub.stopPresence();
         super.onStop();
     }
 
@@ -287,14 +283,13 @@ public class MainActivity extends Activity implements Hub.Ui {
         int rq = hub.requests().size();
         friendsButton.set(Icons.SIGNAL, (n == 0 ? "Friends" : "Friends  ·  " + on + " of " + n + " online")
                 + (rq == 0 ? "" : "  ·  " + rq + " request" + (rq == 1 ? "" : "s")));
-        if (friendsRefresher != null) friendsRefresher.run();
     }
 
     @Override public void say(String message) { status.setText(message); }
 
     @Override public void incomingCall(Hub.Call c) {
         Ink.sheet(this, c.name, Ink.text(this, c.name + " " + c.what(hub) + ".", 15, false, Ink.INK),
-                "Accept", () -> hub.answer(c.id, true), "Decline", () -> hub.answer(c.id, false)).show();
+                "Allow", () -> hub.answer(c.id, true), "Deny", () -> hub.answer(c.id, false)).show();
     }
 
     private void showState() {
@@ -402,7 +397,7 @@ public class MainActivity extends Activity implements Hub.Ui {
             solo.onPress(() -> { d[0].dismiss(); hub.play(this, g, false); });
             box.addView(solo, fill(0));
             InkButton q = new InkButton(this, Icons.SEARCH, "Queue only (it's already running)", false);
-            q.onPress(() -> { d[0].dismiss(); hub.queue(g, true, null, "", "play", true); });
+            q.onPress(() -> { d[0].dismiss(); hub.queue(g, true, null, "", "", true); });
             box.addView(q, fill(8));
         }
         InkButton inv = new InkButton(this, Icons.SHARE, "Invite someone with a link", false);
@@ -646,7 +641,7 @@ public class MainActivity extends Activity implements Hub.Ui {
             String problem = hub.boot(this, g);
             if (!problem.isEmpty()) { status.setText(problem); return; }
         }
-        hub.queue(g, hub.playingKey.equals(inv.game), inv.code, "your friend", "play", true);
+        hub.queue(g, hub.playingKey.equals(inv.game), inv.code, "your friend", "", true);
     }
 
     /** Old-style invite: a link anyone can open. Friends are easier, but this works with people who aren't. */
@@ -655,7 +650,7 @@ public class MainActivity extends Activity implements Hub.Ui {
         String code = Invite.newCode();
         String linkHost = prefs.getString("invite_host", "").trim();
         String link = Invite.link(linkHost.isEmpty() ? hub.serverHost() : linkHost, hub.serverPort(), Hub.key(g), code);
-        hub.queue(g, hub.playingKey.equals(Hub.key(g)), code, "", "play", true);
+        hub.queue(g, hub.playingKey.equals(Hub.key(g)), code, "", "", true);
         Intent send = new Intent(Intent.ACTION_SEND);
         send.setType("text/plain");
         send.putExtra(Intent.EXTRA_TEXT, "Play " + g.get("name") + " with me! " + link);
@@ -676,228 +671,8 @@ public class MainActivity extends Activity implements Hub.Ui {
     @Override public void friendLookup(String code, boolean found, String id, String name, boolean self) {
         if (!found) { status.setText("No player has the friend code " + code + " on this matchmaker. Check it and try again."); return; }
         if (self) { status.setText("That's your own friend code."); return; }
-        Ink.sheet(this, "Add " + name + "?", Ink.text(this, "Send a friend request to " + name + " (" + code + ")? "
-                        + "You'll be friends when they accept.", 14.5f, false, Ink.INK),
-                "Send request", () -> { status.setText(hub.sendRequest(id, name, code)); hubChanged(); }, "Cancel").show();
-    }
-
-    private void openFriends() {
-        final LinearLayout box = new LinearLayout(this);
-        box.setOrientation(LinearLayout.VERTICAL);
-        box.addView(Ink.caption(this, "Your friend code"));
-        final TextView code = Ink.text(this, "", 30, true, Ink.INK);
-        code.setLetterSpacing(0.08f);
-        code.setTextIsSelectable(true);
-        box.addView(code, fill(2));
-        final TextView me = Ink.text(this, "", 13, false, Ink.INK_SOFT);
-        box.addView(me, fill(2));
-        LinearLayout r1 = new LinearLayout(this);
-        r1.setOrientation(LinearLayout.HORIZONTAL);
-        InkButton share = new InkButton(this, Icons.SHARE, "Share my code", true);
-        share.onPress(this::shareFriendLink);
-        InkButton add = new InkButton(this, Icons.PLUS, "Add a friend", false);
-        add.onPress(this::addFriendDialog);
-        r1.addView(share, half(0));
-        r1.addView(add, half(10));
-        box.addView(r1, fill(12));
-        final LinearLayout reqs = new LinearLayout(this);
-        reqs.setOrientation(LinearLayout.VERTICAL);
-        box.addView(reqs, fill(10));
-        final LinearLayout list = new LinearLayout(this);
-        list.setOrientation(LinearLayout.VERTICAL);
-        box.addView(list, fill(14));
-        box.addView(Ink.text(this, "Friends are matched with you first. Tap a friend to play with them or to choose what they may do.",
-                12.5f, false, Ink.INK_SOFT), fill(14));
-        friendsRefresher = () -> {
-            String mine = hub.myCode();
-            code.setText(mine.isEmpty() ? "\u00b7\u00b7\u00b7-\u00b7\u00b7\u00b7" : mine);
-            me.setText(hub.serverHost().isEmpty() ? "Set the matchmaker address in Settings to get your code."
-                    : !hub.presenceUp ? "Connecting to the matchmaker..." : "Name: " + hub.myName() + ". Friends type your code under Add a friend, then you accept.");
-            reqs.removeAllViews();
-            for (final Map<String, Object> r : hub.requests()) {
-                LinearLayout card = new LinearLayout(this);
-                card.setOrientation(LinearLayout.VERTICAL);
-                card.setPadding(dp(12), dp(10), dp(12), dp(10));
-                card.setBackground(Ink.box(Ink.PAPER_DEEP, Ink.INK, 1, this));
-                String c = String.valueOf(r.get("code"));
-                card.addView(Ink.text(this, r.get("name") + (c.isEmpty() || "null".equals(c) ? "" : " (" + c + ")") + " wants to be friends", 14.5f, true, Ink.INK));
-                LinearLayout b = new LinearLayout(this);
-                b.setOrientation(LinearLayout.HORIZONTAL);
-                final String rid = String.valueOf(r.get("id"));
-                InkButton yes = new InkButton(this, Icons.CHECK, "Accept", true);
-                yes.onPress(() -> hub.answerRequest(rid, true));
-                InkButton no = new InkButton(this, Icons.CLOSE, "Decline", false);
-                no.onPress(() -> hub.answerRequest(rid, false));
-                b.addView(yes, half(0));
-                b.addView(no, half(10));
-                card.addView(b, fill(8));
-                reqs.addView(card, fill(reqs.getChildCount() == 0 ? 0 : 8));
-            }
-            list.removeAllViews();
-            List<Friends.Friend> fl = hub.friends();
-            if (fl.isEmpty()) list.addView(Ink.text(this, "No friends yet. Share your code, or add theirs.", 14, false, Ink.INK));
-            for (Friends.Friend f : fl) list.addView(friendRow(f), fill(list.getChildCount() == 0 ? 0 : 8));
-        };
-        friendsRefresher.run();
-        openFriends = Ink.sheet(this, "Friends", box, null, null, "Close", () -> friendsRefresher = null);
-        openFriends.setOnDismissListener(d -> friendsRefresher = null);
-        openFriends.show();
-    }
-
-    private View friendRow(final Friends.Friend f) {
-        Map<String, Object> on = hub.onlineInfo(f.id);
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setFocusable(true);
-        row.setClickable(true);
-        row.setMinimumHeight(dp(60));
-        row.setPadding(dp(12), dp(8), dp(12), dp(8));
-        row.setBackground(Ink.surface(this, false));
-        View dot = new View(this);
-        dot.setBackground(Ink.box(on != null ? Ink.spectrum(0.30f) : 0x00000000, Ink.INK, 1, this));
-        row.addView(dot, new LinearLayout.LayoutParams(dp(14), dp(14)));
-        LinearLayout names = new LinearLayout(this);
-        names.setOrientation(LinearLayout.VERTICAL);
-        names.setPadding(dp(12), 0, 0, 0);
-        names.addView(Ink.text(this, f.name, 15.5f, true, Ink.INK));
-        names.addView(Ink.text(this, (f.pending ? "Request sent" : describe(on)) + (f.code.isEmpty() ? "" : " \u00b7 " + f.code)
-                + privilegesShort(f), 12.5f, false, Ink.INK_SOFT));
-        row.addView(names, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        final String theirGame = on == null ? "" : String.valueOf(on.get("game"));
-        boolean joinable = !f.pending && on != null && !theirGame.isEmpty() && !"null".equals(theirGame)
-                && ("playing".equals(on.get("state")) || "queue".equals(on.get("state")));
-        if (joinable) {
-            InkButton join = new InkButton(this, Icons.PLAY, "Join", true);
-            join.setMinimumHeight(dp(44));
-            join.setContentDescription("Join " + f.name + " in " + hub.gameTitle(theirGame));
-            join.onPress(() -> {
-                if (openFriends != null) openFriends.dismiss();
-                callFriend(f, theirGame, "play");
-            });
-            row.addView(join);
-        } else {
-            row.addView(new IconView(this, Icons.CHEVRON, Ink.INK), new LinearLayout.LayoutParams(dp(22), dp(22)));
-        }
-        row.setOnClickListener(v -> friendSheet(f));
-        return row;
-    }
-
-    private String describe(Map<String, Object> on) {
-        if (on == null) return "Offline";
-        String st = String.valueOf(on.get("state")), game = String.valueOf(on.get("game"));
-        if ("playing".equals(st) && !game.isEmpty()) return "Playing " + hub.gameTitle(game);
-        if ("queue".equals(st) && !game.isEmpty()) return "In the queue for " + hub.gameTitle(game);
-        return "Online";
-    }
-
-    private static String privilegesShort(Friends.Friend f) {
-        List<String> p = new ArrayList<>();
-        if (f.priority) p.add("priority");
-        if (f.join) p.add("can join");
-        if (f.watch) p.add("can watch");
-        if (f.slot) p.add("picks slot");
-        return p.isEmpty() ? "" : " · " + android.text.TextUtils.join(", ", p);
-    }
-
-    private void friendSheet(final Friends.Friend f) {
-        final Map<String, Object> on = hub.onlineInfo(f.id);
-        LinearLayout box = new LinearLayout(this);
-        box.setOrientation(LinearLayout.VERTICAL);
-        box.addView(Ink.text(this, (f.pending ? "Request sent, waiting for them to accept" : describe(on))
-                + (f.code.isEmpty() ? "" : "\nFriend code: " + f.code), 13, false, Ink.INK_SOFT));
-        final Dialog[] d = new Dialog[1];
-        if (on != null) {
-            final String theirGame = String.valueOf(on.get("game"));
-            boolean busy = !theirGame.isEmpty() && !"null".equals(theirGame)
-                    && ("playing".equals(on.get("state")) || "queue".equals(on.get("state")) || hub.gameByKey(theirGame) != null);
-            InkButton play = new InkButton(this, Icons.PAD, busy ? "Join " + hub.gameTitle(theirGame) : "Ask them to play", true);
-            play.onPress(() -> {
-                d[0].dismiss();
-                if (busy) callFriend(f, theirGame, "play");
-                else pickGameThen(g -> callFriend(f, Hub.key(g), "play"));
-            });
-            box.addView(play, fill(14));
-            if ("playing".equals(on.get("state")) && busy) {
-                InkButton watch = new InkButton(this, Icons.MONITOR, "Watch them play", false);
-                watch.onPress(() -> { d[0].dismiss(); callFriend(f, theirGame, "watch"); });
-                box.addView(watch, fill(8));
-            }
-        } else {
-            box.addView(Ink.text(this, "When they're online you can ask them to play from here.", 13.5f, false, Ink.INK), fill(10));
-        }
-        box.addView(Ink.caption(this, "What " + f.name + " may do"), fill(20));
-        final InkCheck pri = new InkCheck(this, "Priority: matched with me before anyone else", f.priority);
-        final InkCheck join = new InkCheck(this, "Join anytime: can drop into my game without asking", f.join);
-        final InkCheck watch = new InkCheck(this, "Watch: can watch my games without asking", f.watch);
-        final InkCheck slot = new InkCheck(this, "Pick a controller slot (Player 2-4) on streams I host", f.slot);
-        box.addView(pri, fill(8));
-        box.addView(join, fill(2));
-        box.addView(watch, fill(2));
-        box.addView(slot, fill(2));
-        InkButton remove = new InkButton(this, Icons.TRASH, "Remove friend", false);
-        remove.onPress(() -> {
-            d[0].dismiss();
-            Ink.sheet(this, "Remove " + f.name + "?", Ink.text(this, "You'll stop seeing each other online. You can add them again later.", 14, false, Ink.INK),
-                    "Remove", () -> { hub.removeFriend(f.id); hubChanged(); }, "Cancel").show();
-        });
-        box.addView(remove, fill(16));
-        d[0] = Ink.sheet(this, f.name, box, "Save", () -> {
-            f.priority = pri.isOn(); f.join = join.isOn(); f.watch = watch.isOn(); f.slot = slot.isOn();
-            hub.updateFriend(f);
-            hubChanged();
-        }, "Close");
-        d[0].show();
-    }
-
-    private void callFriend(Friends.Friend f, String gameKey, String kind) {
-        String problem = hub.callFriend(f, gameKey, kind);
-        if (!problem.isEmpty()) status.setText(problem);
-    }
-
-    interface GamePick { void picked(Map<String, Object> g); }
-
-    private void pickGameThen(final GamePick then) {
-        List<Map<String, Object>> games = hub.games();
-        if (games.isEmpty()) { status.setText("Add your games first."); return; }
-        LinearLayout list = new LinearLayout(this);
-        list.setOrientation(LinearLayout.VERTICAL);
-        final Dialog[] d = new Dialog[1];
-        for (final Map<String, Object> g : games) {
-            TextView row = Ink.text(this, g.get("name") + "\n" + Hub.sys(g).label, 15, false, Ink.INK);
-            row.setPadding(dp(14), dp(10), dp(14), dp(10));
-            row.setMinimumHeight(dp(56));
-            row.setFocusable(true);
-            row.setClickable(true);
-            row.setBackground(Ink.surface(this, false));
-            row.setOnClickListener(v -> { d[0].dismiss(); then.picked(g); });
-            list.addView(row, fill(list.getChildCount() == 0 ? 0 : 8));
-        }
-        d[0] = Ink.sheet(this, "Which game?", list, null, null, "Cancel");
-        d[0].show();
-    }
-
-    private void shareFriendLink() {
-        if (hub.serverHost().isEmpty()) { status.setText("Set the matchmaker address in Settings first."); return; }
-        String linkHost = prefs.getString("invite_host", "").trim();
-        if (hub.myCode().isEmpty()) { status.setText("Still connecting to the matchmaker to get your code. Try again in a moment."); return; }
-        String link = Friends.link(linkHost.isEmpty() ? hub.serverHost() : linkHost, hub.serverPort(), hub.myCode(), hub.myName());
-        Intent send = new Intent(Intent.ACTION_SEND);
-        send.setType("text/plain");
-        send.putExtra(Intent.EXTRA_TEXT, "Add me on Retro-Netplay! My friend code: " + hub.myCode() + "\n" + link);
-        startActivity(Intent.createChooser(send, "Share your friend link"));
-    }
-
-    private void addFriendDialog() {
-        final EditText box = Ink.field(this, "Their friend code, like K7M-4QZ", "");
-        box.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
-                | android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
-        box.setTextSize(20);
-        Ink.sheet(this, "Add a friend", box, "Look up", () -> {
-            Friends.Friend f = Friends.parse(box.getText().toString());
-            if (f == null) status.setText("That isn't a friend code. Codes look like K7M-4QZ.");
-            else addFriendFromLink(f);
-        }, "Cancel").show();
+        status.setText(hub.sendRequest(id, name, code));
+        hubChanged();
     }
 
     // ================================================================ settings
@@ -933,14 +708,10 @@ public class MainActivity extends Activity implements Hub.Ui {
         final EditText inviteHost = Ink.field(this, "blank = same as above", prefs.getString("invite_host", ""));
         box.addView(inviteHost, fill(6));
         final InkCheck autoQueue = new InkCheck(this, "Join the queue when I start a game", prefs.getBoolean("auto_queue", true));
-        final InkCheck friendsOnly = new InkCheck(this, "Only match me with friends", prefs.getBoolean("friends_only", false));
-        final InkCheck showOnline = new InkCheck(this, "Let friends see when I'm online and what I'm playing", prefs.getBoolean("show_online", true));
         final InkCheck autoPorts = new InkCheck(this, "Open the port on my router automatically (recommended)", prefs.getBoolean("auto_ports", true));
         final InkCheck canHost = new InkCheck(this, "I opened port 55435 on my router myself", prefs.getBoolean("can_host", false));
         final InkCheck useParsec = new InkCheck(this, "Use Parsec instead of built-in streaming (PS2/PS3)", prefs.getBoolean("use_parsec", false));
         box.addView(autoQueue, fill(14));
-        box.addView(friendsOnly, fill(2));
-        box.addView(showOnline, fill(2));
         box.addView(autoPorts, fill(2));
         box.addView(canHost, fill(2));
         box.addView(useParsec, fill(2));
@@ -951,14 +722,11 @@ public class MainActivity extends Activity implements Hub.Ui {
         me[0] = Ink.sheet(this, "Settings", box, "Save", () -> {
             int p = 7777;
             try { p = Integer.parseInt(port.getText().toString().trim()); } catch (NumberFormatException ignored) { }
-            boolean serverChanged = !host.getText().toString().trim().equals(hub.serverHost()) || p != hub.serverPort()
-                    || showOnline.isOn() != prefs.getBoolean("show_online", true);
+            boolean serverChanged = !host.getText().toString().trim().equals(hub.serverHost()) || p != hub.serverPort();
             prefs.edit().putString("server_host", host.getText().toString().trim())
                     .putInt("server_port", p).putBoolean("can_host", canHost.isOn())
                     .putString("invite_host", inviteHost.getText().toString().trim())
                     .putBoolean("auto_queue", autoQueue.isOn())
-                    .putBoolean("friends_only", friendsOnly.isOn())
-                    .putBoolean("show_online", showOnline.isOn())
                     .putBoolean("use_parsec", useParsec.isOn())
                     .putBoolean("auto_ports", autoPorts.isOn()).apply();
             hub.setName(name.getText().toString());

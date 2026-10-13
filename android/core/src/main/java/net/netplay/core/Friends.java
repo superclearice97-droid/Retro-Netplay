@@ -16,9 +16,9 @@ import java.util.Map;
 import java.util.regex.Pattern;
 
 /**
- * Your identity and your friends. The secret never leaves the device except to the matchmaker you chose (which
- * hashes it into your id). Friends know only your id and name. Privileges are stored here and never sent anywhere,
- * except "priority", which the matchmaker needs to match you with that friend first. See PROTOCOL.md, Friends.
+ * Your identity and your friends, kept simple: a code, requests, and Join (your friend allows it and hosts).
+ * The secret never leaves the device except to the matchmaker you chose (which hashes it into your id).
+ * Friends know only your id and name. See PROTOCOL.md, Friends.
  */
 public final class Friends {
     private Friends() { }
@@ -32,14 +32,6 @@ public final class Friends {
     public static final class Friend {
         public final String id;
         public String name;
-        /** Matched with them before anyone else. */
-        public boolean priority;
-        /** They can join your game without you accepting. */
-        public boolean join;
-        /** They can watch your games without you accepting. */
-        public boolean watch;
-        /** On a stream you host, they may pick Player 2, 3 or 4. */
-        public boolean slot;
         /** Their friend code (K7M-4QZ), or "". */
         public String code = "";
         /** You sent a request and they haven't accepted yet. */
@@ -52,7 +44,6 @@ public final class Friends {
         public Map<String, Object> toMap() {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("id", id); m.put("name", name);
-            m.put("priority", priority); m.put("join", join); m.put("watch", watch); m.put("slot", slot);
             m.put("code", code); m.put("pending", pending);
             return m;
         }
@@ -63,10 +54,6 @@ public final class Friends {
             Object id = m.get("id");
             if (!(id instanceof String) || !ID.matcher((String) id).matches()) return null;
             Friend f = new Friend((String) id, m.get("name") instanceof String ? (String) m.get("name") : "Friend");
-            f.priority = Boolean.TRUE.equals(m.get("priority"));
-            f.join = Boolean.TRUE.equals(m.get("join"));
-            f.watch = Boolean.TRUE.equals(m.get("watch"));
-            f.slot = Boolean.TRUE.equals(m.get("slot"));
             f.code = pretty(m.get("code") instanceof String ? (String) m.get("code") : "");
             f.pending = Boolean.TRUE.equals(m.get("pending"));
             return f;
@@ -201,23 +188,13 @@ public final class Friends {
         return out;
     }
 
-    public static List<String> priorityIds(List<Friend> list) {
-        List<String> out = new ArrayList<>();
-        for (Friend f : list) if (f.priority) out.add(f.id);
-        return out;
-    }
-
-    /** Search fields for the matchmaker (PROTOCOL.md, Friends). preferHost: you are already in the game. */
-    public static Map<String, Object> searchFields(String secret, String name, List<Friend> list, boolean friendsOnly,
-                                                   int friendWait, boolean preferHost) {
+    /** Search fields for the matchmaker: who you are (so a friend's join knows who hosts) and your name.
+     *  preferHost: you'd rather host (you're in the game already, or you allowed a friend in). */
+    public static Map<String, Object> searchFields(String secret, String name, boolean preferHost) {
         Map<String, Object> m = new LinkedHashMap<>();
         if (secret != null && SECRET.matcher(secret).matches()) {
             m.put("me", secret);
             m.put("name", cleanName(name));
-            m.put("friends", ids(list));
-            m.put("priority", priorityIds(list));
-            m.put("friend_wait", (long) friendWait);
-            m.put("friends_only", friendsOnly);
         }
         m.put("prefer_host", preferHost);
         return m;

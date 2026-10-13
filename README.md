@@ -1,7 +1,7 @@
 # Retro-Netplay
 An app that lets you play your retro games online with friends and randoms!
 
-Tap a game to start it and join the queue, or hold Start + Select for 3 seconds in a game. Friends are matched first, and you choose what each friend may do (priority, join anytime, watch, pick a controller slot).
+Tap a game to start it and join the queue, or hold Start + Select for 3 seconds in a game. Add friends by code and tap Join next to one: they tap Allow, then they host and you connect straight to their game.
 
 
 ## Legal

@@ -1365,7 +1365,8 @@ def run_gui():
         def work():
             ok, report = stream_doctor()
             own_host_ready(refresh=True)
-            msgs.put(("call", None, lambda: (txt.delete("1.0", "end"), txt.insert("end", ("All set: you can host.\n\n" if ok else "") + report), refresh())))
+            msgs.put(("call", None, lambda: (txt.delete("1.0", "end"), txt.insert("end", ("All set: you can host.\n\n" if ok else "") + report),
+                                             refresh(), resend_status())))
         threading.Thread(target=work, daemon=True).start()
         ttk.Button(body, text="Close", command=win.destroy).pack(side="right")
 
@@ -1684,6 +1685,8 @@ def run_gui():
     def keep_finding():
         if not social_state["up"]:
             auto_find()
+        elif social_state.get("state", "idle") != "idle":
+            recheck_streaming()
         root.after(30000, keep_finding)
 
     def friends_changed():
@@ -1694,13 +1697,36 @@ def run_gui():
         redraw_friends()
 
     def presence_status(state):
+        social_state["state"] = state
         p = social_state["p"]
         if not p:
             return
+        recheck_streaming()
         g = engine.ingame["game"] if engine.ingame else current()
         key = game_key(g) if g else ""
         p.status({"searching": "queue", "session": "playing"}.get(state, "idle"), key if state != "idle" else "",
                  host_abilities(cfg, g) if state != "idle" else None)
+
+    def resend_status():
+        """Tell friends' apps again what this computer can host (e.g. right after the streaming tools were installed)."""
+        presence_status(social_state.get("state", engine.state))
+
+    def recheck_streaming():
+        """Streaming said 'not ready' earlier? Check again quietly (at most once a minute) and tell friends if it changed.
+        So installing the tools works without restarting the app."""
+        if cfg.get("stream_backend", "own") != "own" or _own_cache.get("v", (False,))[0]:
+            return
+        now = time.monotonic()
+        if social_state.get("stream_checking") or now - social_state.get("stream_checked", -1e9) < 60:
+            return
+        social_state["stream_checking"], social_state["stream_checked"] = True, now
+
+        def work():
+            ok = own_host_ready(refresh=True)[0]
+            social_state["stream_checking"] = False
+            if ok:
+                msgs.put(("call", None, lambda: (resend_status(), refresh())))
+        threading.Thread(target=work, daemon=True).start()
 
     def game_title(key):
         g = next((x for x in cfg["games"] if game_key(x) == key), None)

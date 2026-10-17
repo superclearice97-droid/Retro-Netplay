@@ -13,6 +13,27 @@ import os
 from gi.repository import Gio, GLib
 
 
+TOKEN_FILE = os.path.join(os.path.expanduser("~"), ".netplay-matchmaker", "share-choice.token")
+
+
+def _load_token():
+    try:
+        with open(TOKEN_FILE) as f:
+            return f.read().strip()[:200]
+    except OSError:
+        return ""
+
+
+def _save_token(tok):
+    """Only the desktop's own token for 'share the same window as last time'; nothing about the window itself."""
+    try:
+        os.makedirs(os.path.dirname(TOKEN_FILE), exist_ok=True)
+        with open(TOKEN_FILE, "w") as f:
+            f.write(str(tok))
+    except OSError:
+        pass
+
+
 def _sender_token(bus):
     return bus.get_unique_name().lstrip(":").replace(".", "_")
 
@@ -37,12 +58,15 @@ def request_screencast(timeout=120):
             loop.quit()
         sub = bus.signal_subscribe("org.freedesktop.portal.Desktop", "org.freedesktop.portal.Request", "Response",
                                    path, None, Gio.DBusSignalFlags.NONE, on_response)
+        timer = None
         try:
             portal.call_sync(method, args_fn(token), Gio.DBusCallFlags.NONE, -1, None)
-            GLib.timeout_add_seconds(timeout, loop.quit)
+            timer = GLib.timeout_add_seconds(timeout, lambda: (loop.quit(), False)[1])
             loop.run()
         finally:
             bus.signal_unsubscribe(sub)
+            if timer:
+                GLib.source_remove(timer)
         if "code" not in box:
             raise RuntimeError("Timed out waiting for the screen-share picker.")
         if box["code"] != 0:
@@ -56,11 +80,23 @@ def request_screencast(timeout=120):
 
     res = call("CreateSession", lambda t: GLib.Variant("(a{sv})", (opts(t, session_handle_token=GLib.Variant("s", t + "s")),)))
     session = res["session_handle"]
-    # types: 1 = monitor, 2 = window. cursor_mode 1 = hidden. persist_mode 2 = remember the choice.
-    call("SelectSources", lambda t: GLib.Variant("(oa{sv})", (session, opts(
-        t, types=GLib.Variant("u", 3), multiple=GLib.Variant("b", False), cursor_mode=GLib.Variant("u", 1),
-        persist_mode=GLib.Variant("u", 0)))))
+    # types: 1 = monitor, 2 = window. cursor_mode 1 = hidden. persist_mode 2 = remember the choice, so the
+    # "share your screen" box only asks the first time (the desktop hands back a token for next time).
+    extra = dict(types=GLib.Variant("u", 3), multiple=GLib.Variant("b", False), cursor_mode=GLib.Variant("u", 1),
+                 persist_mode=GLib.Variant("u", 2))
+    saved = _load_token()
+    if saved:
+        extra["restore_token"] = GLib.Variant("s", saved)
+    try:
+        call("SelectSources", lambda t: GLib.Variant("(oa{sv})", (session, opts(t, **extra))))
+    except GLib.Error:
+        # older portals don't know persist_mode / restore_token: ask the plain way
+        extra.pop("persist_mode", None)
+        extra.pop("restore_token", None)
+        call("SelectSources", lambda t: GLib.Variant("(oa{sv})", (session, opts(t, **extra))))
     res = call("Start", lambda t: GLib.Variant("(osa{sv})", (session, "", opts(t))))
+    if res.get("restore_token"):
+        _save_token(res["restore_token"])
     streams = res.get("streams") or []
     if not streams:
         raise RuntimeError("No screen or window was shared.")

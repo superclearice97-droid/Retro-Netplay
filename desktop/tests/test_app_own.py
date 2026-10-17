@@ -52,9 +52,13 @@ key = sh[0][sh[0].index("--key") + 1]
 cfgj = json.load(urllib.request.urlopen(f"http://127.0.0.1:{PORT + 1}/cfg?t={key}", timeout=5))
 check("host's key is the host role", cfgj["role"] == "host" and cfgj["game"] == "ps2:urban-reign", str(cfgj))
 check("guest's link key is the guest role", json.load(urllib.request.urlopen(f"http://127.0.0.1:{PORT + 1}/cfg?t=" + opened[0].split("t=")[1], timeout=5))["role"] == "guest")
-check("host message mentions picking the window", any("pick the game" in m for _, m, _ in lh))
+check("host message mentions picking the window", any("pick the game" in str(m) for _, m, _ in lh))
 time.sleep(3)   # stream_host exits here (no GStreamer in the sandbox) -> session should wind down cleanly
-check("host session winds down when the stream process ends", lh[-1][0] == "idle" and "Session ended" in lh[-1][1], lh[-1][1])
+check("host session winds down when the stream process ends",
+      lh[-1][0] == "idle" and ("Session ended" in lh[-1][1] or "The stream stopped" in lh[-1][1]), lh[-1][1])
+gmsgs = json.load(urllib.request.urlopen(f"http://127.0.0.1:{PORT + 1}/sig?t=" + opened[0].split("t=")[1], timeout=5))["msgs"]
+check("the friend's page is told why the stream stopped (no endless 'Connecting...')",
+      any(m.get("type") == "status" and "stream" in m.get("text", "") for m in gmsgs), gmsgs)
 eh.stop(); eg.stop()
 
 # two guests that can't host never pair; a Parsec user never pairs with a built-in user

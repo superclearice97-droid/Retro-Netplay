@@ -879,14 +879,30 @@ class Engine:
             await asyncio.sleep(NATIVE_GUEST_DELAY)   # give the emulator a moment to open its window
         cmd = [runtime.host_python(), str(runtime.host_script()), "--server", web,
                "--key", sess.get("key", ""), "--slot", "2"]
+        log_path = CONFIG_PATH.parent / "stream-host.log"     # what the stream did, for "why didn't it work?"
         try:
-            self.stream_proc = await asyncio.create_subprocess_exec(*cmd)
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_f = open(log_path, "w")
+        except OSError:
+            log_f = None
+        try:
+            self.stream_proc = await asyncio.create_subprocess_exec(*cmd, stdout=log_f or asyncio.subprocess.DEVNULL,
+                                                                    stderr=asyncio.subprocess.STDOUT)
         except OSError as e:
+            tell_guest(web, sess.get("key", ""), f"The stream couldn't start on your friend's computer: {e}")
             return self.set("idle", f"Couldn't start the stream: {e}")
-        self.set("session", f"Streaming {g['name']}. If your desktop asks which screen or window to share, "
-                            "pick the game. Your friend is Player 2.")
+        self.emit("share", "Choose the game window to share. A 'share your screen' box opens when your friend "
+                           "connects (only the first time).", None)
+        self.set("session", f"Streaming {g['name']}. When the 'share your screen' box opens, pick the game window. "
+                            "Your friend is Player 2.")
         done, _ = await asyncio.wait({asyncio.ensure_future(self.stream_proc.wait()),
                                       asyncio.ensure_future(self.proc.wait())}, return_when=asyncio.FIRST_COMPLETED)
+        why = ""
+        if self.stream_proc.returncode not in (None, 0):
+            why = last_problem(log_path) or f"the stream stopped (code {self.stream_proc.returncode})"
+            tell_guest(web, sess.get("key", ""), f"The stream stopped on your friend's computer: {why}")
+        if log_f:
+            log_f.close()
         for p in (self.stream_proc, self.proc):
             if p and p.returncode is None:
                 try:
@@ -895,7 +911,33 @@ class Engine:
                     pass
         self.stream_proc = None
         if self.state == "session":
-            self.set("idle", "Session ended. Press the button to find a new opponent.")
+            self.set("idle", f"The stream stopped: {why}. Details: {log_path}" if why else
+                     "Session ended. Press the button to find a new opponent.")
+
+
+def last_problem(log_path):
+    """The most telling line of the stream host's output (an error if there is one), in a short form."""
+    try:
+        lines = [l.strip() for l in open(log_path, errors="replace").read().splitlines() if l.strip()]
+    except OSError:
+        return ""
+    for key in ("STREAM ERROR:", "Can't ", "No usable", "Error", "error", "Traceback"):
+        hit = [l for l in lines if key in l]
+        if hit:
+            return hit[-1].replace("STREAM ERROR:", "").replace("[stream]", "").strip()[:200]
+    return lines[-1][:200] if lines else ""
+
+
+def tell_guest(web, key, text):
+    """Show text on the friend's stream page (through the matchmaker, as the host of that session)."""
+    import urllib.request
+    from urllib.parse import quote
+    try:
+        req = urllib.request.Request(f"{web}/sig?t={quote(key)}", data=json.dumps({"type": "status", "text": text[:300]}).encode(),
+                                     headers={"content-type": "application/json"}, method="POST")
+        urllib.request.urlopen(req, timeout=4).close()
+    except Exception:
+        pass
 
 
 # ----------------------------------------------------------------- controller hotkey
@@ -2124,6 +2166,9 @@ def run_gui():
                     continue
                 if state == "social":
                     on_social(text, clip)
+                    continue
+                if state == "share":
+                    toasts.show("Streaming to your friend", text, [("OK", lambda: None, False)], timeout=25, key="share")
                     continue
                 if state == "link":
                     link_var.set(text)

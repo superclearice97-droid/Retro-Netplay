@@ -232,13 +232,25 @@ class Session:
         elif t == "bye":
             self.end("guest left")
 
+    def status(self, text):
+        """Tell the friend's screen what the computer is doing (so they never stare at 'Connecting...' blindly)."""
+        log(text)
+        self.signal.send({"type": "status", "text": str(text)[:300]})
+
     def restart_backend(self):
         if self.backend:
             self.backend.stop()
         self.last_seq = None
         self.pad.release_all()
+        self.status("Your friend's computer is starting the stream...")
         self.backend = self.backend_factory(self)
-        self.backend.start()
+        try:
+            self.backend.start()
+        except Exception as e:                  # say why on both screens instead of hanging
+            self.backend = None
+            self.status(f"The stream couldn't start on your friend's computer: {e}")
+            print(f"STREAM ERROR: {e}", flush=True)
+            self.end(f"couldn't start: {e}")
 
     # ---- from the backend
     def on_offer(self, sdp):
@@ -395,7 +407,12 @@ class GstBackend:
         chain = []
         if o["capture"] == "portal":
             import portal_capture
+            if hasattr(self.s, "status"):
+                self.s.status("Waiting for your friend to choose the game window on their computer "
+                              "(a 'share your screen' box opens there)...")
             fd, node = portal_capture.request_screencast()
+            if hasattr(self.s, "status"):
+                self.s.status("Game window chosen. Connecting the video...")
             self.keepalive.append(fd)
             chain += [self._mk("pipewiresrc", {"fd": fd, "path": str(node), "do-timestamp": True}),
                       self._mk("videorate", {"drop-only": True}), self._caps(f"video/x-raw,framerate=0/1,max-framerate={o['fps']}/1")]

@@ -172,6 +172,8 @@ async function signalLoop() {
 async function onSignal(m, queued) {
   const pc = state.pc;
   if (m.type === "offer") {
+    state.heard = true;
+    if (!state.playing) say("Connecting the video...");
     await pc.setRemoteDescription({ type: "offer", sdp: m.sdp });
     for (const c of queued.splice(0)) await pc.addIceCandidate(c).catch(() => {});
     await pc.setLocalDescription(await pc.createAnswer());
@@ -179,6 +181,9 @@ async function onSignal(m, queued) {
   } else if (m.type === "ice") {
     const c = { candidate: m.candidate, sdpMLineIndex: m.sdpMLineIndex ?? 0 };
     if (pc.remoteDescription) await pc.addIceCandidate(c).catch(() => {}); else queued.push(c);
+  } else if (m.type === "status" && typeof m.text === "string") {
+    state.heard = true;
+    if (!state.playing) say(m.text.slice(0, 300));
   } else if (m.type === "bye") {
     finish("Your friend ended the session.");
   }
@@ -210,6 +215,7 @@ async function start() {
     try { e.receiver.playoutDelayHint = 0; } catch (_) {}
     if (e.track.kind === "video") {
       video.play().catch(() => {});
+      state.playing = true;
       say("");
     }
   };
@@ -220,6 +226,17 @@ async function start() {
   };
   signalLoop();
   await post({ type: "hello" });
+  // nothing back from the computer after a while: say what usually helps instead of spinning forever
+  setTimeout(() => {
+    if (!state.heard && !state.playing && !state.ended)
+      say("Still waiting for your friend's computer. Retro-Netplay must be open there with the game running. "
+        + "If this stays, close this page and press Join again.");
+  }, 20000);
+  setTimeout(() => {
+    if (state.heard && !state.playing && !state.ended && state.pc && state.pc.connectionState !== "connected")
+      say("The video hasn't arrived. Both devices need to be on the same Wi-Fi (not a guest network). "
+        + "Some browsers block this kind of video (Brave can): if it stays, set Chrome as the default browser and press Join again.");
+  }, 45000);
   setInterval(pingLoop, 1000);
   setInterval(statsLoop, 1000);
 }

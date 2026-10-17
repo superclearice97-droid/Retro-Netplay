@@ -1881,7 +1881,7 @@ def run_gui():
                 auto_find(force=True)
             else:
                 restart_presence()
-        ttk.Button(body, text="Try again", command=try_again).pack(anchor="w", pady=(4, 0))
+        again_btn = ttk.Button(body, text="Try again", command=try_again)
 
         ttk.Label(body, text="YOUR FRIEND CODE", font=(fam, 9, "bold")).pack(anchor="w", pady=(12, 0))
         code_row = ttk.Frame(body)
@@ -1982,6 +1982,10 @@ def run_gui():
                 why = social_state["why"]
                 conn_note.config(text=(f"({why}) " if why else "") + "Is Retro-Netplay open on that computer, on the same Wi-Fi? "
                                       "Retro-Netplay keeps looking by itself, or press Try again.")
+            if social_state["up"]:
+                again_btn.pack_forget()
+            elif not again_btn.winfo_manager():
+                again_btn.pack(anchor="w", pady=(4, 0), after=conn_note)
             code_lbl.config(text=cfg.get("my_code") if social_state["up"] and cfg.get("my_code") else "···-···")
             for w in req_box.winfo_children():
                 w.destroy()

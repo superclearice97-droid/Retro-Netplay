@@ -28,10 +28,10 @@ SETUP (about 5 minutes)
      named for you, so it matches the other player's name), check your emulators, the online
      settings, and your controllers. It can also add Retro-Netplay to your app menu.
   4. Paste your Parsec peer ID in Settings only if you chose Parsec for Streaming.
-  5. Decide who runs the matchmaker. ONE of you opens Settings and ticks
-     "Run the matchmaker on this PC". The other types that PC's address in
-     "Matchmaker address". Over the internet, the host must allow port 7777 (TCP)
-     through the router/firewall. The default 127.0.0.1 only works on one PC.
+  5. At home there's nothing to set up: computers and phones on the same Wi-Fi find each
+     other by themselves (they all pick the same matchmaker). For friends in another house,
+     one of you shares an internet address (Friends > My address...) and the host's router
+     must let port 7777 (TCP) in.
   6. Double-click your game (or select it and click "Play"). RetroArch games start right away and you're queued; other games
      start when you're matched. Hold Start + Select for 3 seconds to join or leave the queue.
 

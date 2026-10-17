@@ -107,6 +107,8 @@ final class Hub {
     void addUi(Ui u) {
         synchronized (uis) { if (!uis.contains(u)) uis.add(u); }
         main.removeCallbacks(stopWhenUnused);
+        main.removeCallbacks(keepFinding);
+        main.postDelayed(keepFinding, 30000);
     }
 
     /** When the last screen closes (and you're not queued or playing), stop being online a moment later. Waiting a
@@ -185,7 +187,7 @@ final class Hub {
     /** Ask the matchmaker who has this code; the answer arrives at Ui.friendLookup. "" or a reason it can't. */
     String lookupCode(String code) {
         Presence p = presence;
-        if (p == null || !presenceUp) return serverHost().isEmpty() ? "Set the matchmaker address in Settings first." : "Still connecting to the matchmaker. Try again in a moment.";
+        if (p == null || !presenceUp) return serverHost().isEmpty() ? "Looking for Retro-Netplay on your Wi-Fi. Open it on your computer too." : "Still connecting to the matchmaker. Try again in a moment.";
         p.lookup(code);
         return "";
     }
@@ -334,31 +336,86 @@ final class Hub {
         return t;
     }
 
-    /** Look for a matchmaker on the home network; the answer comes back on the main thread. */
+    /** This phone's address on the Wi-Fi, or "" (used to knock on the other addresses when broadcasts are dropped). */
+    String myWifiIp() {
+        try {
+            android.net.wifi.WifiManager w = (android.net.wifi.WifiManager) app.getSystemService(Context.WIFI_SERVICE);
+            @SuppressWarnings("deprecation") int ip = w.getConnectionInfo().getIpAddress();
+            if (ip == 0) return "";
+            return (ip & 0xFF) + "." + ((ip >> 8) & 0xFF) + "." + ((ip >> 16) & 0xFF) + "." + ((ip >> 24) & 0xFF);
+        } catch (RuntimeException e) {
+            return "";
+        }
+    }
+
+    /** Look for matchmakers on the home network; the answer comes back on the main thread. */
     void findOnNetwork(FoundCallback cb) {
         final List<String> targets = broadcastTargets();
+        final String me = myWifiIp();
         new Thread(() -> {
-            List<net.netplay.core.Lan.Found> res = net.netplay.core.Lan.discover(targets);
+            List<net.netplay.core.Lan.Found> res = net.netplay.core.Lan.findAll(targets, me, net.netplay.core.Lan.DEFAULT_PORT);
             main.post(() -> cb.found(res));
         }, "discover").start();
     }
 
+    /** A matchmaker chosen by hand. A home-network address keeps finding itself again if it moves; an internet one stays. */
     void useMatchmaker(String host, int port) {
-        prefs.edit().putString("server_host", host).putInt("server_port", port).apply();
+        prefs.edit().putString("server_host", host).putInt("server_port", port)
+                .putBoolean("auto_mm", net.netplay.core.Lan.isPrivate(host)).putString("server_name", "").apply();
         restartPresence();
         changed();
     }
 
-    /** No matchmaker set yet? Use the one on this network if there is one. */
-    void autoFind() {
-        if (!serverHost().isEmpty()) return;
+    /** Looking for the matchmaker on the Wi-Fi right now. */
+    volatile boolean finding;
+    /** The last look found no Retro-Netplay on this Wi-Fi. */
+    volatile boolean nothingFound;
+    private long foundAt;
+
+    String serverName() {
+        String n = prefs.getString("server_name", "");
+        return n.isEmpty() ? serverHost() : n;
+    }
+
+    /** Pick the matchmaker by itself unless an internet address was typed on purpose. */
+    boolean autoOn() {
+        String h = serverHost();
+        return prefs.getBoolean("auto_mm", true) && (h.isEmpty() || net.netplay.core.Lan.isPrivate(h));
+    }
+
+    void autoFind() { autoFind(false); }
+
+    /** Find this home network's matchmaker and use it: when the app opens, and whenever the connection drops.
+     *  Every device picks the same one by the same rule (Lan.pick), so nobody types or passes on an address. */
+    void autoFind(boolean force) {
+        if (!autoOn() || finding) return;
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (!force && foundAt != 0 && now - foundAt < 20000) return;
+        foundAt = now;
+        finding = true;
+        changed();
         findOnNetwork(list -> {
-            if (list.isEmpty() || !serverHost().isEmpty()) return;
-            net.netplay.core.Lan.Found f = list.get(0);
-            useMatchmaker(f.host, f.port);
-            say("Using the matchmaker on " + f + ", found on your home network.", false);
+            finding = false;
+            net.netplay.core.Lan.Found f = net.netplay.core.Lan.pick(list);
+            nothingFound = f == null;
+            if (f != null) {
+                boolean moved = !f.host.equals(serverHost()) || f.port != serverPort();
+                prefs.edit().putString("server_host", f.host).putInt("server_port", f.port)
+                        .putString("server_name", f.name).apply();
+                if (moved || !presenceUp) restartPresence();
+            }
+            changed();
         });
     }
+
+    /** While a screen is open and the connection is down, look again every 30 seconds. */
+    private final Runnable keepFinding = new Runnable() {
+        @Override public void run() {
+            if (uiList().isEmpty()) return;
+            if (!presenceUp) autoFind(false);
+            main.postDelayed(this, 30000);
+        }
+    };
     int serverPort() { return prefs.getInt("server_port", 7777); }
 
     /** Visible to friends (and reachable for calls) while the app or the queue is running. */
@@ -404,7 +461,10 @@ final class Hub {
                     synchronized (pendingAccepts) { todo = new ArrayList<>(pendingAccepts); pendingAccepts.clear(); }
                     if (pp != null) for (String id : todo) pp.accept(id);
                 }
-                if (!c) synchronized (online) { online.clear(); }
+                if (!c) {
+                    synchronized (online) { online.clear(); }
+                    main.post(() -> autoFind(false));   // the matchmaker went away or moved: look for it again
+                }
                 changed();
             }
             @Override public void onOnline(List<Map<String, Object>> list) {

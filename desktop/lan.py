@@ -32,15 +32,37 @@ def is_loopback(host):
     return h in ("", "localhost", "0.0.0.0", "::1") or h.startswith("127.")
 
 
+_HOME_NETS = [ipaddress.ip_network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "100.64.0.0/10")]
+
+
 def is_private(host):
+    """A home-network address (same ranges as Lan.isPrivate on the phone)."""
     try:
-        return ipaddress.ip_address(host).is_private
+        a = ipaddress.ip_address(str(host).strip())
     except ValueError:
         return False
+    return a.version == 4 and any(a in n for n in _HOME_NETS)
+
+
+def _entry(host, m, fallback_port=DEFAULT_PORT):
+    p = m.get("port", fallback_port)
+    if m.get("app") != "retro-netplay" or not isinstance(p, int) or not 0 < p < 65536:
+        return None
+    since = m.get("since")
+    return {"host": host, "port": p, "name": str(m.get("name", ""))[:40],
+            "since": since if isinstance(since, int) else None, "id": str(m.get("id", ""))[:32]}
+
+
+def _merge(found, e):
+    """One entry per matchmaker (the same one can answer from two addresses, e.g. cable and Wi-Fi)."""
+    key = e["id"] or f"{e['host']}:{e['port']}"
+    old = found.get(key)
+    if old is None or (is_loopback(old["host"]) and not is_loopback(e["host"])):
+        found[key] = e
 
 
 def discover(timeout=1.5, port=DEFAULT_PORT + 2):
-    """-> [{"host", "port", "name"}] for matchmakers that answered on this network."""
+    """-> [{"host", "port", "name", "since", "id"}] for matchmakers that answered on this network."""
     found = {}
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
@@ -69,15 +91,64 @@ def discover(timeout=1.5, port=DEFAULT_PORT + 2):
                 m = json.loads(data)
             except ValueError:
                 continue
-            p = m.get("port")
-            if m.get("app") == "retro-netplay" and isinstance(p, int) and 0 < p < 65536:
-                host = addr[0]
-                if is_loopback(host) and ip:
-                    host = ip                # show the address other devices would use
-                found[(host, p)] = {"host": host, "port": p, "name": str(m.get("name", ""))[:40]}
+            e = _entry(addr[0], m) if isinstance(m, dict) else None
+            if e:
+                if is_loopback(e["host"]) and ip:
+                    e["host"] = ip           # show the address other devices would use
+                _merge(found, e)
     finally:
         s.close()
     return sorted(found.values(), key=lambda x: (is_loopback(x["host"]), x["host"]))
+
+
+def probe(host, port=DEFAULT_PORT, timeout=0.4):
+    """Ask one address "are you a Retro-Netplay matchmaker?" over TCP. -> entry or None."""
+    try:
+        with socket.create_connection((host, int(port)), timeout) as c:
+            c.settimeout(1.0)
+            c.sendall(b'{"v":1,"op":"whoami"}\n')
+            m = json.loads(c.makefile("r").readline() or "{}")
+    except (OSError, ValueError):
+        return None
+    if not isinstance(m, dict) or m.get("op") != "whoami":
+        return None
+    m.setdefault("app", "retro-netplay")      # older matchmakers answer whoami without saying who they are
+    return _entry(host, dict(m, port=int(port)))
+
+
+def sweep(port=DEFAULT_PORT, timeout=0.4):
+    """When a router drops broadcasts: knock on every address of this home network (x.x.x.1 - .254) directly."""
+    ip = lan_ip()
+    if not ip or not is_private(ip):
+        return []
+    base = ".".join(ip.split(".")[:3])
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(64) as ex:
+        res = list(ex.map(lambda n: probe(f"{base}.{n}", port, timeout), range(1, 255)))
+    found = {}
+    for e in res:
+        if e:
+            _merge(found, e)
+    return list(found.values())
+
+
+def pick(found):
+    """The matchmaker everyone on this network should use: running longest, then the lowest address.
+    Phones apply the same rule (Lan.pick), so everybody lands on the same one."""
+    if not found:
+        return None
+    def key(e):
+        try:
+            addr = tuple(int(x) for x in e["host"].split("."))
+        except ValueError:
+            addr = (999,)
+        return (e["since"] if e.get("since") is not None else 1 << 62, addr)
+    return min(found, key=key)
+
+
+def find_all(port=DEFAULT_PORT):
+    """Broadcast first; if nothing answers, try every address on the network."""
+    return discover(port=port + 2) or sweep(port)
 
 
 def _distro():

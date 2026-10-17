@@ -47,7 +47,7 @@ public class FriendsActivity extends Activity implements Hub.Ui {
         super.onStart();
         hub.addUi(this);
         if (!hub.hasPresence()) hub.restartPresence();
-        if (hub.serverHost().isEmpty()) hub.autoFind();
+        if (!hub.presenceUp) hub.autoFind(hub.serverHost().isEmpty());
         lastSig = "";
         hubChanged();
     }
@@ -116,25 +116,19 @@ public class FriendsActivity extends Activity implements Hub.Ui {
         conn.addView(connActions, fill(8));
         LinearLayout r1 = new LinearLayout(this);
         r1.setOrientation(LinearLayout.HORIZONTAL);
-        InkButton find = new InkButton(this, Icons.SEARCH, "Find on my network", false);
-        find.onPress(() -> {
-            say("Looking on your home network...");
-            hub.findOnNetwork(found -> {
-                if (found.isEmpty()) { say("No matchmaker found on this Wi-Fi. Is the computer's app open with \"Run the matchmaker on this PC\" on? Its firewall may block it (see the computer's Settings)."); return; }
-                Lan.Found f = found.get(0);
-                hub.useMatchmaker(f.host, f.port);
-                say("Connecting to " + f + "...");
-            });
+        InkButton retry = new InkButton(this, Icons.SIGNAL, "Try again", true);
+        retry.onPress(() -> {
+            if (hub.autoOn()) hub.autoFind(true); else hub.restartPresence();
+            say("");
         });
-        InkButton retry = new InkButton(this, Icons.SIGNAL, "Try again", false);
-        retry.onPress(() -> { hub.restartPresence(); say("Trying again..."); });
-        r1.addView(find, half(0));
-        r1.addView(retry, half(8));
+        InkButton typeAddr = new InkButton(this, Icons.LINK, "Internet address", false);
+        r1.addView(retry, half(0));
+        r1.addView(typeAddr, half(8));
         connActions.addView(r1);
         LinearLayout r2 = new LinearLayout(this);
         r2.setOrientation(LinearLayout.HORIZONTAL);
         r2.setGravity(Gravity.CENTER_VERTICAL);
-        addrField = Ink.field(this, "Computer's address, e.g. 192.168.1.23", "");
+        addrField = Ink.field(this, "Address a friend gave you", "");
         addrField.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         addrField.setImeOptions(EditorInfo.IME_ACTION_GO);
         addrField.setOnEditorActionListener((v, id, e) -> { connectByAddress(); return true; });
@@ -144,6 +138,8 @@ public class FriendsActivity extends Activity implements Hub.Ui {
         LinearLayout.LayoutParams gp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         gp.leftMargin = dp(8);
         r2.addView(go, gp);
+        r2.setVisibility(View.GONE);         // only for a friend's matchmaker on the internet; home finds itself
+        typeAddr.onPress(() -> r2.setVisibility(r2.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE));
         connActions.addView(r2, fill(8));
         left.addView(conn, fill(14));
 
@@ -163,11 +159,7 @@ public class FriendsActivity extends Activity implements Hub.Ui {
         r3.setOrientation(LinearLayout.HORIZONTAL);
         InkButton share = new InkButton(this, Icons.SHARE, "Share my code", false);
         share.onPress(this::shareCode);
-        InkButton addr = new InkButton(this, Icons.LINK, "My address", false);
-        addr.onPress(() -> startActivity(new Intent(this, MainActivity.class).putExtra("open", "address")
-                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP)));
         r3.addView(share, half(0));
-        r3.addView(addr, half(8));
         left.addView(r3, fill(10));
 
         // --- add a friend (right here, no extra window)
@@ -270,18 +262,26 @@ public class FriendsActivity extends Activity implements Hub.Ui {
     @Override public void hubChanged() {
         if (connTitle == null) return;
         String host = hub.serverHost();
-        if (host.isEmpty()) {
-            connTitle.setText("Not connected");
-            connText.setText("No matchmaker yet. On the computer that runs it, open Retro-Netplay. Then tap Find on my network, or type the computer's address (it's under My address on the computer).");
-        } else if (hub.presenceUp) {
-            connTitle.setText("Connected · " + host + ":" + hub.serverPort());
-            connText.setText("Friends who use this same matchmaker can add you and see you online.");
-        } else {
+        String advice = "Open Retro-Netplay on the computer, on the same Wi-Fi as this device. This keeps looking by itself.";
+        if (hub.presenceUp) {
+            connTitle.setText("Connected \u00b7 " + hub.serverName());
+            connText.setText("Friends on your Wi-Fi connect here by themselves. Nothing to type.");
+        } else if (hub.finding) {
+            connTitle.setText("Looking for your computer...");
+            connText.setText("Make sure Retro-Netplay is open on the computer.");
+        } else if (!hub.autoOn()) {
             connTitle.setText("Can't reach " + host + ":" + hub.serverPort());
             String why = hub.presenceProblem;
-            connText.setText((why.isEmpty() ? "Connecting..." : why) + " Is the app open on that computer, with the matchmaker on? "
-                    + "Same Wi-Fi? The computer's firewall may block it (its Settings show the fix). Or try another address below.");
+            connText.setText((why.isEmpty() ? "Connecting... " : why + " ") + "Check the address your friend gave you, or tap Try again.");
+        } else if (host.isEmpty() || hub.nothingFound) {
+            connTitle.setText("Can't find your computer yet");
+            connText.setText(advice);
+        } else {
+            connTitle.setText("Connecting to " + hub.serverName() + "...");
+            String why = hub.presenceProblem;
+            connText.setText((why.isEmpty() ? "" : why + " ") + advice);
         }
+        connActions.setVisibility(hub.presenceUp ? View.GONE : View.VISIBLE);
         String code = hub.myCode();
         myCode.setText(code.isEmpty() ? "···-···" : code);
         myCode.setAlpha(hub.presenceUp ? 1f : 0.45f);

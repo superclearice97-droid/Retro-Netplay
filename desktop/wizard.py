@@ -189,46 +189,27 @@ def emulators_page(body, tk, ttk, filedialog, cfg, ctx, fam, win):
 
 # ------------------------------------------------------------------ step 3: online
 def online_page(body, tk, ttk, filedialog, cfg, ctx, fam, win):
+    import lan
     ttk.Label(body, wraplength=500, justify="left", text=(
-        "Players find each other through a matchmaker. Usually one friend runs it and shares the address.")).pack(anchor="w")
-    mode = tk.StringVar(value="run" if cfg.get("run_server") else "friend")
-    host = tk.StringVar(value="" if cfg.get("server_host") in ("", "127.0.0.1") and not cfg.get("run_server") else cfg.get("server_host", ""))
+        "Players find each other through a matchmaker. At home there's nothing to set up: Retro-Netplay on this "
+        "computer and on your phones find each other on the Wi-Fi by themselves.")).pack(anchor="w")
+    typed = str(cfg.get("server_host", "")).strip()
+    internet = typed and not lan.is_loopback(typed) and not lan.is_private(typed)
+    mode = tk.StringVar(value="friend" if internet else "run")
+    host = tk.StringVar(value=typed if internet else "")
     f1 = ttk.Frame(body)
     f1.pack(fill="x", pady=(10, 0))
-    ttk.Radiobutton(f1, text="A friend gave me an address:", variable=mode, value="friend").pack(anchor="w")
+    ttk.Radiobutton(f1, text="Automatic (recommended)", variable=mode, value="run").pack(anchor="w")
+    ttk.Label(f1, wraplength=470, justify="left", foreground=ink.SOFT, text=(
+        "Phones and computers on your Wi-Fi connect by themselves. Nothing to type.")).pack(anchor="w", padx=(24, 0), pady=(0, 8))
+    ttk.Radiobutton(f1, text="A friend runs a matchmaker on the internet. Their address:", variable=mode, value="friend").pack(anchor="w")
     erow = ttk.Frame(f1)
     erow.pack(fill="x", padx=(24, 0), pady=(2, 2))
     e = ttk.Entry(erow, textvariable=host)
     e.pack(side="left", fill="x", expand=True)
-    found_lbl = ttk.Label(f1, text="", wraplength=470, justify="left", foreground=ink.SOFT)
-
-    def find():
-        found_lbl.config(text="Looking on your home network...")
-        def work():
-            import lan
-            res = lan.discover()
-            def show():
-                if not win.winfo_exists():
-                    return
-                if res:
-                    host.set(res[0]["host"] if res[0]["port"] == 7777 else f"{res[0]['host']}")
-                    if res[0]["port"] != 7777:
-                        cfg["server_port"] = res[0]["port"]
-                    mode.set("friend")
-                    found_lbl.config(text=f"Found {res[0]['name'] or 'a matchmaker'} at {res[0]['host']}."
-                                     + (f" ({len(res) - 1} more on this network.)" if len(res) > 1 else ""))
-                else:
-                    found_lbl.config(text="No matchmaker found on this network. Is the other computer's app open "
-                                          "with \"Run the matchmaker on this PC\" on?")
-            win.after(0, show)
-        threading.Thread(target=work, daemon=True).start()
-    ttk.Button(erow, text="Find on my network", command=find).pack(side="left", padx=(6, 0))
-    found_lbl.pack(anchor="w", padx=(24, 0), pady=(0, 6))
-    ttk.Radiobutton(f1, text="I'll run it on this computer (share your address with friends)", variable=mode, value="run").pack(anchor="w")
-    import lan
+    e.bind("<FocusIn>", lambda _e: mode.set("friend"))
     ttk.Label(f1, wraplength=470, justify="left", foreground=ink.SOFT, text=(
-        f"Other devices at home find it with \"Find on my network\" (this computer is {lan.lan_ip() or 'on your network'}). "
-        "For friends elsewhere, your router must let port 7777 and 7778 in.\n" + lan.FIREWALL_HELP)).pack(anchor="w", padx=(24, 0))
+        "Only if they gave you one. Leave it on Automatic otherwise.")).pack(anchor="w", padx=(24, 0))
 
     auto = tk.BooleanVar(value=cfg.get("auto_ports", True))
     ttk.Checkbutton(body, variable=auto, text="Open ports on my router automatically (recommended)").pack(anchor="w", pady=(16, 2))
@@ -243,12 +224,15 @@ def online_page(body, tk, ttk, filedialog, cfg, ctx, fam, win):
 
     def save():
         cfg["auto_ports"] = auto.get()
-        cfg["run_server"] = mode.get() == "run"
         h = host.get().strip()
-        if cfg["run_server"]:
-            cfg["server_host"] = cfg.get("server_host") or "127.0.0.1"
-        elif h:
-            cfg["server_host"] = h
+        if mode.get() == "run" or not h:
+            cfg["run_server"], cfg["auto_mm"] = True, True
+            if not lan.is_private(str(cfg.get("server_host", ""))):
+                cfg["server_host"] = "127.0.0.1"
+        else:
+            a = lan.parse_address(h)
+            if a:
+                cfg["server_host"], cfg["server_port"], cfg["auto_mm"] = a[0], a[1], lan.is_private(a[0])
 
     def run_test():
         save()

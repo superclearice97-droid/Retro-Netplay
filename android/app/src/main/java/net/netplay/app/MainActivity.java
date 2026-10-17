@@ -305,7 +305,7 @@ public class MainActivity extends Activity implements Hub.Ui {
             stateText.setText(hub.playingWith.isEmpty() ? "Hold Start + Select for 3 seconds to look for an opponent." : "With " + hub.playingWith);
         } else {
             stateTitle.setText("Not in the queue");
-            stateText.setText(hub.serverHost().isEmpty() ? "Set the matchmaker address in Settings first." : "Pick a game below.");
+            stateText.setText(hub.serverHost().isEmpty() ? "Looking for Retro-Netplay on your Wi-Fi. Open it on your computer too." : "Pick a game below.");
         }
         int mode = q ? 1 : (!hub.playingKey.isEmpty() ? 2 : 0);
         if (mode != buttonMode) {          // only when it changes, so the icon doesn't redraw every second
@@ -629,7 +629,8 @@ public class MainActivity extends Activity implements Hub.Ui {
                         + "Looking for the matchmaker on your home network...");
                 hub.findOnNetwork(list -> {
                     if (list.isEmpty()) { status.setText("No matchmaker found on this Wi-Fi. Ask for a new link, or set the address in Settings."); return; }
-                    hub.useMatchmaker(list.get(0).host, list.get(0).port);
+                    net.netplay.core.Lan.Found b = net.netplay.core.Lan.pick(list);
+                    hub.useMatchmaker(b.host, b.port);
                     joinWithLink(text);
                 });
                 return;
@@ -646,7 +647,7 @@ public class MainActivity extends Activity implements Hub.Ui {
 
     /** Old-style invite: a link anyone can open. Friends are easier, but this works with people who aren't. */
     private void inviteWithLink(Map<String, Object> g) {
-        if (hub.serverHost().isEmpty()) { status.setText("Set the matchmaker address in Settings first."); return; }
+        if (hub.serverHost().isEmpty()) { status.setText("Looking for Retro-Netplay on your Wi-Fi. Open it on your computer too."); return; }
         String code = Invite.newCode();
         String linkHost = prefs.getString("invite_host", "").trim();
         String link = Invite.link(linkHost.isEmpty() ? hub.serverHost() : linkHost, hub.serverPort(), Hub.key(g), code);
@@ -694,9 +695,10 @@ public class MainActivity extends Activity implements Hub.Ui {
             foundNote.setText("Looking on your home network...");
             hub.findOnNetwork(list -> {
                 if (list.isEmpty()) { foundNote.setText("None found on this Wi-Fi. Is the computer's matchmaker on, and on the same Wi-Fi?"); return; }
-                host.setText(list.get(0).host);
-                port.setText(String.valueOf(list.get(0).port));
-                foundNote.setText("Found " + list.get(0) + ". Press Save.");
+                net.netplay.core.Lan.Found b = net.netplay.core.Lan.pick(list);
+                host.setText(b.host);
+                port.setText(String.valueOf(b.port));
+                foundNote.setText("Found " + b + ". Press Save.");
             });
         });
         box.addView(findMm, fill(8));

@@ -89,7 +89,7 @@ MANUAL = """HOW TO SET UP CONTROLLERS FOR 2 PLAYERS
 
 
 DEFAULT_CFG = {
-    "server_host": "127.0.0.1", "server_port": 7777, "run_server": False,
+    "server_host": "127.0.0.1", "server_port": 7777, "run_server": True, "auto_mm": True, "server_name": "",
     "parsec_peer_id": "", "stream_backend": "own", "paths": {}, "games": [], "last_game": 0,
     "hotkey": [6, 7], "hold": 3.0, "hold_v2": True,
     "slots": controls.default_slots(), "controller_check_done": False,
@@ -479,7 +479,7 @@ def boot_problem(cfg, g):
     return ""
 
 
-_local_mm = {"port": None}
+_local_mm = {"port": None, "ok": False, "err": "", "id": ""}
 
 
 def ensure_local_server(cfg, note):
@@ -983,13 +983,37 @@ class Pad(threading.Thread):
 # ----------------------------------------------------------------- the window
 def start_local_server(port, note):
     import server as mm
+    _local_mm.update(ok=False, err="", id="")
+
+    def ready():
+        _local_mm.update(ok=True, id=mm.INSTANCE)
 
     def go():
         try:
-            asyncio.run(mm.main(port))
-        except OSError as e:
+            asyncio.run(mm.main(port, ready=ready))
+        except Exception as e:                 # e.g. the port is taken by another program
+            _local_mm.update(ok=False, err=str(e))
             note(f"Couldn't start the matchmaker on this PC: {e}")
     threading.Thread(target=go, daemon=True).start()
+
+
+def choose_matchmaker(cfg, found=None):
+    """The matchmaker this computer should use on the home network, as (host, port, name), or None.
+    Same rule as every other device (lan.pick), so phones and computers end up together without typing anything.
+    This computer's own matchmaker is used as 127.0.0.1."""
+    found = lan.find_all(int(cfg.get("server_port", 7777))) if found is None else found
+    best = lan.pick(found)
+    if not best:
+        return None
+    if best.get("id") and best["id"] == _local_mm.get("id"):
+        return "127.0.0.1", best["port"], "this computer"
+    return best["host"], best["port"], best["name"] or best["host"]
+
+
+def auto_matchmaker_on(cfg):
+    """Pick the matchmaker by itself unless the player typed an internet address on purpose."""
+    host = str(cfg.get("server_host", "")).strip()
+    return cfg.get("auto_mm", True) and (lan.is_loopback(host) or lan.is_private(host))
 
 
 def run_gui():
@@ -1284,20 +1308,17 @@ def run_gui():
         def find_mm():
             lan_note.config(text="Looking on your home network...")
             def work():
-                res = lan.discover()
+                c = choose_matchmaker(cfg)
                 def show():
                     if not win.winfo_exists():
                         return
-                    others = [r for r in res if r["host"] != lan.lan_ip()] or res
-                    if not others:
-                        lan_note.config(text="No matchmaker found on this network. " + lan.FIREWALL_HELP)
+                    if not c:
+                        lan_note.config(text="No Retro-Netplay found on this network. " + lan.FIREWALL_HELP)
                         return
-                    r = others[0]
-                    vars_[(id(cfg), "server_host")][2].set(r["host"])
-                    vars_[(id(cfg), "server_port")][2].set(str(r["port"]))
-                    if r["host"] != lan.lan_ip():
-                        run_var.set(False)
-                    lan_note.config(text=f"Found {r['name'] or 'a matchmaker'} at {r['host']}. Press Save.")
+                    host, port, name = c
+                    vars_[(id(cfg), "server_host")][2].set(host)
+                    vars_[(id(cfg), "server_port")][2].set(str(port))
+                    lan_note.config(text=f"Found it: {name}" + ("" if host == "127.0.0.1" else f" ({host})") + ". Press Save.")
                 win.after(0, show)
             threading.Thread(target=work, daemon=True).start()
         ttk.Button(lan_row, text="Find on my network", command=find_mm).pack(side="left")
@@ -1308,6 +1329,8 @@ def run_gui():
             for store, key, v in vars_.values():
                 store[key] = v.get().strip()
             cfg["run_server"] = run_var.get()
+            h = str(cfg.get("server_host", "")).strip()
+            cfg["auto_mm"] = lan.is_loopback(h) or lan.is_private(h)    # an internet address typed on purpose stays put
             cfg["stream_backend"] = "own" if be_var.get().startswith("Built-in") else "parsec"
             try:
                 cfg["server_port"] = int(cfg["server_port"])
@@ -1521,7 +1544,8 @@ def run_gui():
 
     def connect_to(host, port):
         """Use a friend's matchmaker by its address (what they copied from 'Your address')."""
-        cfg["server_host"], cfg["server_port"], cfg["run_server"] = host, int(port), False
+        cfg["server_host"], cfg["server_port"] = host, int(port)
+        cfg["auto_mm"] = lan.is_private(host)        # a home-network address keeps healing itself; an internet one stays
         save_cfg(cfg)
         restart_presence()
         refresh()
@@ -1534,7 +1558,7 @@ def run_gui():
         body = ttk.Frame(win, padding=16)
         body.pack(fill="both", expand=True)
         port = int(cfg["server_port"])
-        hosting = cfg.get("run_server") or lan.is_loopback(cfg.get("server_host"))
+        hosting = lan.is_loopback(cfg.get("server_host"))
 
         def line(caption, value, note=""):
             ttk.Label(body, text=caption.upper(), font=(fam, 9, "bold")).pack(anchor="w", pady=(12, 0))
@@ -1616,6 +1640,51 @@ def run_gui():
     def redraw_friends():
         if social_state["redraw"]:
             social_state["redraw"]()
+
+    def auto_find(force=False):
+        """Find this home network's matchmaker and use it: at start, and whenever the connection drops.
+        Nobody has to type or pass on an address; every device picks the same matchmaker by the same rule."""
+        if not auto_matchmaker_on(cfg) or social_state.get("finding"):
+            return
+        now = time.monotonic()
+        if not force and now - social_state.get("found_at", -1e9) < 20:
+            return
+        social_state["finding"], social_state["found_at"] = True, now
+        redraw_friends()
+
+        def work():
+            try:
+                c = choose_matchmaker(cfg)
+            except Exception:
+                c = None
+
+            def use():
+                social_state["finding"], social_state["nothing_found"] = False, c is None
+                if c is None and _local_mm.get("ok"):
+                    c2 = ("127.0.0.1", int(cfg["server_port"]), "this computer")   # only this one: use it
+                else:
+                    c2 = c
+                if c2:
+                    host, port, name = c2
+                    cur = (str(cfg.get("server_host", "")).strip(), int(cfg["server_port"]))
+                    cfg["server_name"] = name
+                    if (host, port) != cur:
+                        cfg["server_host"], cfg["server_port"] = host, port
+                        save_cfg(cfg)
+                        restart_presence()
+                        refresh()
+                        if host != "127.0.0.1":
+                            hint.config(text=f"Using the matchmaker on {name}, found on your Wi-Fi.")
+                    elif not social_state["up"] and social_state["p"] is None:
+                        restart_presence()
+                redraw_friends()
+            msgs.put(("call", None, use))
+        threading.Thread(target=work, daemon=True).start()
+
+    def keep_finding():
+        if not social_state["up"]:
+            auto_find()
+        root.after(30000, keep_finding)
 
     def friends_changed():
         """The list changed: save it and tell the matchmaker on the open connection (no reconnect)."""
@@ -1705,6 +1774,7 @@ def run_gui():
                 save_cfg(cfg)
         elif ev == "down":
             social_state["up"], social_state["online"], social_state["why"] = False, {}, str(d)
+            auto_find()                         # the matchmaker went away or moved: look for it again
         elif ev == "online":
             social_state["online"] = {x["id"]: x for x in d}
             changed = False
@@ -1806,6 +1876,12 @@ def run_gui():
         conn.pack(anchor="w")
         conn_note = ttk.Label(body, text="", foreground=ink.SOFT, wraplength=520, justify="left")
         conn_note.pack(anchor="w")
+        def try_again():
+            if auto_matchmaker_on(cfg):
+                auto_find(force=True)
+            else:
+                restart_presence()
+        ttk.Button(body, text="Try again", command=try_again).pack(anchor="w", pady=(4, 0))
 
         ttk.Label(body, text="YOUR FRIEND CODE", font=(fam, 9, "bold")).pack(anchor="w", pady=(12, 0))
         code_row = ttk.Frame(body)
@@ -1887,23 +1963,25 @@ def run_gui():
         def draw():
             host = str(cfg.get("server_host", "")).strip()
             port = int(cfg["server_port"])
-            if no_matchmaker_hint(cfg):
+            here = lan.is_loopback(host)
+            name = "this computer" if here else (cfg.get("server_name") or host)
+            if social_state["up"]:
+                conn.config(text="Connected" + (" · this computer is the matchmaker" if here else f" · using the matchmaker on {name}"))
+                conn_note.config(text="Phones and computers on your Wi-Fi find it by themselves: they just open Friends.")
+            elif social_state.get("finding"):
+                conn.config(text="Looking for the matchmaker on your Wi-Fi...")
+                conn_note.config(text="")
+            elif cfg.get("run_server") and _local_mm.get("err"):
+                conn.config(text="The matchmaker couldn't start on this computer")
+                conn_note.config(text=f"{_local_mm['err']}. Another program may be using port {port}. Restart the computer, then open Retro-Netplay again.")
+            elif no_matchmaker_hint(cfg):
                 conn.config(text="Not connected")
-                conn_note.config(text=no_matchmaker_hint(cfg))
-            elif social_state["up"]:
-                conn.config(text=f"Connected to the matchmaker at {host}:{port}")
-                if cfg.get("run_server"):
-                    home = lan.lan_ip()
-                    conn_note.config(text=(f"This computer is the matchmaker. On a phone or another computer on your Wi-Fi, "
-                                           f"open Friends and connect to {home}:{port}" if home else
-                                           "This computer is the matchmaker") + ". " + lan.FIREWALL_HELP)
-                else:
-                    conn_note.config(text="Friends must use this same matchmaker.")
+                conn_note.config(text="No Retro-Netplay found on your Wi-Fi yet. Open it on the computer you play on, then press Try again.")
             else:
-                conn.config(text=f"Connecting to {host}:{port}...")
+                conn.config(text=f"Can't reach the matchmaker on {name}")
                 why = social_state["why"]
-                conn_note.config(text=(f"Problem: {why}. " if why else "") + "Is the matchmaker running on that computer? "
-                                      "Check the address in Settings.")
+                conn_note.config(text=(f"({why}) " if why else "") + "Is Retro-Netplay open on that computer, on the same Wi-Fi? "
+                                      "Retro-Netplay keeps looking by itself, or press Try again.")
             code_lbl.config(text=cfg.get("my_code") if social_state["up"] and cfg.get("my_code") else "···-···")
             for w in req_box.winfo_children():
                 w.destroy()
@@ -1925,7 +2003,9 @@ def run_gui():
                     where = f"playing {game_title(on['game'])}"
                 else:
                     where = "online"
-                lst.insert("end", f" {'●' if on else '○'} {f['name']}  —  {where}")
+                twins = sum(1 for x in cfg["friends"] if x["name"] == f["name"]) > 1
+                label = f"{f['name']} ({f['code']})" if twins and f.get("code") else f["name"]
+                lst.insert("end", f" {'●' if on else '○'} {label}  —  {where}")
             if not cfg["friends"]:
                 lst.insert("end", " No friends yet. Share your code, or type a friend's code above.")
             if sel and sel[0] < lst.size():
@@ -2063,18 +2143,6 @@ def run_gui():
     def start_background():
         """Pick up new games in the folders and keep the router ports open, without slowing the window."""
         def work():
-            if no_matchmaker_hint(cfg):
-                # no matchmaker chosen yet: use one on the home network if there is one
-                found = [r for r in lan.discover() if r["host"] != lan.lan_ip()]
-                if found:
-                    r = found[0]
-                    def use():
-                        cfg["server_host"], cfg["server_port"] = r["host"], r["port"]
-                        save_cfg(cfg)
-                        restart_presence()
-                        refresh()
-                        hint.config(text=f"Using the matchmaker on {r['name'] or r['host']} ({r['host']}), found on your home network.")
-                    msgs.put(("call", None, use))
             if cfg.get("game_folders"):
                 library_games, _q = library.scan(cfg["game_folders"], cfg.get("folder_answers", {}))
                 merged = library.merge(cfg["games"], library_games)
@@ -2089,6 +2157,8 @@ def run_gui():
     pump()
     tick()
     restart_presence()
+    root.after(1500, lambda: auto_find(force=True))   # after this computer's own matchmaker is up
+    root.after(30000, keep_finding)
     given = [a for a in sys.argv[1:] if a.startswith("netplay://") or "/join?" in a or "/friend?" in a]
     if given:
         root.after(800, lambda: join_with_link(given[0]))

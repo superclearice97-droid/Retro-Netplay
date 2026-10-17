@@ -428,7 +428,8 @@ async def handle(reader, writer):
             return
         if isinstance(req, dict) and req.get("op") == "whoami":
             # "what address do you see for me?" so a player can share it with friends
-            writer.write((json.dumps({"op": "whoami", "v": 1, "ip": ip}) + "\n").encode())
+            writer.write((json.dumps({"op": "whoami", "v": 1, "ip": ip, "app": "retro-netplay", "since": int(START),
+                                      "id": INSTANCE, "name": computer_name()}) + "\n").encode())
             await writer.drain()
             return
         if isinstance(req, dict) and req.get("op") == "hello":
@@ -964,6 +965,16 @@ async def http_handle(reader, writer, tcp_port=7777):
 DISCOVER_ASK = b"RETRO-NETPLAY-DISCOVER/1"
 
 
+# Which matchmaker everyone on a home network uses: the one that has been running longest (then the lowest address).
+# Every app applies the same rule to the same answers, so phones and computers all end up on the same one.
+START = time.time()
+INSTANCE = secrets.token_hex(6)
+
+
+def computer_name():
+    return re.sub(r"[^A-Za-z0-9 ._-]", "", socket.gethostname())[:40] or "Matchmaker"
+
+
 class Discovery(asyncio.DatagramProtocol):
     """Answers 'is there a matchmaker here?' from devices on the same network (UDP port N+2), so phones and
     other computers find it without anyone typing an address. The answer is only the port numbers and the
@@ -985,15 +996,17 @@ class Discovery(asyncio.DatagramProtocol):
         self.times[addr[0]] = recent + [now]
         if len(self.times) > 5000:
             self.times.clear()
-        name = re.sub(r"[^A-Za-z0-9 ._-]", "", socket.gethostname())[:40] or "Matchmaker"
-        reply = {"app": "retro-netplay", "v": 1, "port": self.port, "web": self.http_port, "name": name}
+        reply = {"app": "retro-netplay", "v": 1, "port": self.port, "web": self.http_port, "name": computer_name(),
+                 "since": int(START), "id": INSTANCE}
         try:
             self.transport.sendto(json.dumps(reply).encode(), addr)
         except OSError:
             pass
 
 
-async def main(port, http_port=None, discovery=True):
+async def main(port, http_port=None, discovery=True, ready=None):
+    global START
+    START = time.time()
     http_port = port + 1 if http_port is None else http_port
     load_codes()
     if discovery:
@@ -1005,6 +1018,8 @@ async def main(port, http_port=None, discovery=True):
             print(f"home-network discovery off ({e})", flush=True)
     srv = await asyncio.start_server(handle, "0.0.0.0", port, limit=MAX_LINE)
     print(f"matchmaker on :{port}", flush=True)
+    if ready:
+        ready()
     if http_port:
         try:
             await asyncio.start_server(lambda r, w: http_handle(r, w, port), "0.0.0.0", http_port, ssl=TLS)

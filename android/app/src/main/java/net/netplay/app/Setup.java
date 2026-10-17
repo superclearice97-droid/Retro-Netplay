@@ -105,42 +105,58 @@ final class Setup {
         box.addView(Ink.caption(act, "Your name"));
         final EditText name = Ink.field(act, "What friends and opponents see", Hub.get(act).myName());
         box.addView(name, fill(6));
-        box.addView(para("Players find each other through a matchmaker. A friend usually runs it and gives you its address."), fill(16));
-        box.addView(Ink.caption(act, "Matchmaker address"), fill(14));
-        final EditText host = Ink.field(act, "for example 192.168.1.23", prefs.getString("server_host", ""));
-        box.addView(host, fill(6));
-        box.addView(Ink.caption(act, "Port"), fill(12));
-        final EditText port = Ink.field(act, "7777", String.valueOf(prefs.getInt("server_port", 7777)));
-        box.addView(port, fill(6));
+        box.addView(para("At home there's nothing to type: Retro-Netplay finds your computer on the Wi-Fi by itself. "
+                + "Just open Retro-Netplay on the computer too."), fill(16));
         final TextView found = Ink.text(act, "", 13.5f, false, Ink.INK);
-        InkButton find = new InkButton(act, Icons.SEARCH, "Find on my network", true);
+        box.addView(found, fill(10));
+        // an internet address from a friend: tucked away, most people never need it
+        final LinearLayout manual = new LinearLayout(act);
+        manual.setOrientation(LinearLayout.VERTICAL);
+        manual.setVisibility(View.GONE);
+        manual.addView(Ink.caption(act, "Matchmaker address"), fill(4));
+        String saved = prefs.getString("server_host", "");
+        boolean typedBefore = !saved.isEmpty() && !net.netplay.core.Lan.isPrivate(saved) && !net.netplay.core.Lan.isLoopback(saved);
+        final EditText host = Ink.field(act, "for example 203.0.113.5", typedBefore ? saved : "");
+        manual.addView(host, fill(6));
+        manual.addView(Ink.caption(act, "Port"), fill(12));
+        final EditText port = Ink.field(act, "7777", String.valueOf(prefs.getInt("server_port", 7777)));
+        manual.addView(port, fill(6));
+        if (typedBefore) manual.setVisibility(View.VISIBLE);
+        final String[] lan = {"", "7777"};
+        InkButton find = new InkButton(act, Icons.SEARCH, "Look again", false);
         Runnable look = () -> {
-            found.setText("Looking on your home network...");
+            found.setText("Looking for your computer on the Wi-Fi...");
             Hub.get(act).findOnNetwork(list -> {
                 if (list.isEmpty()) {
-                    found.setText("No matchmaker found on this Wi-Fi. On the computer, open Retro-Netplay with \"Run the matchmaker "
-                            + "on this PC\" on, and make sure both are on the same Wi-Fi. Or type the address a friend gave you.");
+                    found.setText("Not found yet. Open Retro-Netplay on your computer, with both on the same Wi-Fi. "
+                            + "You can carry on: it keeps looking by itself.");
                     return;
                 }
-                net.netplay.core.Lan.Found f = list.get(0);
-                host.setText(f.host);
-                port.setText(String.valueOf(f.port));
-                found.setText("Found " + f + "." + (list.size() > 1 ? " (" + (list.size() - 1) + " more on this network.)" : ""));
+                net.netplay.core.Lan.Found f = net.netplay.core.Lan.pick(list);
+                lan[0] = f.host;
+                lan[1] = String.valueOf(f.port);
+                found.setText("Found it: " + f + ". You're all set.");
             });
         };
         find.onPress(look);
-        box.addView(find, fill(12));
-        box.addView(found, fill(8));
-        if (net.netplay.core.Lan.isLoopback(host.getText().toString())) {
-            host.setText("");
-            look.run();          // nothing set yet: look straight away
-        }
+        box.addView(find, fill(10));
+        InkButton other = new InkButton(act, Icons.LINK, "A friend gave me an internet address", false);
+        other.onPress(() -> manual.setVisibility(manual.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE));
+        box.addView(other, fill(16));
+        box.addView(manual, fill(6));
+        look.run();
         pendingSave = () -> {
+            boolean typed = manual.getVisibility() == View.VISIBLE && !host.getText().toString().trim().isEmpty();
+            String h = typed ? host.getText().toString().trim() : lan[0];
             int p = 7777;
-            try { p = Integer.parseInt(port.getText().toString().trim()); } catch (NumberFormatException ignored) { }
-            prefs.edit().putString("server_host", host.getText().toString().trim()).putInt("server_port", p).apply();
+            try { p = Integer.parseInt((typed ? port.getText().toString() : lan[1]).trim()); } catch (NumberFormatException ignored) { }
+            SharedPreferences.Editor ed = prefs.edit().putInt("server_port", p)
+                    .putBoolean("auto_mm", !typed || net.netplay.core.Lan.isPrivate(h));
+            if (typed || !h.isEmpty()) ed.putString("server_host", h);
+            ed.apply();
             Hub.get(act).setName(name.getText().toString());
             Hub.get(act).restartPresence();
+            if (!typed) Hub.get(act).autoFind(true);
         };
         return box;
     }

@@ -27,9 +27,10 @@ HOW THEY WORK TOGETHER
   Both apps connect to the same matchmaker (desktop/server.py). Pick the same game with the
   exact same name and system on both and you're paired. Games found through Game folders are
   named the same way on every device, so this usually just works.
-  - The matchmaker runs inside the desktop app ("Run the matchmaker on this PC" in Settings),
-    or on any always-on machine with:  python3 desktop/server.py
-    The host needs port 7777 (TCP) reachable from the internet.
+  - The matchmaker runs inside the desktop app (on by default), or on any always-on machine
+    with:  python3 desktop/server.py
+    At home, every device finds it by itself on the Wi-Fi: nothing to type. Over the internet,
+    the matchmaker's computer needs port 7777 (TCP) reachable.
   - A phone can't host a stream and usually can't host netplay over mobile data, so the
     matchmaker always makes the COMPUTER the host when a phone is playing a computer.
   - Android <-> computer netplay is RetroArch to RetroArch. Both need the SAME core and the SAME

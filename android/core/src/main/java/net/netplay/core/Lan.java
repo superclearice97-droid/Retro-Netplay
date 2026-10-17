@@ -22,10 +22,97 @@ public final class Lan {
     public static final int DEFAULT_PORT = 7777;
 
     public static final class Found {
-        public final String host, name;
+        public final String host, name, id;
         public final int port;
-        Found(String host, int port, String name) { this.host = host; this.port = port; this.name = name; }
+        /** When that matchmaker started (seconds since 1970), or Long.MAX_VALUE if it's an older one that doesn't say. */
+        public final long since;
+        public Found(String host, int port, String name, long since, String id) {
+            this.host = host; this.port = port; this.name = name; this.since = since; this.id = id == null ? "" : id;
+        }
+        Found(String host, int port, String name) { this(host, port, name, Long.MAX_VALUE, ""); }
         @Override public String toString() { return (name.isEmpty() ? host : name + " (" + host + ")"); }
+    }
+
+    private static Found entry(String host, Map<String, Object> m, int fallbackPort) {
+        if (!"retro-netplay".equals(m.get("app"))) return null;
+        Object port = m.get("port");
+        int pn = port instanceof Number ? ((Number) port).intValue() : fallbackPort;
+        if (pn < 1 || pn > 65535) return null;
+        String name = m.get("name") == null ? "" : Friends.cleanName(String.valueOf(m.get("name")));
+        Object since = m.get("since");
+        String id = m.get("id") == null ? "" : String.valueOf(m.get("id"));
+        if (id.length() > 32) id = id.substring(0, 32);
+        return new Found(host, pn, name, since instanceof Number ? ((Number) since).longValue() : Long.MAX_VALUE, id);
+    }
+
+    /** One entry per matchmaker: the same one can answer from two addresses (cable and Wi-Fi). */
+    private static void merge(Map<String, Found> out, Found f) {
+        String key = f.id.isEmpty() ? f.host + ":" + f.port : f.id;
+        if (!out.containsKey(key)) out.put(key, f);
+    }
+
+    private static long[] addrKey(String host) {
+        String[] p = host.split("\\.");
+        long[] k = new long[]{999, 0, 0, 0};
+        if (p.length != 4) return k;
+        try { for (int i = 0; i < 4; i++) k[i] = Long.parseLong(p[i]); } catch (NumberFormatException e) { return new long[]{999, 0, 0, 0}; }
+        return k;
+    }
+
+    /** The matchmaker everyone on this network should use: running longest, then the lowest address.
+     *  The computer app applies the same rule (lan.pick), so everybody ends up on the same one. */
+    public static Found pick(List<Found> list) {
+        Found best = null;
+        for (Found f : list) {
+            if (best == null || f.since < best.since) { best = f; continue; }
+            if (f.since == best.since) {
+                long[] a = addrKey(f.host), b = addrKey(best.host);
+                for (int i = 0; i < 4; i++) { if (a[i] != b[i]) { if (a[i] < b[i]) best = f; break; } }
+            }
+        }
+        return best;
+    }
+
+    /** Ask one address "are you a Retro-Netplay matchmaker?" over TCP. Blocking. */
+    public static Found probe(String host, int port, int timeoutMs) {
+        try (java.net.Socket s = new java.net.Socket()) {
+            s.connect(new java.net.InetSocketAddress(host, port), timeoutMs);
+            s.setSoTimeout(1000);
+            s.getOutputStream().write("{\"v\":1,\"op\":\"whoami\"}\n".getBytes(StandardCharsets.UTF_8));
+            String line = new java.io.BufferedReader(new java.io.InputStreamReader(s.getInputStream(), StandardCharsets.UTF_8)).readLine();
+            if (line == null) return null;
+            Map<String, Object> m = Json.parseObject(line);
+            if (!"whoami".equals(m.get("op"))) return null;
+            if (!m.containsKey("app")) m.put("app", "retro-netplay");     // older matchmakers don't say
+            m.put("port", port);
+            return entry(host, m, port);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** When the router drops broadcasts: knock on every address of this home network (x.x.x.1 - .254). Blocking. */
+    public static List<Found> sweep(String myIp, int port, int timeoutMs) {
+        List<Found> res = java.util.Collections.synchronizedList(new ArrayList<>());
+        if (myIp == null || !myIp.matches("^\\d{1,3}(\\.\\d{1,3}){3}$") || !isPrivate(myIp)) return new ArrayList<>();
+        String base = myIp.substring(0, myIp.lastIndexOf('.') + 1);
+        java.util.concurrent.ExecutorService ex = java.util.concurrent.Executors.newFixedThreadPool(48);
+        for (int n = 1; n < 255; n++) {
+            final String h = base + n;
+            if (h.equals(myIp)) continue;
+            ex.execute(() -> { Found f = probe(h, port, timeoutMs); if (f != null) res.add(f); });
+        }
+        ex.shutdown();
+        try { ex.awaitTermination(15, java.util.concurrent.TimeUnit.SECONDS); } catch (InterruptedException ignored) { }
+        Map<String, Found> out = new LinkedHashMap<>();
+        synchronized (res) { for (Found f : res) merge(out, f); }
+        return new ArrayList<>(out.values());
+    }
+
+    /** Broadcast first; if nothing answers, try every address on the network. Blocking. */
+    public static List<Found> findAll(List<String> targets, String myIp, int port) {
+        List<Found> r = discover(targets, 1500, port + 2);
+        return r.isEmpty() ? sweep(myIp, port, 400) : r;
     }
 
     /** 127.0.0.1, localhost and friends: an address that means "this same device". */
@@ -58,13 +145,8 @@ public final class Lan {
                 Map<String, Object> m;
                 try { m = Json.parseObject(new String(p.getData(), 0, p.getLength(), StandardCharsets.UTF_8)); }
                 catch (RuntimeException e) { continue; }
-                Object port = m.get("port");
-                if (!"retro-netplay".equals(m.get("app")) || !(port instanceof Number)) continue;
-                int pn = ((Number) port).intValue();
-                if (pn < 1 || pn > 65535) continue;
-                String host = p.getAddress().getHostAddress();
-                String name = m.get("name") == null ? "" : Friends.cleanName(String.valueOf(m.get("name")));
-                out.put(host + ":" + pn, new Found(host, pn, name));
+                Found f = entry(p.getAddress().getHostAddress(), m, -1);
+                if (f != null) merge(out, f);
             }
         } catch (Exception ignored) { }
         return new ArrayList<>(out.values());

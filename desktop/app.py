@@ -1391,10 +1391,26 @@ def run_gui():
         ttk.Button(btns, text="Streaming check", command=lambda: show_stream_check()).pack(side="left", padx=(6, 0))
         ttk.Button(btns, text="Save", command=save).pack(side="right")
 
+    def over_modal(win):
+        """A window opened from a window that holds all clicks (Settings): take the clicks while open, give them back after.
+        Without this its buttons do nothing."""
+        prev = root.grab_current()
+        if not prev:
+            return
+        win.grab_set()
+        def back(_e=None, prev=prev):
+            try:
+                if prev.winfo_exists():
+                    prev.grab_set()
+            except tk.TclError:
+                pass
+        win.bind("<Destroy>", lambda e: back() if e.widget is win else None)
+
     def show_stream_check():
         win = tk.Toplevel(root)
         win.title("Streaming check")
         win.transient(root)
+        over_modal(win)
         body = ttk.Frame(win, padding=12)
         body.pack(fill="both", expand=True)
         ttk.Label(body, wraplength=560, justify="left", text=(
@@ -1614,6 +1630,7 @@ def run_gui():
         win = tk.Toplevel(root)
         win.title("Your address")
         win.transient(root)
+        over_modal(win)
         body = ttk.Frame(win, padding=16)
         body.pack(fill="both", expand=True)
         port = int(cfg["server_port"])
@@ -2260,6 +2277,8 @@ def run_gui():
         start_background()
     # for automatic screenshots of the packaged build: NETPLAY_SHOW=friends|settings|controllers
     show = os.environ.get("NETPLAY_SHOW", "")
+    if show == "streamcheck":     # Streaming check opened from Settings (the smoke test clicks its Close button)
+        root.after(1500, lambda: (open_settings(), root.after(800, show_stream_check)))
     if show in ("friends", "settings", "controllers", "address", "card"):
         root.after(1500, {"friends": lambda: open_friends(), "settings": lambda: open_settings(),
                           "controllers": lambda: open_controllers(), "address": lambda: open_address(),

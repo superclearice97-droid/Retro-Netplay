@@ -46,6 +46,25 @@ shot controllers 12 HOME="$H2" NETPLAY_SHOW=controllers
 shot address 12 HOME="$H2" NETPLAY_SHOW=address
 shot card 12 HOME="$H2" NETPLAY_SHOW=card
 
+# 2b) a window opened from Settings must take clicks (Settings holds all clicks while it's open):
+#     open Streaming check from Settings, click its Close button with the real mouse, it must close.
+env HOME="$H2" NETPLAY_SHOW=streamcheck xvfb-run -a -s "-screen 0 1280x900x24" sh -c "
+  \"$APPIMG\" > \"$OUT/streamcheck.log\" 2>&1 &
+  pid=\$!
+  sleep 14
+  w=\$(xdotool search --name '^Streaming check\$' | head -1)
+  if [ -z \"\$w\" ]; then echo 'click test: Streaming check window not found' > \"$OUT/streamcheck.result\"; else
+    eval \$(xdotool getwindowgeometry --shell \$w)
+    import -window root \"$OUT/streamcheck.png\"
+    xdotool mousemove \$((X + WIDTH - 50)) \$((Y + HEIGHT - 25)) click 1
+    sleep 2
+    if xdotool search --name '^Streaming check\$' >/dev/null 2>&1; then echo 'click test: FAILED, Close did nothing' > \"$OUT/streamcheck.result\";
+    else echo 'click test: ok' > \"$OUT/streamcheck.result\"; fi
+  fi
+  kill \$pid 2>/dev/null; sleep 1; kill -9 \$pid 2>/dev/null; true"
+cat "$OUT/streamcheck.result"
+grep -q "click test: ok" "$OUT/streamcheck.result" || fail=1
+
 # 3) the bundled matchmaker works from the packaged app's Python? (run_server path)
 cat "$OUT"/*.log | head -50
 exit $fail

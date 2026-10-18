@@ -807,7 +807,7 @@ final class Hub {
             String url = plan.kind == Plan.Kind.OPEN_STREAM ? plan.clipboard : "parsec://peer_id=" + plan.clipboard;
             lastStreamUrl = url;
             Notify.matched(app, hello, "Tap to open the stream.", url);
-            openUrl(url);
+            if (plan.kind == Plan.Kind.OPEN_STREAM) StreamActivity.open(app, url); else openUrl(url);
             say(hello + " Opening the stream.", false);
             return;
         }

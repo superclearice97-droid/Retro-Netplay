@@ -98,13 +98,13 @@ ANDROID APP: BUILD AND INSTALL
      the Android plugin. Press Run with your phone plugged in (USB debugging on),
      or Build > Build APK(s) and copy it to your phone.
   2. On the phone install RetroArch (Google Play) and, inside it, download the cores:
-     Load Core > Download a Core > mGBA, PCSX ReARMed, Flycast. Streaming needs nothing extra: a web browser is enough.
+     Load Core > Download a Core > mGBA, PCSX ReARMed, Flycast. Streaming needs nothing extra: the app plays it.
   3. Open the app > Settings: type the matchmaker address (your PC's address) and port 7777.
   4. Add a game: its name (same as your opponent's), its system, and the full path to the game
      file, for example /storage/emulated/0/ROMs/game.gba. Leave the path blank for PS2 / PS3 games
      you'll only stream.
   5. Tap a game. RetroArch opens with it and you're in the queue. For PS2/PS3/GameCube games the
-     phone joins a friend's stream instead: when matched, your browser opens.
+     phone joins a friend's stream instead: when matched, the stream plays inside the app (your controller works in it; swipe and press Back to leave).
 
 WHAT WAS AND WASN'T TESTED
   Tested: the matchmaker rules, the desktop app's engine, and the Android app's matching logic

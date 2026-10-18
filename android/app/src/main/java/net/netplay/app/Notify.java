@@ -81,7 +81,10 @@ final class Notify {
         try {
             NotificationManager nm = (NotificationManager) c.getSystemService(Context.NOTIFICATION_SERVICE);
             PendingIntent tap = openApp(c);
-            if (!url.isEmpty()) {
+            if (url.startsWith("http")) {             // a friend's stream: play it inside the app
+                Intent v = new Intent(c, StreamActivity.class).setData(Uri.parse(url));
+                tap = PendingIntent.getActivity(c, 7, v, flags());
+            } else if (!url.isEmpty()) {
                 Intent v = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
                 tap = PendingIntent.getActivity(c, 7, v, flags());
             }

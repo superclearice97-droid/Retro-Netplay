@@ -30,7 +30,8 @@
         android:allowBackup="false"
         android:fullBackupContent="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
-        android:theme="@style/Theme.Ink">
+        android:theme="@style/Theme.Ink"
+        android:usesCleartextTraffic="true">
         <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop"
             android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation">
             <intent-filter>
@@ -52,6 +53,11 @@
                 <data android:scheme="netplay" android:host="friend" />
             </intent-filter>
         </activity>
+
+        <!-- A friend's stream, played inside the app instead of a browser. -->
+        <activity android:name=".StreamActivity" android:exported="false" android:launchMode="singleTop"
+            android:screenOrientation="sensorLandscape" android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen"
+            android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation" />
 
         <activity android:name=".FriendsActivity" android:exported="false"
             android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation" />

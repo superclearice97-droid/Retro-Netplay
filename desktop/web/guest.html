@@ -203,7 +203,10 @@ async function start() {
   try { cfg = await api("/cfg"); } catch (e) { return say(e.ended ? "This stream link has ended." : "Couldn't reach the matchmaker."); }
   const pc = state.pc = new RTCPeerConnection({ iceServers: cfg.iceServers, bundlePolicy: "max-bundle" });
   pc.onicecandidate = (e) => { if (e.candidate) post({ type: "ice", candidate: e.candidate.candidate, sdpMLineIndex: e.candidate.sdpMLineIndex }).catch(() => {}); };
+  const report = (t) => post({ type: "status", text: t }).catch(() => {});   // shows up in the host's stream log
+  pc.oniceconnectionstatechange = () => report("ice " + pc.iceConnectionState);
   pc.onconnectionstatechange = () => {
+    report("connection " + pc.connectionState);
     pillText(pc.connectionState);
     if (pc.connectionState === "failed") say("Couldn't connect. A strict router may be blocking the stream.");
     if (pc.connectionState === "disconnected") pillText("reconnecting…");
@@ -321,6 +324,13 @@ let seq = 0, lastKey = "", lastSent = 0;
 const touch = { buttons: 0, ax: [0, 0, 0, 0] };
 const keys = { buttons: 0, ax: [0, 0, 0, 0], held: new Set() };
 
+// The Retro-Netplay Android app's built-in player passes the device's own controller in here
+// (its web view doesn't show controllers to the page). Same button numbers as the packet above.
+const nativePad = { buttons: 0, ax: [0, 0, 0, 0], lt: 0, rt: 0, at: 0 };
+window.__nativePad = (buttons, lx, ly, rx, ry, lt, rt) => {
+  Object.assign(nativePad, { buttons: buttons >>> 0, ax: [lx, ly, rx, ry].map((v) => dead(+v || 0)), lt: lt | 0, rt: rt | 0, at: performance.now() });
+  sendInput(false);
+};
 function dead(v) { return Math.abs(v) < 0.1 ? 0 : v; }
 function readInput() {
   let buttons = 0, ax = [0, 0, 0, 0], lt = 0, rt = 0, any = false;
@@ -332,6 +342,12 @@ function readInput() {
     lt = Math.round((gp.buttons[6] ? gp.buttons[6].value : 0) * 255);
     rt = Math.round((gp.buttons[7] ? gp.buttons[7].value : 0) * 255);
     ax = [0, 1, 2, 3].map((i) => dead(gp.axes[i] || 0));
+  }
+  if (nativePad.at && performance.now() - nativePad.at < 2000) {
+    any = true;
+    buttons |= nativePad.buttons;
+    for (let i = 0; i < 4; i++) { if (Math.abs(nativePad.ax[i]) > Math.abs(ax[i])) ax[i] = nativePad.ax[i]; }
+    lt = Math.max(lt, nativePad.lt); rt = Math.max(rt, nativePad.rt);
   }
   buttons |= touch.buttons | keys.buttons;
   for (let i = 0; i < 4; i++) { if (Math.abs(keys.ax[i]) > Math.abs(ax[i])) ax[i] = keys.ax[i]; }

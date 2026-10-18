@@ -217,7 +217,10 @@ public class MainActivity extends Activity implements Hub.Ui {
         leaveButton = new InkButton(this, Icons.CLOSE, "Leave queue", true);
         leaveButton.onPress(() -> hub.leave());
         streamButton = new InkButton(this, Icons.PLAY, "Open stream", false);
-        streamButton.onPress(() -> { if (!hub.lastStreamUrl.isEmpty()) hub.openUrl(hub.lastStreamUrl); });
+        streamButton.onPress(() -> {
+            String u = hub.lastStreamUrl;
+            if (u.startsWith("http")) StreamActivity.open(this, u); else if (!u.isEmpty()) hub.openUrl(u);
+        });
         actions.addView(leaveButton, half(0));
         actions.addView(streamButton, half(10));
         card.addView(actions, fill(12));

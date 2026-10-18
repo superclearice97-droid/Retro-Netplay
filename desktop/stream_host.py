@@ -231,6 +231,8 @@ class Session:
             self.backend.add_ice(int(m.get("sdpMLineIndex", 0)), m["candidate"])
         elif t == "bye":
             self.end("guest left")
+        elif t == "status":
+            log("friend's screen:", str(m.get("text", ""))[:200])     # their side of the connection, for the log
 
     def status(self, text):
         """Tell the friend's screen what the computer is doing (so they never stare at 'Connecting...' blindly)."""
@@ -464,6 +466,8 @@ class GstBackend:
         bus = self.pipe.get_bus()
         bus.add_signal_watch()
         bus.connect("message::error", lambda b, m: (log("GStreamer error:", m.parse_error()[0].message, m.parse_error()[1]),
+                                                    hasattr(self.s, "status") and self.s.status(
+                                                        "The stream stopped on your friend's computer: " + m.parse_error()[0].message),
                                                     self.s.end("pipeline error")))
         self.pipe.set_state(Gst.State.PLAYING)
         self._set_sendonly()

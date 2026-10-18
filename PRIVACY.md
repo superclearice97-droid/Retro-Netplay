@@ -27,7 +27,7 @@ Your chosen name, your app label and game name, and for emulator netplay your IP
 
 ## Streaming
 - Video and sound travel directly between the two players, encrypted by WebRTC. The matchmaker only relays the setup messages (they contain network addresses, not video).
-- The guest page is served by the matchmaker and loads nothing from any other site.
+- The guest page is served by the matchmaker and loads nothing from any other site. On Android it opens inside the app (a built-in web view that only shows that page), and the app passes your controller's buttons to it. While the stream starts, the guest page also tells the host's computer how its connection is going (for example "connection failed"); the host keeps this in its `stream-host.log`.
 - To connect through home routers, WebRTC asks a STUN server for your public address. By default this is Google's public STUN server (`stun.l.google.com`), which therefore sees your IP address. To avoid third parties, run the matchmaker with the environment variable `NETPLAY_ICE_JSON='[]'` (works on a local network only) or point it at your own STUN/TURN server (see PROTOCOL.md).
 - A TURN relay, if you add one, can see how much data passes through but not its content.
 

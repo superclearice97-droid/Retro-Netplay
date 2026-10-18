@@ -131,6 +131,15 @@ try:
         check("released state seen last", pads[-1]["buttons"] == 0)
         seqs = [p["seq"] for p in pads]
         check("sequence numbers increase by one (loopback, no loss)", all(((y - x) & 255) == 1 for x, y in zip(seqs, seqs[1:])))
+        # ---- the Android app's built-in player feeds the device controller through window.__nativePad
+        guest.evaluate("window.__nativePad((1 << 9) | (1 << 13), 0.5, -1, 0, 0, 0, 255)"); time.sleep(0.4)
+        pads = host.evaluate("window.simLog.pads")
+        check("built-in player's controller reaches the host (Start + d-pad down)",
+              any(p["buttons"] & (1 << 9) and p["buttons"] & (1 << 13) for p in pads))
+        check("its right trigger and stick arrive too", any(p["rt"] == 255 and p["ax"][0] > 10000 and p["ax"][1] < -30000 for p in pads),
+              str(pads[-1]))
+        guest.evaluate("window.__nativePad(0, 0, 0, 0, 0, 0, 0)"); time.sleep(0.3)
+        check("...and its release", host.evaluate("window.simLog.pads")[-1]["buttons"] == 0)
         check("no page errors", not errors, "; ".join(errors))
         # ---- hud toggle
         guest.evaluate("document.getElementById('pill').click()"); time.sleep(1.3)

@@ -6,7 +6,12 @@ XML = """<node><interface name="org.freedesktop.portal.ScreenCast">
 <method name="SelectSources"><arg type="o" direction="in"/><arg type="a{sv}" direction="in"/><arg type="o" direction="out"/></method>
 <method name="Start"><arg type="o" direction="in"/><arg type="s" direction="in"/><arg type="a{sv}" direction="in"/><arg type="o" direction="out"/></method>
 <method name="OpenPipeWireRemote"><arg type="o" direction="in"/><arg type="a{sv}" direction="in"/><arg type="h" direction="out"/></method>
+<property name="version" type="u" access="read"/>
+<property name="AvailableSourceTypes" type="u" access="read"/>
+<property name="AvailableCursorModes" type="u" access="read"/>
 </interface></node>"""
+PROPS = {"version": GLib.Variant("u", int(os.environ.get("MOCK_VERSION", "4"))), "AvailableSourceTypes": GLib.Variant("u", 3),
+         "AvailableCursorModes": GLib.Variant("u", int(os.environ.get("MOCK_CURSORS", "7")))}
 DELAY = int(os.environ.get("PICK_DELAY_MS", "300"))
 log = open(os.environ.get("MOCK_LOG", "/dev/null"), "a")
 
@@ -18,6 +23,8 @@ def handle(conn, sender, path, iface, method, params, inv):
         fl = Gio.UnixFDList.new(); idx = fl.append(r)
         inv.return_value_with_unix_fd_list(GLib.Variant("(h)", (idx,)), fl); return
     opts = args[-1]
+    if method == "SelectSources" and os.environ.get("MOCK_REFUSE_EXTRAS") and "persist_mode" in opts:
+        inv.return_dbus_error("org.freedesktop.portal.Error.InvalidArgument", "Unknown option persist_mode"); return
     req = "/org/freedesktop/portal/desktop/request/%s/%s" % (sender.lstrip(":").replace(".", "_"), opts["handle_token"])
     inv.return_value(GLib.Variant("(o)", (req,)))
     if method == "CreateSession":
@@ -33,7 +40,8 @@ def handle(conn, sender, path, iface, method, params, inv):
 
 bus = Gio.bus_get_sync(Gio.BusType.SESSION)
 node = Gio.DBusNodeInfo.new_for_xml(XML)
-bus.register_object("/org/freedesktop/portal/desktop", node.interfaces[0], handle, None, None)
+bus.register_object("/org/freedesktop/portal/desktop", node.interfaces[0], handle,
+                    lambda conn, sender, path, iface, name: PROPS[name], None)
 Gio.bus_own_name_on_connection(bus, "org.freedesktop.portal.Desktop", Gio.BusNameOwnerFlags.NONE, None, None)
 print("ready", flush=True)
 GLib.MainLoop().run()

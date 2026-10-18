@@ -1433,14 +1433,21 @@ def run_gui():
             txt.delete("1.0", "end")
             txt.insert("end", "A 'share your screen' box should open now (it may be behind other windows: Alt+Tab). "
                               "Choose the game window...")
+            def show_line(line):
+                if win.winfo_exists():
+                    txt.insert("end", "\n" + line)
+                    txt.see("end")
             def work2():
+                # each step shows as it happens, so it's clear where it stops (and what to send if it does)
                 try:
-                    r = subprocess.run([runtime.host_python(), str(runtime.host_script()), "--test-share"],
-                                       capture_output=True, text=True, timeout=120)
-                    out = (r.stdout or r.stderr or "").strip().splitlines()[-1:] or ["No answer."]
-                except (OSError, subprocess.SubprocessError, TypeError) as e:
-                    out = [f"Problem: {e}"]
-                msgs.put(("call", None, lambda: (txt.delete("1.0", "end"), txt.insert("end", out[0])) if win.winfo_exists() else None))
+                    pr = subprocess.Popen([runtime.host_python(), "-u", str(runtime.host_script()), "--test-share"],
+                                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                    for line in pr.stdout:
+                        if line.strip():
+                            msgs.put(("call", None, lambda l=line.rstrip(): show_line(l)))
+                    pr.wait()
+                except (OSError, TypeError) as e:
+                    msgs.put(("call", None, lambda: show_line(f"Problem: {e}")))
             threading.Thread(target=work2, daemon=True).start()
         ttk.Button(body, text="Test screen sharing", command=test_share).pack(side="left")
 

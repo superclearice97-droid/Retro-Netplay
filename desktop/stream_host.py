@@ -415,7 +415,7 @@ class GstBackend:
             slow = (lambda: self.s.status("Still waiting for the 'share your screen' box on your friend's computer. "
                                           "It may be hidden behind the game: they can press Alt+Tab to find it.")
                     ) if hasattr(self.s, "status") else None
-            fd, node = portal_capture.request_screencast(on_slow=slow)
+            fd, node = portal_capture.request_screencast(on_slow=slow, progress=lambda t: log(t))
             if hasattr(self.s, "status"):
                 self.s.status("Game window chosen. Connecting the video...")
             self.keepalive.append(fd)
@@ -709,7 +709,7 @@ def main(argv=None):
             loop = GLib.MainLoop()
             def go():
                 try:
-                    out["r"] = portal_capture.request_screencast(timeout=90)
+                    out["r"] = portal_capture.request_screencast(timeout=90, progress=lambda t: print(t, flush=True))
                 except Exception as e:
                     out["e"] = str(e)
                 loop.quit()

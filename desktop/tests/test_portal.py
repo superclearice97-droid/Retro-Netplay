@@ -32,5 +32,24 @@ def check(name, ok, info=""):
 check("sharing works through the portal (create, select, start, open)", out.count("OK: screen sharing works") == 2, out)
 check("the choice is remembered (restore token sent the second time)", "restore_token" in calls.splitlines()[5] if len(calls.splitlines()) > 5 else False, calls)
 check("no portal: plain-words problem, not a hang", "no screen-sharing service" in out and out.strip().endswith("exit=1"), out)
+# an older desktop (version 3, no hidden pointer) and one that refuses the extra options: still works
+for name, env in (("older desktop", {"MOCK_VERSION": "3", "MOCK_CURSORS": "2"}), ("desktop refusing extras", {"MOCK_REFUSE_EXTRAS": "1"})):
+    log2 = os.path.join(home, name.replace(" ", "_") + ".log")
+    sc = f"""
+{PY} {HERE}/mock_portal.py & P=$!
+sleep 1
+XDG_SESSION_TYPE=wayland HOME={tempfile.mkdtemp()} {PY} {host} --test-share; echo "exit=$?"
+kill $P
+"""
+    r2 = subprocess.run(["dbus-run-session", "--", "sh", "-c", sc], capture_output=True, text=True, timeout=60,
+                        env={**os.environ, "MOCK_LOG": log2, "PICK_DELAY_MS": "200", **env})
+    sel = [l for l in open(log2).read().splitlines() if "SelectSources" in l]
+    check(f"{name}: sharing still works", "OK: screen sharing works" in r2.stdout, r2.stdout)
+    if name == "older desktop":
+        check("older desktop: no options it doesn't know are sent", sel and "persist_mode" not in sel[-1] and "cursor_mode" not in sel[-1], sel)
+    else:
+        check("refusing desktop: asked again the plain way", len(sel) == 2 and "persist_mode" not in sel[1], sel)
+print("--- what the Streaming check window shows ---")
+print(out.split("exit=")[0].strip())
 print("ALL PASSED" if not fails else "SOME FAILED")
 sys.exit(1 if fails else 0)

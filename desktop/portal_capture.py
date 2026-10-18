@@ -38,12 +38,25 @@ def _sender_token(bus):
     return bus.get_unique_name().lstrip(":").replace(".", "_")
 
 
-def request_screencast(timeout=120, on_slow=None, slow_after=20):
+def _prop(portal, name):
+    v = portal.get_cached_property(name)
+    return v.unpack() if v is not None else None
+
+
+def request_screencast(timeout=120, on_slow=None, slow_after=20, progress=None):
     """Returns (pipewire_fd, node_id). Raises RuntimeError with a plain message on any failure.
     on_slow(): called once if the 'share your screen' box hasn't been answered after slow_after seconds."""
     bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
     portal = Gio.DBusProxy.new_sync(bus, Gio.DBusProxyFlags.NONE, None, "org.freedesktop.portal.Desktop",
                                     "/org/freedesktop/portal/desktop", "org.freedesktop.portal.ScreenCast", None)
+    say = progress or (lambda _t: None)
+    version, kinds, cursors = _prop(portal, "version"), _prop(portal, "AvailableSourceTypes"), _prop(portal, "AvailableCursorModes")
+    say(f"desktop: {os.environ.get('XDG_CURRENT_DESKTOP', '?')}, screen sharing version {version}, "
+        f"can share: {kinds} (1 screen, 2 window), cursor modes: {cursors}")
+    if version is None:
+        raise RuntimeError("This desktop has no screen-sharing service. Install the one for your desktop "
+                           "(KDE: xdg-desktop-portal-kde, GNOME: xdg-desktop-portal-gnome, Hyprland: "
+                           "xdg-desktop-portal-hyprland), then log out and back in.")
     sender, counter = _sender_token(bus), [0]
     loop = GLib.MainLoop()
 
@@ -88,22 +101,30 @@ def request_screencast(timeout=120, on_slow=None, slow_after=20):
         d.update(extra)
         return d
 
+    say("step 1 of 3: asking the desktop for a sharing session...")
     res = call("CreateSession", lambda t: GLib.Variant("(a{sv})", (opts(t, session_handle_token=GLib.Variant("s", t + "s")),)))
     session = res["session_handle"]
     # types: 1 = monitor, 2 = window. cursor_mode 1 = hidden. persist_mode 2 = remember the choice, so the
     # "share your screen" box only asks the first time (the desktop hands back a token for next time).
-    extra = dict(types=GLib.Variant("u", 3), multiple=GLib.Variant("b", False), cursor_mode=GLib.Variant("u", 1),
-                 persist_mode=GLib.Variant("u", 2))
-    saved = _load_token()
-    if saved:
-        extra["restore_token"] = GLib.Variant("s", saved)
+    # Only ask for what this desktop says it can do (asking for more can make it refuse or never answer).
+    types = (kinds & 3) if isinstance(kinds, int) and kinds & 3 else 3
+    extra = dict(types=GLib.Variant("u", types), multiple=GLib.Variant("b", False))
+    if isinstance(cursors, int) and cursors & 1:
+        extra["cursor_mode"] = GLib.Variant("u", 1)          # hide the mouse pointer when the desktop allows it
+    if isinstance(version, int) and version >= 4:
+        extra["persist_mode"] = GLib.Variant("u", 2)
+        saved = _load_token()
+        if saved:
+            extra["restore_token"] = GLib.Variant("s", saved)
+    say("step 2 of 3: telling it what to share...")
     try:
         call("SelectSources", lambda t: GLib.Variant("(oa{sv})", (session, opts(t, **extra))))
-    except GLib.Error:
-        # older portals don't know persist_mode / restore_token: ask the plain way
-        extra.pop("persist_mode", None)
-        extra.pop("restore_token", None)
+    except RuntimeError as e:
+        say(f"  the desktop said: {e}. Asking again the plain way...")
+        for k in ("persist_mode", "restore_token", "cursor_mode"):
+            extra.pop(k, None)
         call("SelectSources", lambda t: GLib.Variant("(oa{sv})", (session, opts(t, **extra))))
+    say("step 3 of 3: the desktop now shows its 'share your screen' box. Waiting for your choice...")
     fired = []
 
     def nudge():

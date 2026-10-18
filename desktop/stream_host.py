@@ -491,15 +491,11 @@ class GstBackend:
 
         # ---- data channels (made before the offer so they are part of it). webrtcbin only makes them once the
         # pipeline is at least READY; before that it returns nothing (newer GStreamer), so switch it on first.
-        self.pipe.set_state(Gst.State.READY)
         unreliable = Gst.Structure.new_empty("opts")
         unreliable.set_value("ordered", False)
         unreliable.set_value("max-retransmits", 0)
         self.pad_ch = self.wb.emit("create-data-channel", "pad", unreliable)
         self.ctl_ch = self.wb.emit("create-data-channel", "ctl", None)
-        if self.pad_ch is None or self.ctl_ch is None:
-            raise RuntimeError("GStreamer's WebRTC part wouldn't open the controller channel "
-                               f"(GStreamer {Gst.version_string()}). Please report this.")
         self.pad_ch.connect("on-message-data", lambda ch, b: self.s.on_pad(b.get_data() if b else b""))
         self.ctl_ch.connect("on-message-string", self._on_ctl_string)
         bus = self.pipe.get_bus()

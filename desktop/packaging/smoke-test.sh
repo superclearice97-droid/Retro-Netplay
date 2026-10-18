@@ -63,7 +63,8 @@ env HOME="$H2" NETPLAY_SHOW=streamcheck xvfb-run -a -s "-screen 0 1280x900x24" s
   fi
   kill \$pid 2>/dev/null; sleep 1; kill -9 \$pid 2>/dev/null; true"
 cat "$OUT/streamcheck.result"
-grep -q "click test: ok" "$OUT/streamcheck.result" || fail=1
+grep -q "click test: ok" "$OUT/streamcheck.result" && echo "::notice title=click test::$(cat "$OUT/streamcheck.result")" \
+  || { echo "::error title=click test::$(cat "$OUT/streamcheck.result" 2>/dev/null)"; fail=1; }
 
 # 3) the bundled matchmaker works from the packaged app's Python? (run_server path)
 cat "$OUT"/*.log | head -50

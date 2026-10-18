@@ -449,6 +449,9 @@ class GstBackend:
             self.keepalive.append(fd)
             chain += [self._mk("pipewiresrc", {"fd": fd, "path": str(node), "do-timestamp": True}),
                       self._mk("videorate", {"drop-only": True}), self._caps(f"video/x-raw,framerate=0/1,max-framerate={o['fps']}/1")]
+        elif o["capture"] == "test":      # a moving test picture (automatic tests on machines with no game)
+            chain += [self._mk("videotestsrc", {"is-live": True, "pattern": "ball"}),
+                      self._caps(f"video/x-raw,width=640,height=480,framerate={o['fps']}/1")]
         else:
             props = {"use-damage": False, "show-pointer": False}
             if o.get("window"):
@@ -481,19 +484,24 @@ class GstBackend:
             except RuntimeError as e:
                 log("no audio:", e)
 
-        # ---- data channels (made before the offer so they are part of it)
+        self.wb.connect("on-negotiation-needed", self._on_negotiation)
+        self.wb.connect("on-ice-candidate", lambda el, idx, cand: self.s.on_ice(idx, cand))
+        self.wb.connect("notify::connection-state",
+                        lambda el, _p: self.s.on_state(el.get_property("connection-state").value_nick))
+
+        # ---- data channels (made before the offer so they are part of it). webrtcbin only makes them once the
+        # pipeline is at least READY; before that it returns nothing (newer GStreamer), so switch it on first.
+        self.pipe.set_state(Gst.State.READY)
         unreliable = Gst.Structure.new_empty("opts")
         unreliable.set_value("ordered", False)
         unreliable.set_value("max-retransmits", 0)
         self.pad_ch = self.wb.emit("create-data-channel", "pad", unreliable)
         self.ctl_ch = self.wb.emit("create-data-channel", "ctl", None)
+        if self.pad_ch is None or self.ctl_ch is None:
+            raise RuntimeError("GStreamer's WebRTC part wouldn't open the controller channel "
+                               f"(GStreamer {Gst.version_string()}). Please report this.")
         self.pad_ch.connect("on-message-data", lambda ch, b: self.s.on_pad(b.get_data() if b else b""))
         self.ctl_ch.connect("on-message-string", self._on_ctl_string)
-
-        self.wb.connect("on-negotiation-needed", self._on_negotiation)
-        self.wb.connect("on-ice-candidate", lambda el, idx, cand: self.s.on_ice(idx, cand))
-        self.wb.connect("notify::connection-state",
-                        lambda el, _p: self.s.on_state(el.get_property("connection-state").value_nick))
         bus = self.pipe.get_bus()
         bus.add_signal_watch()
         bus.connect("message::error", lambda b, m: (log("GStreamer error:", m.parse_error()[0].message, m.parse_error()[1]),
@@ -767,7 +775,7 @@ def main(argv=None):
     ap.add_argument("--key", help="session key from the match")
     ap.add_argument("--doctor", action="store_true", help="check this computer and exit")
     ap.add_argument("--test-share", action="store_true", help="open the 'share your screen' box once and say if it worked")
-    ap.add_argument("--capture", choices=["auto", "x11", "portal"], default="auto")
+    ap.add_argument("--capture", choices=["auto", "x11", "portal", "test"], default="auto")
     ap.add_argument("--window", help="X11 window id to capture (default: whole screen)")
     ap.add_argument("--encoder", default="auto", help="auto, nvh264enc, vah264lpenc, vah264enc, vaapih264enc, x264enc")
     ap.add_argument("--kbps", type=int, default=8000)

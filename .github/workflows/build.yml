@@ -48,9 +48,26 @@ jobs:
           name: linux-shots
           path: shots/*
 
+  stream:
+    # the real stream host (GStreamer WebRTC) streaming a test picture to the real friend's page in Chromium
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: GStreamer, Python GObject, Chromium
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq python3-gi gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 gir1.2-gst-plugins-bad-1.0 \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly \
+            gstreamer1.0-nice gstreamer1.0-libav >/dev/null
+          /usr/bin/python3 -m pip install --break-system-packages -q playwright
+          /usr/bin/python3 -m playwright install --with-deps chromium >/dev/null
+          sudo modprobe uinput && sudo chmod 666 /dev/uinput
+      - name: Real stream, end to end
+        run: /usr/bin/python3 desktop/tests/test_real_host.py
+
   publish:
     if: github.ref == 'refs/heads/main'
-    needs: [android, linux]
+    needs: [android, linux, stream]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

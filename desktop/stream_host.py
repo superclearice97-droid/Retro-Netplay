@@ -595,8 +595,15 @@ class GstBackend:
             pass
 
     def send_ctl(self, obj):
-        if self.ctl_ch is not None:
-            self.ctl_ch.emit("send-string", json.dumps(obj))
+        if self.ctl_ch is None:
+            return
+        try:      # only once the channel is open (GStreamer complains and drops it before that)
+            from gi.repository import GstWebRTC
+            if self.ctl_ch.get_property("ready-state") != GstWebRTC.WebRTCDataChannelState.OPEN:
+                return
+        except Exception:
+            pass
+        self.ctl_ch.emit("send-string", json.dumps(obj))
 
     def stop(self):
         from gi.repository import Gst

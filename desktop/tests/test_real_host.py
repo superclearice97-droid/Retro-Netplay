@@ -26,7 +26,8 @@ def check(name, cond, extra=""):
     ok &= bool(cond)
     print(("PASS " if cond else "FAIL ") + name + (f"  [{extra}]" if extra and not cond else ""), flush=True)
     if not cond and os.environ.get("GITHUB_ACTIONS"):
-        print(f"::error title=real stream test::{name} {str(extra)[:300]}", flush=True)
+        text = str(extra).replace("%", "%25").replace("\r", "").replace("\n", "%0A")[-6000:]
+        print(f"::error title=real stream test::{name}%0A{text}", flush=True)
 
 
 def free_port():
@@ -83,7 +84,7 @@ try:
                 break
         log = open(hostlog).read()
         check("the friend's page gets video from the real stream host", got,
-              page.evaluate("document.getElementById('mt').textContent") + " | host log: " + log[-1500:])
+              page.evaluate("document.getElementById('mt').textContent") + " | host log:\n" + log[-5000:])
         if got:
             time.sleep(1.5)
             check("the controller channel works (host assigned Player 2 over it)",

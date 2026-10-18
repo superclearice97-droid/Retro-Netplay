@@ -376,7 +376,7 @@ class GstBackend:
     def __init__(self, session, opts, ice_servers):
         self.s, self.o, self.ice = session, opts, ice_servers
         self.pipe = self.wb = self.pad_ch = self.ctl_ch = None
-        self.offered = False
+        self.offered = self.playing = False
         self.keepalive = []
         self.timer = HostTimer() if opts.get("timing", True) else None
 
@@ -510,6 +510,9 @@ class GstBackend:
                                                     self.s.end("pipeline error")))
         self.pipe.set_state(Gst.State.PLAYING)
         self._set_sendonly()
+        self.playing = True
+        from gi.repository import GLib
+        GLib.timeout_add(200, self._make_offer)
 
     def _attach_probes(self, chain, enc_name):
         """Time every frame through capture -> convert -> encode -> packetise. Failures here never stop the stream."""
@@ -560,22 +563,47 @@ class GstBackend:
     def _set_sendonly(self):
         try:
             from gi.repository import GstWebRTC
-            for t in self.wb.emit("get-transceivers") or []:
+            i = 0
+            while True:     # get-transceiver one by one (the list form isn't iterable in newer PyGObject)
+                t = self.wb.emit("get-transceiver", i)
+                if t is None:
+                    break
                 t.set_property("direction", GstWebRTC.WebRTCRTPTransceiverDirection.SENDONLY)
+                i += 1
         except Exception as e:
             log("note: couldn't set send-only:", e)
 
     # ---- negotiation
     def _on_negotiation(self, el):
-        from gi.repository import Gst
-        if self.offered:
-            return
-        self.offered = True
+        # webrtcbin can ask this before the pipeline runs and the video format is known; an offer made then is
+        # empty. The offer is made once the pipeline is PLAYING (_make_offer, started from start()).
+        if self.playing:
+            self._make_offer()
+
+    def _make_offer(self, attempt=0):
+        from gi.repository import GLib, Gst
+        if self.offered or self.wb is None:
+            return False
+
         def created(promise, _el, _u):
-            offer = promise.get_reply().get_value("offer")
+            reply = promise.get_reply()
+            offer = reply.get_value("offer") if reply else None
+            if offer is None or offer.sdp is None:
+                err = reply.get_value("error") if reply and reply.has_field("error") else None
+                log(f"offer not ready yet (try {attempt + 1}):", err.message if err else "no details")
+                if attempt < 20:
+                    GLib.timeout_add(300, lambda: self._make_offer(attempt + 1))
+                else:
+                    GLib.idle_add(lambda: (self.s.end("couldn't start: the computer couldn't set up the video "
+                                                      "connection (WebRTC offer)"), False)[1])
+                return
+            if self.offered:
+                return
+            self.offered = True
             self.wb.emit("set-local-description", offer, Gst.Promise.new())
             self.s.on_offer(offer.sdp.as_text())
-        self.wb.emit("create-offer", None, Gst.Promise.new_with_change_func(created, el, None))
+        self.wb.emit("create-offer", None, Gst.Promise.new_with_change_func(created, None, None))
+        return False
 
     def set_answer(self, sdp):
         from gi.repository import Gst, GstSdp, GstWebRTC

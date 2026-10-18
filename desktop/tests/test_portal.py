@@ -49,6 +49,22 @@ kill $P
         check("older desktop: no options it doesn't know are sent", sel and "persist_mode" not in sel[-1] and "cursor_mode" not in sel[-1], sel)
     else:
         check("refusing desktop: asked again the plain way", len(sel) == 2 and "persist_mode" not in sel[1], sel)
+# a box stuck from an earlier try: the first ask is never answered -> withdraw it, reset, ask again plainly
+log3 = os.path.join(home, "stuck.log")
+sc = f"""
+{PY} {HERE}/mock_portal.py & P=$!
+sleep 1
+XDG_SESSION_TYPE=wayland HOME={tempfile.mkdtemp()} timeout 80 {PY} {host} --test-share; echo "exit=$?"
+kill $P
+"""
+r3 = subprocess.run(["dbus-run-session", "--", "sh", "-c", sc], capture_output=True, text=True, timeout=120,
+                    env={**os.environ, "MOCK_LOG": log3, "PICK_DELAY_MS": "200", "MOCK_STUCK_FILE": os.path.join(home, "stuck")})
+calls3 = open(log3).read()
+check("stuck box: the unanswered request is withdrawn", "call Close" in calls3, calls3)
+check("stuck box: asks again and works", "OK: screen sharing works" in r3.stdout and "Restarting" in r3.stdout, r3.stdout)
+check("stuck box: second ask is the simplest one", "persist_mode" not in [l for l in calls3.splitlines() if "SelectSources" in l][-1])
+print("--- what the Streaming check window shows (stuck box case) ---")
+print(r3.stdout.split("exit=")[0].strip())
 print("--- what the Streaming check window shows ---")
 print(out.split("exit=")[0].strip())
 print("ALL PASSED" if not fails else "SOME FAILED")

@@ -12,6 +12,7 @@ XML = """<node><interface name="org.freedesktop.portal.ScreenCast">
 </interface></node>"""
 PROPS = {"version": GLib.Variant("u", int(os.environ.get("MOCK_VERSION", "4"))), "AvailableSourceTypes": GLib.Variant("u", 3),
          "AvailableCursorModes": GLib.Variant("u", int(os.environ.get("MOCK_CURSORS", "7")))}
+REQ = Gio.DBusNodeInfo.new_for_xml('<node><interface name="org.freedesktop.portal.Request"><method name="Close"/></interface></node>')
 DELAY = int(os.environ.get("PICK_DELAY_MS", "300"))
 log = open(os.environ.get("MOCK_LOG", "/dev/null"), "a")
 
@@ -27,6 +28,14 @@ def handle(conn, sender, path, iface, method, params, inv):
         inv.return_dbus_error("org.freedesktop.portal.Error.InvalidArgument", "Unknown option persist_mode"); return
     req = "/org/freedesktop/portal/desktop/request/%s/%s" % (sender.lstrip(":").replace(".", "_"), opts["handle_token"])
     inv.return_value(GLib.Variant("(o)", (req,)))
+    try:      # the request object, so Close (withdraw) can be seen
+        conn.register_object(req, REQ.interfaces[0], lambda *a: (print("call Close", a[2], file=log, flush=True),
+                                                                   a[-1].return_value(None)), None, None)
+    except GLib.Error:
+        pass
+    if method == "Start" and os.environ.get("MOCK_STUCK_FILE") and not os.path.exists(os.environ["MOCK_STUCK_FILE"]):
+        open(os.environ["MOCK_STUCK_FILE"], "w").close()      # the first box is "stuck": never answered
+        return
     if method == "CreateSession":
         res = {"session_handle": GLib.Variant("s", "/org/freedesktop/portal/desktop/session/x/" + opts["session_handle_token"])}; d = 0
     elif method == "SelectSources":

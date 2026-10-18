@@ -16,6 +16,7 @@ import json
 import os
 import queue
 import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -415,7 +416,16 @@ class GstBackend:
             slow = (lambda: self.s.status("Still waiting for the 'share your screen' box on your friend's computer. "
                                           "It may be hidden behind the game: they can press Alt+Tab to find it.")
                     ) if hasattr(self.s, "status") else None
-            fd, node = portal_capture.request_screencast(on_slow=slow, progress=lambda t: log(t))
+            try:
+                fd, node = portal_capture.request_screencast(timeout=60, on_slow=slow, progress=lambda t: log(t))
+            except RuntimeError as e:
+                if "in time" not in str(e):
+                    raise
+                # a box stuck from an earlier try blocks new ones (KDE shows one at a time): reset and ask again
+                if hasattr(self.s, "status"):
+                    self.s.status("Resetting screen sharing on your friend's computer and asking again...")
+                restart_portal()
+                fd, node = portal_capture.request_screencast(timeout=90, progress=lambda t: log(t), plain=True)
             if hasattr(self.s, "status"):
                 self.s.status("Game window chosen. Connecting the video...")
             self.keepalive.append(fd)
@@ -674,6 +684,65 @@ def default_monitor():
 
 
 # ===================================================================== main
+def portal_log():
+    """The desktop's own screen-sharing messages from the last few minutes (user journal, nothing leaves the PC)."""
+    try:
+        r = subprocess.run(["journalctl", "--user", "-b", "--since", "-10 min", "--no-pager", "-o", "cat",
+                            "-u", "xdg-desktop-portal.service", "-u", "plasma-xdg-desktop-portal-kde.service",
+                            "-u", "xdg-desktop-portal-kde.service"], capture_output=True, text=True, timeout=10)
+        return [l for l in r.stdout.splitlines() if l.strip()][-15:]
+    except (OSError, subprocess.SubprocessError):
+        return []
+
+
+def restart_portal():
+    """Restart this user's screen-sharing service (clears a box stuck from an earlier try). No admin rights needed."""
+    for unit in ("plasma-xdg-desktop-portal-kde.service", "xdg-desktop-portal-kde.service", "xdg-desktop-portal.service"):
+        try:
+            subprocess.run(["systemctl", "--user", "restart", unit], capture_output=True, timeout=20)
+        except (OSError, subprocess.SubprocessError):
+            pass
+    time.sleep(2)
+
+
+def test_share(session_type):
+    if session_type != "wayland":
+        print("OK: this desktop doesn't need the 'share your screen' box (X11).")
+        return 0
+    import portal_capture
+    from gi.repository import GLib
+
+    def attempt(**kw):
+        out, loop = {}, GLib.MainLoop()
+        def go():
+            try:
+                out["r"] = portal_capture.request_screencast(progress=lambda t: print(t, flush=True), **kw)
+            except Exception as e:
+                out["e"] = str(e)
+            loop.quit()
+            return False
+        GLib.idle_add(go)
+        loop.run()
+        return out
+
+    out = attempt(timeout=40)
+    if "e" in out and "in time" in out["e"]:
+        print("No box after 40 s. What the desktop logged:", flush=True)
+        for l in portal_log() or ["(nothing)"]:
+            print("  | " + l, flush=True)
+        print("Restarting the desktop's screen-sharing service (clears a box stuck from an earlier try) "
+              "and asking again the simplest way...", flush=True)
+        restart_portal()
+        out = attempt(timeout=60, plain=True)
+    if "r" in out:
+        print("OK: screen sharing works. Next time it uses the same window without asking.")
+        return 0
+    print("Problem: " + out["e"])
+    for l in portal_log():
+        print("  | " + l)
+    return 1
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Netplay Matchmaker stream host")
     ap.add_argument("--server", help="matchmaker web address, e.g. http://1.2.3.4:7778")
@@ -699,30 +768,7 @@ def main(argv=None):
         print("\n".join(lines))
         return 0 if not any(l.startswith("[X") for l in lines) else 1
     if a.test_share:
-        if session_type != "wayland":
-            print("OK: this desktop doesn't need the 'share your screen' box (X11).")
-            return 0
-        try:
-            import portal_capture
-            from gi.repository import GLib
-            out = {}
-            loop = GLib.MainLoop()
-            def go():
-                try:
-                    out["r"] = portal_capture.request_screencast(timeout=90, progress=lambda t: print(t, flush=True))
-                except Exception as e:
-                    out["e"] = str(e)
-                loop.quit()
-                return False
-            GLib.idle_add(go)
-            loop.run()
-        except Exception as e:
-            out = {"e": str(e)}
-        if "r" in out:
-            print("OK: screen sharing works. Next time it uses the same window without asking.")
-            return 0
-        print("Problem: " + out["e"])
-        return 1
+        return test_share(session_type)
     if not a.server or not a.key:
         ap.error("--server and --key are required (or use --doctor)")
     if elements is None:
@@ -738,6 +784,15 @@ def main(argv=None):
         return 2
 
     from gi.repository import GLib
+    import signal as _signal
+    def stopped(*_a):
+        try:
+            import portal_capture
+            portal_capture.withdraw_pending()       # never leave a hidden 'share your screen' box behind
+        except Exception:
+            pass
+        os._exit(0)
+    _signal.signal(_signal.SIGTERM, stopped)
     capture = a.capture if a.capture != "auto" else ("portal" if session_type == "wayland" else "x11")
     audio = "" if a.no_audio else default_monitor()
     opts = {"capture": capture, "window": a.window, "encoder": enc, "kbps": a.kbps, "fps": a.fps,

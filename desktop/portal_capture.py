@@ -43,7 +43,23 @@ def _prop(portal, name):
     return v.unpack() if v is not None else None
 
 
-def request_screencast(timeout=120, on_slow=None, slow_after=20, progress=None):
+PENDING = []   # the request and session waiting right now (withdraw_pending() closes them if we're stopped)
+
+
+def withdraw_pending():
+    for bus, path, iface in PENDING:
+        _close(bus, path, iface)
+    PENDING.clear()
+
+
+def _close(bus, path, iface):
+    try:
+        bus.call_sync("org.freedesktop.portal.Desktop", path, iface, "Close", None, None, Gio.DBusCallFlags.NONE, 3000, None)
+    except GLib.Error:
+        pass
+
+
+def request_screencast(timeout=120, on_slow=None, slow_after=20, progress=None, plain=False):
     """Returns (pipewire_fd, node_id). Raises RuntimeError with a plain message on any failure.
     on_slow(): called once if the 'share your screen' box hasn't been answered after slow_after seconds."""
     bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
@@ -59,6 +75,7 @@ def request_screencast(timeout=120, on_slow=None, slow_after=20, progress=None):
                            "xdg-desktop-portal-hyprland), then log out and back in.")
     sender, counter = _sender_token(bus), [0]
     loop = GLib.MainLoop()
+    session_box = []
 
     def call(method, args_fn):
         """Make a portal call and wait for its Response signal. Returns the results dict."""
@@ -72,6 +89,7 @@ def request_screencast(timeout=120, on_slow=None, slow_after=20, progress=None):
             loop.quit()
         # sender None: match by the request path only. Naming the portal here makes newer GLib (2.80.1+) drop the
         # answer until it has looked up who owns that name, which can lose it, and then the picker never shows.
+        PENDING[:] = [(bus, path, "org.freedesktop.portal.Request")] + [(bus, x, "org.freedesktop.portal.Session") for x in session_box]
         sub = bus.signal_subscribe(None, "org.freedesktop.portal.Request", "Response",
                                    path, None, Gio.DBusSignalFlags.NONE, on_response)
         timer = None
@@ -84,13 +102,22 @@ def request_screencast(timeout=120, on_slow=None, slow_after=20, progress=None):
                                        "(KDE: xdg-desktop-portal-kde, GNOME: xdg-desktop-portal-gnome, Hyprland: "
                                        "xdg-desktop-portal-hyprland), then log out and back in.") from None
                 raise RuntimeError(f"The desktop's screen sharing said no: {e.message}") from None
-            timer = GLib.timeout_add_seconds(timeout, lambda: (loop.quit(), False)[1])
+            def out_of_time():
+                box["late"] = True
+                loop.quit()
+                return False
+            timer = GLib.timeout_add_seconds(timeout, out_of_time)
             loop.run()
         finally:
             bus.signal_unsubscribe(sub)
-            if timer:
+            if timer and not box.get("late"):
                 GLib.source_remove(timer)
         if "code" not in box:
+            # Give up properly: withdraw the request and end the session, so the desktop doesn't keep a hidden box
+            # open (KDE shows one at a time; a forgotten one blocks every later one).
+            _close(bus, path, "org.freedesktop.portal.Request")
+            if session_box:
+                _close(bus, session_box[0], "org.freedesktop.portal.Session")
             raise RuntimeError("Nobody answered the 'share your screen' box in time.")
         if box["code"] != 0:
             raise RuntimeError("The 'share your screen' box was closed without choosing a window.")
@@ -104,11 +131,14 @@ def request_screencast(timeout=120, on_slow=None, slow_after=20, progress=None):
     say("step 1 of 3: asking the desktop for a sharing session...")
     res = call("CreateSession", lambda t: GLib.Variant("(a{sv})", (opts(t, session_handle_token=GLib.Variant("s", t + "s")),)))
     session = res["session_handle"]
+    session_box.append(session)
     # types: 1 = monitor, 2 = window. cursor_mode 1 = hidden. persist_mode 2 = remember the choice, so the
     # "share your screen" box only asks the first time (the desktop hands back a token for next time).
     # Only ask for what this desktop says it can do (asking for more can make it refuse or never answer).
     types = (kinds & 3) if isinstance(kinds, int) and kinds & 3 else 3
     extra = dict(types=GLib.Variant("u", types), multiple=GLib.Variant("b", False))
+    if plain:
+        cursors, version = None, None          # the simplest possible request: what to share, nothing else
     if isinstance(cursors, int) and cursors & 1:
         extra["cursor_mode"] = GLib.Variant("u", 1)          # hide the mouse pointer when the desktop allows it
     if isinstance(version, int) and version >= 4:
@@ -148,4 +178,5 @@ def request_screencast(timeout=120, on_slow=None, slow_after=20, progress=None):
     _out, fds = portal.call_with_unix_fd_list_sync(
         "OpenPipeWireRemote", GLib.Variant("(oa{sv})", (session, {})), Gio.DBusCallFlags.NONE, -1, fd_list, None)
     fd = fds.get(_out.unpack()[0])
+    PENDING.clear()
     return fd, node_id

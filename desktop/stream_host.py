@@ -208,6 +208,23 @@ class HostTimer:
 
 
 # ===================================================================== the session logic
+def plain_reason(why):
+    """Why the stream ended, in words for the friend's screen ('' when they left themselves)."""
+    w = str(why)
+    if w in ("guest left", "session ended", "session closed", "interrupted"):
+        return ""
+    if w.startswith("connection"):
+        return ("the video connection between the two devices failed. Both need to be on the same Wi-Fi "
+                "(not a guest network), or the computer's router is blocking it")
+    if w == "pipeline error":
+        return "capturing or encoding the game failed on the computer (details in its stream-host.log)"
+    if w.startswith("couldn't start: "):
+        return w[len("couldn't start: "):]
+    if w == "lost contact with the matchmaker":
+        return "the computer lost contact with the matchmaker"
+    return w
+
+
 class Session:
     """One guest. Backend does the media; this decides what to do with each message."""
 
@@ -348,7 +365,8 @@ class Session:
         self.pad.release_all()
         if self.backend:
             self.backend.stop()
-        self.signal.send({"type": "bye"})
+        self.why = why
+        self.signal.send({"type": "bye", "why": plain_reason(why)})
 
 
 # ===================================================================== GStreamer backend
@@ -831,6 +849,10 @@ def main(argv=None):
         time.sleep(0.3)      # let the final 'bye' go out
         sig.stop()
         session.pad.close()   # (the guest may have switched to another player's pad)
+    why = plain_reason(getattr(session, "why", ""))
+    if why:
+        print(f"STREAM ERROR: {why}", flush=True)   # the app shows this line when the stream stops
+        return 1
     return 0
 
 

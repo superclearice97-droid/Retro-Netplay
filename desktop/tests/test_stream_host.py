@@ -243,5 +243,18 @@ try:
     sig3.stop()
 finally:
     srv.terminate()
+# the friend's screen is told why the stream stopped (not just "ended")
+class Box:
+    def __init__(self): self.sent = []
+    def send(self, m): self.sent.append(m)
+b = Box()
+s4 = S.Session(b, lambda s_: FakeBackend(s_), FakePad(), stats_path=tempfile.mktemp())
+s4.end("connection failed")
+bye = [m for m in b.sent if m.get("type") == "bye"]
+check("goodbye says why the stream stopped", bye and "same Wi-Fi" in bye[-1].get("why", ""), bye)
+b2 = Box()
+s5 = S.Session(b2, lambda s_: FakeBackend(s_), FakePad(), stats_path=tempfile.mktemp())
+s5.end("guest left")
+check("no reason when the friend left themselves", [m for m in b2.sent if m.get("type") == "bye"][-1].get("why") == "")
 print("ALL PASSED" if ok else "SOME FAILED")
 sys.exit(0 if ok else 1)

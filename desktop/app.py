@@ -1410,7 +1410,6 @@ def run_gui():
         win = tk.Toplevel(root)
         win.title("Streaming check")
         win.transient(root)
-        over_modal(win)
         body = ttk.Frame(win, padding=12)
         body.pack(fill="both", expand=True)
         ttk.Label(body, wraplength=560, justify="left", text=(

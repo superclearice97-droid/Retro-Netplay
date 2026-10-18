@@ -38,8 +38,9 @@ def _sender_token(bus):
     return bus.get_unique_name().lstrip(":").replace(".", "_")
 
 
-def request_screencast(timeout=120):
-    """Returns (pipewire_fd, node_id). Raises RuntimeError with a plain message on any failure."""
+def request_screencast(timeout=120, on_slow=None, slow_after=20):
+    """Returns (pipewire_fd, node_id). Raises RuntimeError with a plain message on any failure.
+    on_slow(): called once if the 'share your screen' box hasn't been answered after slow_after seconds."""
     bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
     portal = Gio.DBusProxy.new_sync(bus, Gio.DBusProxyFlags.NONE, None, "org.freedesktop.portal.Desktop",
                                     "/org/freedesktop/portal/desktop", "org.freedesktop.portal.ScreenCast", None)
@@ -56,11 +57,20 @@ def request_screencast(timeout=120):
         def on_response(_c, _s, _p, _i, _sig, params):
             box["code"], box["results"] = params.unpack()
             loop.quit()
-        sub = bus.signal_subscribe("org.freedesktop.portal.Desktop", "org.freedesktop.portal.Request", "Response",
+        # sender None: match by the request path only. Naming the portal here makes newer GLib (2.80.1+) drop the
+        # answer until it has looked up who owns that name, which can lose it, and then the picker never shows.
+        sub = bus.signal_subscribe(None, "org.freedesktop.portal.Request", "Response",
                                    path, None, Gio.DBusSignalFlags.NONE, on_response)
         timer = None
         try:
-            portal.call_sync(method, args_fn(token), Gio.DBusCallFlags.NONE, -1, None)
+            try:
+                portal.call_sync(method, args_fn(token), Gio.DBusCallFlags.NONE, -1, None)
+            except GLib.Error as e:
+                if any(k in str(e) for k in ("ServiceUnknown", "UnknownMethod", "UnknownInterface", "UnknownObject")):
+                    raise RuntimeError("This desktop has no screen-sharing service. Install the one for your desktop "
+                                       "(KDE: xdg-desktop-portal-kde, GNOME: xdg-desktop-portal-gnome, Hyprland: "
+                                       "xdg-desktop-portal-hyprland), then log out and back in.") from None
+                raise RuntimeError(f"The desktop's screen sharing said no: {e.message}") from None
             timer = GLib.timeout_add_seconds(timeout, lambda: (loop.quit(), False)[1])
             loop.run()
         finally:
@@ -68,9 +78,9 @@ def request_screencast(timeout=120):
             if timer:
                 GLib.source_remove(timer)
         if "code" not in box:
-            raise RuntimeError("Timed out waiting for the screen-share picker.")
+            raise RuntimeError("Nobody answered the 'share your screen' box in time.")
         if box["code"] != 0:
-            raise RuntimeError("Screen sharing was cancelled.")
+            raise RuntimeError("The 'share your screen' box was closed without choosing a window.")
         return box["results"]
 
     def opts(token, **extra):
@@ -94,7 +104,19 @@ def request_screencast(timeout=120):
         extra.pop("persist_mode", None)
         extra.pop("restore_token", None)
         call("SelectSources", lambda t: GLib.Variant("(oa{sv})", (session, opts(t, **extra))))
-    res = call("Start", lambda t: GLib.Variant("(osa{sv})", (session, "", opts(t))))
+    fired = []
+
+    def nudge():
+        fired.append(1)
+        if on_slow:
+            on_slow()
+        return False
+    slow = GLib.timeout_add_seconds(slow_after, nudge)
+    try:
+        res = call("Start", lambda t: GLib.Variant("(osa{sv})", (session, "", opts(t))))
+    finally:
+        if not fired:
+            GLib.source_remove(slow)
     if res.get("restore_token"):
         _save_token(res["restore_token"])
     streams = res.get("streams") or []

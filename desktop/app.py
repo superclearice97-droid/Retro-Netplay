@@ -891,8 +891,8 @@ class Engine:
         except OSError as e:
             tell_guest(web, sess.get("key", ""), f"The stream couldn't start on your friend's computer: {e}")
             return self.set("idle", f"Couldn't start the stream: {e}")
-        self.emit("share", "Choose the game window to share. A 'share your screen' box opens when your friend "
-                           "connects (only the first time).", None)
+        self.emit("share", "When your friend connects, a 'share your screen' box opens (only the first time): "
+                           "choose the game window. Can't see it? Press Alt+Tab, it may be behind the game.", None)
         self.set("session", f"Streaming {g['name']}. When the 'share your screen' box opens, pick the game window. "
                             "Your friend is Player 2.")
         done, _ = await asyncio.wait({asyncio.ensure_future(self.stream_proc.wait()),
@@ -1411,6 +1411,22 @@ def run_gui():
                                              refresh(), resend_status())))
         threading.Thread(target=work, daemon=True).start()
         ttk.Button(body, text="Close", command=win.destroy).pack(side="right")
+
+        def test_share():
+            """Open the desktop's 'share your screen' box once, without a friend, and say whether it worked."""
+            txt.delete("1.0", "end")
+            txt.insert("end", "A 'share your screen' box should open now (it may be behind other windows: Alt+Tab). "
+                              "Choose the game window...")
+            def work2():
+                try:
+                    r = subprocess.run([runtime.host_python(), str(runtime.host_script()), "--test-share"],
+                                       capture_output=True, text=True, timeout=120)
+                    out = (r.stdout or r.stderr or "").strip().splitlines()[-1:] or ["No answer."]
+                except (OSError, subprocess.SubprocessError, TypeError) as e:
+                    out = [f"Problem: {e}"]
+                msgs.put(("call", None, lambda: (txt.delete("1.0", "end"), txt.insert("end", out[0])) if win.winfo_exists() else None))
+            threading.Thread(target=work2, daemon=True).start()
+        ttk.Button(body, text="Test screen sharing", command=test_share).pack(side="left")
 
     def show_manual():
         win = tk.Toplevel(root)

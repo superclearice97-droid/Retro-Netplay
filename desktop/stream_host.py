@@ -412,7 +412,10 @@ class GstBackend:
             if hasattr(self.s, "status"):
                 self.s.status("Waiting for your friend to choose the game window on their computer "
                               "(a 'share your screen' box opens there)...")
-            fd, node = portal_capture.request_screencast()
+            slow = (lambda: self.s.status("Still waiting for the 'share your screen' box on your friend's computer. "
+                                          "It may be hidden behind the game: they can press Alt+Tab to find it.")
+                    ) if hasattr(self.s, "status") else None
+            fd, node = portal_capture.request_screencast(on_slow=slow)
             if hasattr(self.s, "status"):
                 self.s.status("Game window chosen. Connecting the video...")
             self.keepalive.append(fd)
@@ -676,6 +679,7 @@ def main(argv=None):
     ap.add_argument("--server", help="matchmaker web address, e.g. http://1.2.3.4:7778")
     ap.add_argument("--key", help="session key from the match")
     ap.add_argument("--doctor", action="store_true", help="check this computer and exit")
+    ap.add_argument("--test-share", action="store_true", help="open the 'share your screen' box once and say if it worked")
     ap.add_argument("--capture", choices=["auto", "x11", "portal"], default="auto")
     ap.add_argument("--window", help="X11 window id to capture (default: whole screen)")
     ap.add_argument("--encoder", default="auto", help="auto, nvh264enc, vah264lpenc, vah264enc, vaapih264enc, x264enc")
@@ -694,6 +698,31 @@ def main(argv=None):
         lines = doctor_lines(elements, session_type, uinput_pad.uinput_problem(), bool(shutil.which("pactl")))
         print("\n".join(lines))
         return 0 if not any(l.startswith("[X") for l in lines) else 1
+    if a.test_share:
+        if session_type != "wayland":
+            print("OK: this desktop doesn't need the 'share your screen' box (X11).")
+            return 0
+        try:
+            import portal_capture
+            from gi.repository import GLib
+            out = {}
+            loop = GLib.MainLoop()
+            def go():
+                try:
+                    out["r"] = portal_capture.request_screencast(timeout=90)
+                except Exception as e:
+                    out["e"] = str(e)
+                loop.quit()
+                return False
+            GLib.idle_add(go)
+            loop.run()
+        except Exception as e:
+            out = {"e": str(e)}
+        if "r" in out:
+            print("OK: screen sharing works. Next time it uses the same window without asking.")
+            return 0
+        print("Problem: " + out["e"])
+        return 1
     if not a.server or not a.key:
         ap.error("--server and --key are required (or use --doctor)")
     if elements is None:

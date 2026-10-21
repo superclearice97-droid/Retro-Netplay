@@ -73,7 +73,7 @@ These keep Retro-Netplay as private as possible from day one.
 
 ## 8. Streaming a game to another person (the biggest open question)
 
-The built-in streamer sends video and sound of a running game from the host's computer to a guest's browser. That is different from two people each running their own copy in sync (netplay).
+The built-in streamer sends video and sound of a running game from the host's computer to a guest's player window (or, on Android, the app's built-in page). That is different from two people each running their own copy in sync (netplay).
 
 - Sending a copyrighted game's picture and sound to someone else can be treated as a public performance or distribution, depending on the country. Platforms such as Steam and Parsec handle this with their own licences and terms; a hobby project has none.
 - Mitigations the design already uses: private sessions between two people, no public or broadcast mode, no recording, invite links that expire.

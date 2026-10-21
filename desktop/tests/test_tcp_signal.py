@@ -226,6 +226,8 @@ check("the relay password expires a few hours from now", time.time() + 2 * 3600 
 check("password = base64(HMAC-SHA1(secret, username))",
       cred == base64.b64encode(hmac.new(b"s3cret-s3cret-s3cret", user.encode(), hashlib.sha1).digest()).decode())
 check("the secret itself is never sent", "s3cret" not in json.dumps(r))
+check("a player who turned the relay off keeps only STUN", stream_signal.without_relay(r["iceServers"]) ==
+      [x for x in r["iceServers"] if "username" not in x])
 sessions.configure_turn([], "")
 
 mm.recent_by_ip.clear()

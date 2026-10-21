@@ -80,6 +80,7 @@ check("goodbye without a reason", G.bye_text("") == "Your friend ended the sessi
 check("connection failed, no relay: says why and what helps", "no relay server" in G.end_text("ice failed", relay=False))
 check("connection failed with a relay: says even the relay didn't work", "relay server" in G.end_text("ice failed", relay=True)
       and "no relay" not in G.end_text("ice failed", relay=True))
+check("no video and no relay: says the matchmaker has no relay", "no relay server" in G.end_text("no video", relay=False))
 check("other reasons pass through", G.end_text("something else") == "something else")
 
 # ---- what this computer can do

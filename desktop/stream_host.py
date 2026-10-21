@@ -864,6 +864,7 @@ def main(argv=None):
     ap.add_argument("--slot", type=int, default=2, help="which player the guest controls")
     ap.add_argument("--slot-pick", action="store_true", help="let the guest choose Player 2, 3 or 4 (a friend's privilege)")
     ap.add_argument("--no-audio", action="store_true")
+    ap.add_argument("--no-relay", action="store_true", help="never send the stream through the matchmaker's relay server")
     ap.add_argument("--no-timing", action="store_true", help="skip measuring the host's capture/encode time")
     a = ap.parse_args(argv)
 
@@ -924,6 +925,8 @@ def main(argv=None):
         sig = stream_signal.TcpSignaling(host, port, a.key, on_msg=on_msg, on_end=on_end)
         try:
             ice = sig.connect().get("iceServers", [])
+            if a.no_relay:
+                ice = stream_signal.without_relay(ice)
         except stream_signal.SignalError as e:
             print(f"STREAM ERROR: can't reach the matchmaker: {e}", flush=True)
             pad.close()

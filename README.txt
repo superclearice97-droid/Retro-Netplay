@@ -54,8 +54,39 @@ BUILT-IN STREAMING (new, the default for PS2 / PS3)
     the same numbers on screen: click the little status pill (top right) or press F2.
     Those numbers are how we tune latency.
   - Players only pair if both use the same streaming method (Built-in or Parsec, Settings).
-  - Behind a strict router the stream may not connect with only the free STUN server. The fix is
-    a TURN relay: set NETPLAY_ICE_JSON on the matchmaker (see PROTOCOL.md).
+  - Behind a strict router the stream may not connect directly. The fix is a TURN relay next to the
+    matchmaker (below). The apps use it by themselves whenever the matchmaker has one; without one, the
+    player window says so in plain words when the direct connection fails.
+
+TURN RELAY (for friends behind strict routers; optional, for whoever runs the matchmaker)
+  The relay passes the stream along when two devices can't reach each other directly. The video stays
+  encrypted end to end: the relay only sees how much data passes. Nothing is set up by default, and no
+  relay password is ever built into the apps: the matchmaker hands each player a password that works for
+  3 hours, made from a secret it shares with the relay.
+  1. On the matchmaker's computer (or any always-on server): sudo apt install coturn
+  2. Make a long random secret:  openssl rand -hex 32
+  3. In /etc/turnserver.conf put (your address and secret):
+       listening-port=3478
+       fingerprint
+       use-auth-secret
+       static-auth-secret=<the secret from step 2>
+       realm=netplay
+       no-cli
+       no-multicast-peers
+       denied-peer-ip=10.0.0.0-10.255.255.255
+       denied-peer-ip=172.16.0.0-172.31.255.255
+       denied-peer-ip=192.168.0.0-192.168.255.255
+     (the denied-peer lines stop strangers from using your relay to reach your home network)
+     then: sudo systemctl enable --now coturn
+  4. Open UDP and TCP port 3478, and UDP ports 49152-65535, on that computer's router/firewall.
+  5. Tell the matchmaker, before starting it:
+       NETPLAY_TURN_URLS="turn:<your public address>:3478?transport=udp,turn:<your public address>:3478?transport=tcp"
+       NETPLAY_TURN_SECRET="<the same secret>"
+       python3 desktop/server.py
+     Or, for the matchmaker inside the desktop app, put the same two values in
+     ~/.netplay-matchmaker/server/turn.json as {"urls": ["turn:..."], "secret": "..."} and restart the app.
+     The matchmaker prints "relay for strict routers: ..." when it found them.
+  A player can switch the relay off in Settings ("Use the matchmaker's relay server...").
 
 
 FIRST-TIME SETUP (both apps)

@@ -202,8 +202,12 @@ def end_text(why, relay=False):
         return ("Your friend's computer didn't answer. Retro-Netplay must be open there with the game running. "
                 "Press Join again.")
     if w == "no video":
-        return ("The video hasn't arrived. Both devices need to reach each other: try the same Wi-Fi (not a guest "
-                "network), or ask whoever runs the matchmaker to add a relay server.")
+        if relay:
+            return ("The video hasn't arrived, not even through the relay server. One of your networks may block it "
+                    "(a work or school network often does).")
+        return ("The video hasn't arrived: your two devices can't reach each other directly, and this matchmaker has no "
+                "relay server for strict routers. Try the same Wi-Fi (not a guest network), or ask whoever runs the "
+                "matchmaker to add one (README: \"TURN relay\").")
     return w
 
 
@@ -857,6 +861,9 @@ class Player:
             self.win.wake()
 
     def begin_media(self, cfg):
+        import stream_signal
+        if self.a.no_relay:
+            cfg = {**cfg, "relay": False, "iceServers": stream_signal.without_relay(cfg.get("iceServers"))}
         self.relay = bool(cfg.get("relay"))
         try:
             self.media = Media(cfg.get("iceServers", []), self, self.a.jitter_ms, self.a.decoder,
@@ -1051,9 +1058,9 @@ class Player:
                     if not self.heard and not self.playing and now - self.start > 20:
                         self.say(end_text("no host"))
                     if not self.playing and self.heard and now - self.start > 45:
-                        self.say(end_text("no video"))
+                        self.say(end_text("no video", self.relay))
                     if a.seconds and not self.video_at and now - self.start > 30:     # (tests: never wait forever)
-                        self.finish(end_text("no video" if self.heard else "no host"), error=True)
+                        self.finish(end_text("no video" if self.heard else "no host", self.relay), error=True)
                     if a.seconds and self.video_at and now - self.video_at > a.seconds:
                         log("test time is up")
                         quit_ = True
@@ -1146,6 +1153,7 @@ def main(argv=None):
     ap.add_argument("--decoder", default="auto", help="auto, or a GStreamer H.264 decoder such as avdec_h264")
     ap.add_argument("--fullscreen", action="store_true")
     ap.add_argument("--no-audio", action="store_true")
+    ap.add_argument("--no-relay", action="store_true", help="never send the stream through the matchmaker's relay server")
     ap.add_argument("--stats-overlay", action="store_true", help="show the numbers from the start (F2 toggles)")
     ap.add_argument("--stats-file", default=STATS_CSV)
     # for the automatic tests

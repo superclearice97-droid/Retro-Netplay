@@ -182,6 +182,17 @@ class TcpSignaling:
         return False
 
 
+def without_relay(ice):
+    """The ICE servers minus any relay (the player chose not to send their stream through one)."""
+    out = []
+    for s in ice or []:
+        urls = [s.get("urls")] if isinstance(s.get("urls"), str) else list(s.get("urls") or [])
+        keep = [u for u in urls if not str(u).startswith(("turn:", "turns:"))]
+        if keep:
+            out.append({"urls": keep})
+    return out
+
+
 def send_once(host, port, key, msgs, timeout=4):
     """Open a stream connection, send these messages, close. For short notes (the app telling the friend why the
     stream stopped). Returns True if sent."""

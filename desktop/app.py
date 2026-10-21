@@ -892,7 +892,8 @@ class Engine:
             return self.set("idle", "The player that shows your friend's game is missing from this copy of Retro-Netplay. "
                                     "Download the app again.")
         name = social.clean_name(peer.get("name"))
-        cmd += ["--mm", f"{host}:{port}", f"--key={key}"] + ([f"--name={name}"] if name else [])
+        cmd += ["--mm", f"{host}:{port}", f"--key={key}"] + ([f"--name={name}"] if name else []) + (
+            [] if self.get_cfg().get("use_relay", True) else ["--no-relay"])
         log_path = CONFIG_PATH.parent / "stream-guest.log"      # what the player did, for "why didn't it work?"
         try:
             log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -934,7 +935,7 @@ class Engine:
         tcp = sess.get("sig") == "tcp"     # else an older matchmaker: DEPRECATED web signaling
         # --key=...: a key may start with "-", which would otherwise be read as an option
         cmd = [runtime.host_python(), str(runtime.host_script()), *(["--mm", f"{host}:{port}"] if tcp else ["--server", web]),
-               f"--key={sess.get('key', '')}", "--slot", "2"]
+               f"--key={sess.get('key', '')}", "--slot", "2"] + ([] if cfg.get("use_relay", True) else ["--no-relay"])
         tell = lambda text: tell_guest(web, sess.get("key", ""), text, (host, port) if tcp else None)
         log_path = CONFIG_PATH.parent / "stream-host.log"     # what the stream did, for "why didn't it work?"
         try:
@@ -1426,6 +1427,10 @@ def run_gui():
         ttk.Label(be, text="Streaming (PS2/PS3)", width=22).pack(side="left")
         be_var = tk.StringVar(value="Built-in (recommended)" if cfg.get("stream_backend", "own") == "own" else "Parsec")
         ttk.Combobox(be, textvariable=be_var, values=["Built-in (recommended)", "Parsec"], state="readonly", width=31).pack(side="left")
+        relay_var = tk.BooleanVar(value=cfg.get("use_relay", True))
+        ttk.Checkbutton(body, text="Use the matchmaker's relay server when a direct stream connection fails\n"
+                                    "(only if whoever runs the matchmaker set one up; the stream stays encrypted)",
+                        variable=relay_var).pack(anchor="w", pady=(0, 4))
         field("Your Parsec peer ID", "parsec_peer_id", cfg)
         ttk.Label(body, text="(Parsec ID is only used when Streaming is set to Parsec)", foreground="#666").pack(anchor="w")
         field("Matchmaker address", "server_host", cfg)
@@ -1465,6 +1470,7 @@ def run_gui():
             h = str(cfg.get("server_host", "")).strip()
             cfg["auto_mm"] = lan.is_loopback(h) or lan.is_private(h)    # an internet address typed on purpose stays put
             cfg["stream_backend"] = "own" if be_var.get().startswith("Built-in") else "parsec"
+            cfg["use_relay"] = relay_var.get()
             try:
                 cfg["server_port"] = int(cfg["server_port"])
             except ValueError:

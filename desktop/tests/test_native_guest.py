@@ -152,6 +152,45 @@ try:
     except socket.timeout:
         m = None
     check("an old host and a new player are never paired into a session that can't work", m is None, m)
+    # ---- 6. behind strict routers: through a real TURN relay (coturn) with the matchmaker's short-lived password
+    import shutil
+    if not shutil.which("turnserver"):
+        print("SKIP relay checks (coturn's turnserver is not installed)")
+    else:
+        tport, secret = free_port(), "test-relay-secret-0123456789"
+        turnlog = tempfile.mktemp(suffix=".log")
+        procs.append(subprocess.Popen(["turnserver", "-n", "-v", "--listening-ip=127.0.0.1", f"--listening-port={tport}",
+                                       "--relay-ip=127.0.0.1", "--use-auth-secret", f"--static-auth-secret={secret}",
+                                       "--realm=netplay.test", "--no-tls", "--no-dtls", "--no-cli", "--allow-loopback-peers",
+                                       "--log-file=stdout", "--min-port=51000", "--max-port=51200"],
+                                      stdout=open(turnlog, "w"), stderr=subprocess.STDOUT))
+        port2 = free_port()
+        procs.append(subprocess.Popen([sys.executable, "-u", os.path.join(D, "server.py"), str(port2), "0"],
+                                      stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT,
+                                      env={**os.environ, "NETPLAY_DATA": tempfile.mkdtemp(), "NETPLAY_ICE_JSON": "[]",
+                                           "NETPLAY_TURN_URLS": f"turn:127.0.0.1:{tport}?transport=udp", "NETPLAY_TURN_SECRET": secret}))
+        for _ in range(100):
+            try:
+                socket.create_connection(("127.0.0.1", port2), 0.5).close(); break
+            except OSError:
+                time.sleep(0.1)
+        MM, port0 = f"127.0.0.1:{port2}", port
+        hk, gk = pair(port2, "ps2:relay")
+        hp, hlog, pads = host(hk)
+        time.sleep(1.0)
+        r, _ = guest(gk, "--seconds", "3", "--relay-only")
+        stats = [json.loads(l[6:]) for l in r.stdout.splitlines() if l.startswith("STATS ")]
+        check("only through the relay: video still arrives", stats and max(s.get("fps") or 0 for s in stats) >= 50, r.stdout[-1500:])
+        tl = open(turnlog).read()
+        check("the relay accepted the matchmaker's short-lived password and relayed for the player",
+              "netplay-guest>: incoming packet ALLOCATE processed, success" in tl and
+              "netplay-guest>: incoming packet CREATE_PERMISSION processed, success" in tl, tl[-2000:])
+        MM = f"127.0.0.1:{port0}"            # back to the matchmaker with no relay
+        hk, gk = pair(port0, "ps2:norelay")
+        hp, hlog, pads = host(hk)
+        time.sleep(1.0)
+        r, _ = guest(gk, "--seconds", "3", "--relay-only", timeout=90)
+        check("no relay and no direct way: the player says plainly why", r.returncode == 1 and "no relay server" in r.stdout, r.stdout[-800:])
 finally:
     for p in procs:
         if p.poll() is None:

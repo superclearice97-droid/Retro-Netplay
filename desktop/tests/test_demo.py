@@ -1,4 +1,5 @@
-"""Phone-testable flows: /demo standalone, and the fake-opponent + app-core + host-tab flow (all real WebRTC in Chromium)."""
+"""The /demo test page (real WebRTC in Chromium). (The phone app no longer opens stream pages: it has its own player,
+tested in test_android_player.py; old phones and new computers are never paired, see test_android_stream.py.)"""
 import json, os, socket, subprocess, sys, tempfile, time, urllib.request
 from playwright.sync_api import sync_playwright
 HERE = os.path.dirname(os.path.abspath(__file__)); ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
@@ -60,34 +61,6 @@ try:
         check("no page errors", not errs, "; ".join(errs))
         br.close()
 
-    # ---- fake opponent + the Java app core + a host tab (the phone-only end-to-end)
-    out = tempfile.mkdtemp()
-    core = os.path.join(ROOT, "android/core/src/main/java/net/netplay/core")
-    srcs = [os.path.join(core, f) for f in os.listdir(core)] + [os.path.join(ROOT, "android/core/src/test/java/net/netplay/core/StreamTest.java")]
-    check("Java core compiles", subprocess.run(["javac", "-d", out] + srcs, capture_output=True).returncode == 0)
-    fo = subprocess.Popen([sys.executable, "-u", os.path.join(ROOT, "desktop/fake_opponent.py"), "--server", f"127.0.0.1:{port}"], stdout=subprocess.PIPE, text=True)
-    time.sleep(1)
-    j = subprocess.run(["java", "-cp", out, "net.netplay.core.StreamTest", str(port), "own"], capture_output=True, text=True, timeout=30)
-    kv = dict(l.split("=", 1) for l in j.stdout.splitlines() if "=" in l and not l.startswith("playUrl"))
-    check("the app core matched the fake opponent as guest", kv.get("ROLE") == "guest" and kv.get("PLAN") == "OPEN_STREAM", j.stdout)
-    fo_out = fo.stdout.read(); fo.wait(timeout=5)
-    host_url = next((l.strip() for l in fo_out.splitlines() if "/demo?k=" in l), "")
-    check("fake opponent printed the host-tab link", host_url.startswith(f"http://127.0.0.1:{hport}/demo?k="), fo_out)
-    with sync_playwright() as p:
-        br = p.chromium.launch(executable_path=CHROME, headless=True, args=["--no-sandbox", "--autoplay-policy=no-user-gesture-required", "--disable-features=WebRtcHideLocalIpsWithMdns"])
-        ctx = br.new_context(bypass_csp=True)
-        host = ctx.new_page(); host.goto(host_url)
-        guest = ctx.new_page(); guest.goto(kv["URL"])        # what the phone's browser opens
-        try:
-            guest.wait_for_function("window.__netplay.pc && window.__netplay.pc.connectionState === 'connected'", timeout=15000); c = True
-        except Exception: c = False
-        check("real match: phone-style guest page connects to the host tab", c)
-        guest.wait_for_function("document.getElementById('v').videoWidth > 0", timeout=10000)
-        guest.keyboard.down("x"); time.sleep(0.4)
-        lit = host.evaluate("[...document.querySelectorAll('.chip.on')].map(c => c.textContent)")
-        guest.keyboard.up("x")
-        check("keyboard X on guest lights B on host", "B" in lit, str(lit))
-        br.close()
 finally:
     srv.terminate()
 print("ALL PASSED" if ok else "SOME FAILED"); sys.exit(0 if ok else 1)

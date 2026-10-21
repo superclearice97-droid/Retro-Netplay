@@ -373,16 +373,15 @@ public class PlayerActivity extends Activity {
         if ("pad".equals(label)) padCh = ch;
         else if ("ctl".equals(label)) ctlCh = ch;
         else return;
+        boolean[] opened = {false};
+        Runnable open = () -> {
+            if (opened[0] || ch.state() != DataChannel.State.OPEN) return;      // (a channel can say "open" twice)
+            opened[0] = true;
+            if (ch == ctlCh) ctl(msg("t", "hi", "ua", "Retro-Netplay player (Android)"));   // the host answers with our slot
+        };
         ch.registerObserver(new DataChannel.Observer() {
-            private boolean opened;
             @Override public void onBufferedAmountChange(long l) { }
-            @Override public void onStateChange() {
-                if (ch.state() == DataChannel.State.OPEN) main.post(() -> {
-                    if (opened) return;              // (a channel can say "open" twice)
-                    opened = true;
-                    if (ch == ctlCh) ctl(msg("t", "hi", "ua", "Retro-Netplay player (Android)"));
-                });
-            }
+            @Override public void onStateChange() { main.post(open); }
             @Override public void onMessage(DataChannel.Buffer buf) {
                 if (ch != ctlCh || buf.binary) return;
                 byte[] bytes = new byte[buf.data.remaining()];
@@ -391,6 +390,7 @@ public class PlayerActivity extends Activity {
                 main.post(() -> onCtl(text));
             }
         });
+        open.run();          // it is often open already when it arrives, and then says nothing more
     }
 
     private void ctl(Map<String, Object> m) {

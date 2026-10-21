@@ -5,7 +5,8 @@ from playwright.sync_api import sync_playwright
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SERVER = os.path.join(HERE, "..", "server.py")
-CHROME = "/opt/pw-browsers/chromium-1194/chrome-linux/chrome"
+CHROME = "/opt/pw-browsers/chromium-1194/chrome-linux/chrome"     # (this one if present, else Playwright's own)
+CHROME = CHROME if os.path.exists(CHROME) else None
 ok = True
 
 

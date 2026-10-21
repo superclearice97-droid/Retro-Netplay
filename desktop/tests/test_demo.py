@@ -2,7 +2,8 @@
 import json, os, socket, subprocess, sys, tempfile, time, urllib.request
 from playwright.sync_api import sync_playwright
 HERE = os.path.dirname(os.path.abspath(__file__)); ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
-CHROME = "/opt/pw-browsers/chromium-1194/chrome-linux/chrome"
+CHROME = "/opt/pw-browsers/chromium-1194/chrome-linux/chrome"     # (this one if present, else Playwright's own)
+CHROME = CHROME if os.path.exists(CHROME) else None
 ok = True
 def check(name, cond, extra=""):
     global ok

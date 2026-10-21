@@ -410,6 +410,9 @@ class GstBackend:
             except Exception:
                 pass
         v = choices[0]
+        if not isinstance(v, (bool, int, float, str)):
+            el.set_property(key, v)              # e.g. Gst.Caps: as text it would be "<Gst.Caps object ...>" (ignored)
+            return True
         Gst.util_set_object_arg(el, key, ("true" if v else "false") if isinstance(v, bool) else str(v))
         return True
 

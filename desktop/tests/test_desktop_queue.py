@@ -127,10 +127,16 @@ check("Play starts a GameCube game right away", wait(lambda: "-b -e" in log.read
 check("the window is asked to start its own matchmaker first", started == [LATE])
 check("no matchmaker yet: still playing, retrying", wait(lambda: any("Trying again" in m for _, m in eg1)) and G1.ingame_alive(), eg1[-1:])
 threading.Thread(target=lambda: asyncio.run(mm.main(LATE, 0)), daemon=True).start()
+def listening():
+    try:
+        socket.create_connection(("127.0.0.1", LATE), 0.3).close(); return True
+    except OSError:
+        return False
+wait(listening)   # ("In the queue" shows before the connection is made, so it alone doesn't prove the matchmaker is up)
 check("once the matchmaker is up, you're in the queue", wait(lambda: any(m.startswith("In the queue for F-Zero GX") for _, m in eg1)), [m for _, m in eg1][-2:])
 cg2, eg2, G2 = mk_gc("Hal")
 G2.toggle()
-check("matched on the GameCube game", wait(lambda: any("Matched with" in m for _, m in eg1)))
+check("matched on the GameCube game", wait(lambda: any("Matched with" in m for _, m in eg1)), [m for _, m in eg1][-4:] + ["--- Hal:"] + [m for _, m in eg2][-4:])
 lines = log.read_text().splitlines()
 check("the solo game closes and Dolphin's own window opens for NetPlay (no -b)", wait(lambda: "" in log.read_text().splitlines()), lines)
 check("queue messages in order (no second search running)", [m for _, m in eg1 if "Trying again" in m or m.startswith("In the queue")][-1].startswith("In the queue"),

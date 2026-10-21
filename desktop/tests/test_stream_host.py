@@ -91,6 +91,15 @@ T3 = S.HostTimer(window=5)
 for i in range(20):
     for st, dt in (("cap", 0), ("enc_in", 0.001), ("enc_out", 0.003), ("pay", 0.004)): T3.mark(st, i, 10 + i + dt)
 check("timer: keeps only the recent window", len(T3.samples["encodeMs"]) == 5)
+T4 = S.HostTimer()     # an encoder that shifts every timestamp (x264enc adds 1000 hours), several packets per frame
+SHIFT = 3600 * 10**9
+for i in range(30):
+    pts = i * 16_666_667; t0 = 50.0 + i * 0.0166
+    T4.mark("cap", pts, t0); T4.mark("enc_in", pts, t0 + 0.001); T4.mark("enc_out", pts + SHIFT, t0 + 0.004)
+    for k in range(3): T4.mark("pay", pts + SHIFT, t0 + 0.005)
+sm4 = T4.summary()
+check("timer: an encoder that shifts timestamps is still timed, once per frame",
+      sm4.get("frames") == 30 and abs(sm4.get("encodeMs", 0) - 3.0) < 0.01 and abs(sm4.get("totalMs", 0) - 5.0) < 0.01, sm4)
 
 # ---------------------------------------------------------------- session orchestration, real server
 def free_port():

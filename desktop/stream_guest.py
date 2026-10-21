@@ -1151,7 +1151,7 @@ class Player:
         s = self.stats.update(now, bytes_rx, lost)
         if self.playing:
             self.media.send_ctl({"t": "stats", "s": s})
-            print("STATS " + json.dumps({**s, "inputs": self.sender.sent, "slot": self.slot}), flush=True)
+            print("STATS " + json.dumps({**s, "inputs": self.sender.sent, "slot": self.slot, "host": self.host_stats}), flush=True)
             if now - last_csv >= 2.0:
                 write_stats_row(self.a.stats_file, s, self.host_stats)
 

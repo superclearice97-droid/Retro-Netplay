@@ -103,6 +103,9 @@ try:
     check("the picture is the host's full size (640x480)", stats and stats[-1]["w"] == 640 and stats[-1]["h"] == 480, stats[-1:])
     check("decode time and round trip are measured", stats and stats[-1]["decodeMs"] is not None and stats[-1]["rttMs"] is not None, stats[-1:])
     check("the host made this player Player 2", stats and stats[-1]["slot"] == 2)
+    hs = stats[-1].get("host", {}) if stats else {}
+    check("the host's own timing arrives (capture, convert, encode, pack)",
+          all(isinstance(hs.get(k), (int, float)) for k in ("captureAgeMs", "convertMs", "encodeMs", "payMs", "totalMs")), hs)
     check("the player left cleanly", r.returncode == 0 and out.rstrip().endswith("GUEST ENDED: you left"), out[-500:])
     time.sleep(1.0)
     hl = open(hlog).read()

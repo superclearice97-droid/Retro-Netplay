@@ -81,9 +81,11 @@ jobs:
           /usr/bin/python3 -m pip install --break-system-packages -q playwright pysdl2==0.9.17 pysdl2-dll==2.30.2
           /usr/bin/python3 -m playwright install --with-deps chromium >/dev/null
           sudo modprobe uinput && sudo chmod 666 /dev/uinput
-      - name: Stream setup over TCP, the player's logic, the app's join flow, the Android app's path
+      - name: All the other tests (matchmaker, friends, queue, stream setup, the player's logic, the Android core)
         run: |
-          for t in test_tcp_signal test_stream_guest test_app_own test_android_stream test_two_devices; do
+          for t in test_tcp_signal test_stream_guest test_app_own test_android_stream test_two_devices test_desktop_queue \
+                   test_friends test_friends_java test_library test_portal test_portmap test_portmap_java test_autofind \
+                   test_stream_host test_stream_web test_demo; do
             echo "== $t"; /usr/bin/python3 desktop/tests/$t.py || exit 1
           done
       - name: Native player window (headless) against the real stream host over TCP, also through a relay

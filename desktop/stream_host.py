@@ -161,7 +161,7 @@ class HostTimer:
 
     def __init__(self, window=180, max_pending=240):
         self.window, self.max_pending = window, max_pending
-        self.pending, self.order = {}, []
+        self.pending, self.order, self.remap = {}, [], {}
         self.samples = {k: [] for k in list(self.SPANS) + ["captureAgeMs"]}
         self.frames = 0
         self.lock = threading.Lock()
@@ -169,6 +169,15 @@ class HostTimer:
     def mark(self, stage, pts, now, age_ms=None):
         """now = time.monotonic() seconds. age_ms (cap stage only) = how old the frame already was."""
         with self.lock:
+            if stage == "enc_out" and pts not in self.pending:
+                # some encoders shift every timestamp (x264enc adds 1000 hours); frames still leave in order (no
+                # B-frames), so this is the oldest frame inside the encoder
+                inside = next((p for p in self.order if "enc_in" in self.pending[p] and "enc_out" not in self.pending[p]), None)
+                if inside is not None:
+                    self.remap[pts] = inside
+                    if len(self.remap) > self.max_pending:
+                        self.remap.pop(next(iter(self.remap)))
+            pts = self.remap.get(pts, pts) if stage in ("enc_out", "pay") else pts
             marks = self.pending.get(pts)
             if marks is None:
                 if stage != "cap":
@@ -532,7 +541,11 @@ class GstBackend:
             pay = next(e for e in chain if name(e) == "rtph264pay")
             def probe(el, padname, stage):
                 def cb(pad, info):
-                    buf = info.get_buffer()
+                    if info.type & Gst.PadProbeType.BUFFER_LIST:       # the packetiser sends lists
+                        lst = info.get_buffer_list()
+                        buf = lst.get(0) if lst is not None and lst.length() else None
+                    else:
+                        buf = info.get_buffer()
                     if buf is not None and buf.pts != Gst.CLOCK_TIME_NONE:
                         age = None
                         if stage == "cap":
@@ -541,7 +554,7 @@ class GstBackend:
                                 age = (clock.get_time() - self.pipe.get_base_time() - buf.pts) / 1e6
                         self.timer.mark(stage, buf.pts, time.monotonic(), age)
                     return Gst.PadProbeReturn.OK
-                el.get_static_pad(padname).add_probe(Gst.PadProbeType.BUFFER, cb)
+                el.get_static_pad(padname).add_probe(Gst.PadProbeType.BUFFER | Gst.PadProbeType.BUFFER_LIST, cb)
             probe(chain[0], "src", "cap")
             probe(enc, "sink", "enc_in")
             probe(enc, "src", "enc_out")

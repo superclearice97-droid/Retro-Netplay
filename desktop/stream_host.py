@@ -216,8 +216,10 @@ def plain_reason(why):
     if w.startswith("connection"):
         return ("the video connection between the two devices failed. Both need to be on the same Wi-Fi "
                 "(not a guest network), or the computer's router is blocking it")
-    if w == "pipeline error":
-        return "capturing or encoding the game failed on the computer (details in its stream-host.log)"
+    if w.startswith("pipeline error"):
+        detail = w[len("pipeline error"):].lstrip(": ").strip().rstrip(".")
+        return ("capturing or encoding the game failed on the computer"
+                + (f": {detail}" if detail else "") + " (details in its stream-host.log)")
     if w.startswith("couldn't start: "):
         return w[len("couldn't start: "):]
     if w == "lost contact with the matchmaker":
@@ -507,7 +509,7 @@ class GstBackend:
         bus.connect("message::error", lambda b, m: (log("GStreamer error:", m.parse_error()[0].message, m.parse_error()[1]),
                                                     hasattr(self.s, "status") and self.s.status(
                                                         "The stream stopped on your friend's computer: " + m.parse_error()[0].message),
-                                                    self.s.end("pipeline error")))
+                                                    self.s.end("pipeline error: " + m.parse_error()[0].message)))
         self.pipe.set_state(Gst.State.PLAYING)
         self._set_sendonly()
         self.playing = True
@@ -719,6 +721,41 @@ def _doctor_lines(elements, session_type, uinput_msg, have_pactl, display=True):
     return out
 
 
+def encoder_works(name, props, profile, frames=30, timeout=8):
+    """-> (ok, problem). Encode a few test frames with this encoder before streaming with it.
+
+    A hardware encoder can be installed yet fail on this GPU or driver (or refuse the browser-safe profile);
+    finding that out here lets the stream fall back to software instead of stopping on the friend's screen."""
+    from gi.repository import Gst
+    pipe = Gst.Pipeline.new("encoder-check")
+    try:
+        els = []
+        for factory, p in (("videotestsrc", {"num-buffers": frames}), ("capsfilter", None), ("videoconvert", None),
+                           (name, props), ("capsfilter", None), ("h264parse", None), ("fakesink", {"sync": False})):
+            el = Gst.ElementFactory.make(factory, None)
+            if el is None:
+                return False, f"GStreamer element '{factory}' is missing"
+            for k, v in (p or {}).items():
+                GstBackend._set(el, k, v)
+            els.append(el)
+            pipe.add(el)
+        els[1].set_property("caps", Gst.Caps.from_string("video/x-raw,width=1280,height=720,framerate=60/1"))
+        els[4].set_property("caps", Gst.Caps.from_string(f"video/x-h264,profile={profile}"))
+        for a, b in zip(els, els[1:]):
+            if not a.link(b):
+                return False, f"{a.get_name()} won't connect to {b.get_name()}"
+        if pipe.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
+            return False, f"{name} wouldn't start"
+        msg = pipe.get_bus().timed_pop_filtered(timeout * Gst.SECOND, Gst.MessageType.EOS | Gst.MessageType.ERROR)
+        if msg is None:
+            return False, f"{name} didn't finish {frames} test frames in {timeout} s"
+        if msg.type == Gst.MessageType.ERROR:
+            return False, msg.parse_error()[0].message
+        return True, ""
+    finally:
+        pipe.set_state(Gst.State.NULL)
+
+
 def available_elements():
     try:
         import gi
@@ -839,6 +876,16 @@ def main(argv=None):
     if enc[0] is None:
         print("No usable H.264 encoder. Run --doctor.")
         return 2
+    if a.encoder == "auto" and enc[0] != "x264enc":
+        works, why = encoder_works(enc[0], enc[1], a.profile)
+        if not works:
+            log(f"encoder {enc[0]} failed a quick test ({why})")
+            if "x264enc" not in elements:
+                print(f"STREAM ERROR: the video encoder {enc[0]} doesn't work here ({why}). "
+                      "Install gst-plugins-ugly for the software encoder.", flush=True)
+                return 2
+            log("using the software encoder x264enc instead")
+            enc = pick_encoder(elements, "x264enc", a.kbps, a.fps)
     problem = uinput_pad.uinput_problem()
     if problem:
         print("Can't create the virtual controller:", problem)

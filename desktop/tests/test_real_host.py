@@ -30,6 +30,16 @@ def check(name, cond, extra=""):
         print(f"::error title=real stream test::{name}%0A{text}", flush=True)
 
 
+# ---- the quick encoder test that decides whether to fall back to software
+sys.path.insert(0, os.path.join(HERE, ".."))
+import stream_host as S
+_, x264 = S.pick_encoder({"x264enc"}, "x264enc")
+works, why = S.encoder_works("x264enc", x264, "constrained-baseline")
+check("encoder test: a working encoder passes", works, why)
+works, why = S.encoder_works("x264enc", x264, "no-such-profile")
+check("encoder test: an encoder that can't make the stream fails, with a reason", not works and why, why)
+
+
 def free_port():
     s = socket.socket(); s.bind(("127.0.0.1", 0)); p = s.getsockname()[1]; s.close(); return p
 

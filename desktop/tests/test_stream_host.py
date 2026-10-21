@@ -256,5 +256,8 @@ b2 = Box()
 s5 = S.Session(b2, lambda s_: FakeBackend(s_), FakePad(), stats_path=tempfile.mktemp())
 s5.end("guest left")
 check("no reason when the friend left themselves", [m for m in b2.sent if m.get("type") == "bye"][-1].get("why") == "")
+why = S.plain_reason("pipeline error: Internal data stream error.")
+check("a capture/encode failure shows GStreamer's own reason on the friend's screen",
+      "Internal data stream error" in why and "stream-host.log" in why, why)
 print("ALL PASSED" if ok else "SOME FAILED")
 sys.exit(0 if ok else 1)

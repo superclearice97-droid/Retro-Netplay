@@ -87,7 +87,7 @@ if command -v dpkg >/dev/null 2>&1; then
     [ -n "$pkg" ] || continue
     grep -q "^$pkg " "$LIC/PACKAGES.txt" && continue
     echo "$pkg $(dpkg-query -W -f='${Version} (source: ${source:Package})' "$pkg" 2>/dev/null)" >> "$LIC/PACKAGES.txt"
-    [ -f "/usr/share/doc/$pkg/copyright" ] && cp "/usr/share/doc/$pkg/copyright" "$LIC/$pkg.txt"
+    if [ -f "/usr/share/doc/$pkg/copyright" ]; then cp "/usr/share/doc/$pkg/copyright" "$LIC/$pkg.txt"; fi
   done
   sort -o "$LIC/PACKAGES.txt" "$LIC/PACKAGES.txt"
 elif command -v pacman >/dev/null 2>&1; then     # Windows (MSYS2): https://packages.msys2.org/base/<package>
@@ -100,7 +100,7 @@ elif command -v pacman >/dev/null 2>&1; then     # Windows (MSYS2): https://pack
     [ -n "$pkg" ] || continue
     grep -q "^$pkg " "$LIC/PACKAGES.txt" && continue
     echo "$pkg $(pacman -Q "$pkg" | cut -d' ' -f2)" >> "$LIC/PACKAGES.txt"
-    [ -d "/ucrt64/share/licenses/${pkg#mingw-w64-ucrt-x86_64-}" ] && cp -r "/ucrt64/share/licenses/${pkg#mingw-w64-ucrt-x86_64-}" "$LIC/$pkg"
+    if [ -d "/ucrt64/share/licenses/${pkg#mingw-w64-ucrt-x86_64-}" ]; then cp -r "/ucrt64/share/licenses/${pkg#mingw-w64-ucrt-x86_64-}" "$LIC/$pkg"; fi
   done
   sort -o "$LIC/PACKAGES.txt" "$LIC/PACKAGES.txt"
 elif [ -n "$MAC" ]; then         # macOS (Homebrew): https://formulae.brew.sh/formula/<formula>, the keg keeps its licence
@@ -114,13 +114,13 @@ elif [ -n "$MAC" ]; then         # macOS (Homebrew): https://formulae.brew.sh/fo
     echo "$pkg $ver" >> "$LIC/PACKAGES.txt"
     mkdir -p "$LIC/$pkg"
     for l in "$CELLAR/$pkg/$ver"/LICEN[CS]E* "$CELLAR/$pkg/$ver"/COPYING* "$CELLAR/$pkg/$ver"/NOTICE*; do
-      [ -f "$l" ] && cp "$l" "$LIC/$pkg/"
+      if [ -f "$l" ]; then cp "$l" "$LIC/$pkg/"; fi
     done
   done
   sort -o "$LIC/PACKAGES.txt" "$LIC/PACKAGES.txt"
 fi
 for f in "$("$PY" -c 'import sdl2dll, os; print(os.path.dirname(sdl2dll.__file__))' 2>/dev/null)"/../pysdl2_dll-*.dist-info/LICENSE*; do
-  [ -f "$f" ] && cp "$f" "$LIC/pysdl2-dll-$(basename "$f")"
+  if [ -f "$f" ]; then cp "$f" "$LIC/pysdl2-dll-$(basename "$f")"; fi
 done
 "$OUT/Retro-Netplay-Player/Retro-Netplay-Player" --check || true    # (.exe on Windows)
 du -sh "$OUT/Retro-Netplay-Player"

@@ -166,10 +166,9 @@ class Presence(threading.Thread):
         s = self.sock
         if s:
             try:
-                s.shutdown(socket.SHUT_RDWR)
-                s.close()
-            except OSError:
-                pass
+                s.shutdown(socket.SHUT_RDWR)   # wakes the reading thread, which closes it (closing it here, under that
+            except OSError:                    # thread, could hand its number to the next connection, whose first
+                pass                           # bytes the old read would then eat)
 
     def send(self, m):
         s = self.sock

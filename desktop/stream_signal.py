@@ -81,7 +81,8 @@ class TcpSignaling:
         return reply
 
     def start(self):
-        threading.Thread(target=self._read_loop, daemon=True).start()
+        self.reader = threading.Thread(target=self._read_loop, daemon=True)
+        self.reader.start()
         threading.Thread(target=self._send_loop, daemon=True).start()
         threading.Thread(target=self._ping_loop, daemon=True).start()
 
@@ -96,10 +97,12 @@ class TcpSignaling:
             s = self.sock
         if s:
             try:
-                s.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
-            s.close()
+                s.shutdown(socket.SHUT_RDWR)      # wakes the reading thread, which then closes it: closing it under that
+            except OSError:                       # thread could hand its number to a new connection, and the old read
+                pass                              # would eat that connection's first bytes
+            reader = getattr(self, "reader", None)
+            if not (reader and reader.is_alive()) or reader is threading.current_thread():
+                s.close()
 
     def flush(self, timeout=2.0):
         """Wait (a little) until everything queued has really been written (the goodbye must not be lost)."""
@@ -140,6 +143,16 @@ class TcpSignaling:
             self.on_end(why)
 
     def _read_loop(self):
+        try:
+            self._read_lines()
+        finally:
+            if self.stop_flag.is_set():
+                with self.lock:
+                    s = self.sock
+                if s:
+                    s.close()
+
+    def _read_lines(self):
         while not self.stop_flag.is_set():
             with self.lock:
                 f = self.file

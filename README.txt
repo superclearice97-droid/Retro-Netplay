@@ -49,16 +49,16 @@ BUILT-IN STREAMING (new, the default for PS2 / PS3)
     lost packets), Esc twice = leave. Keyboard: Z/X/A/S = A/B/X/Y, Q/W = shoulders, arrows = d-pad,
     Enter = Start, Shift = Select. If the host lets you choose, press 2, 3 or 4 to be that player.
     If anything goes wrong it says why on screen, including the host computer's own error message.
-  - The Linux download carries the player with its own GStreamer. It decodes the video on your
-    graphics card (Intel/AMD with VA-API, or NVIDIA). A computer without one uses its own GStreamer
+  - The Linux and Windows downloads carry the player with its own GStreamer. It decodes the video on
+    your graphics card (Linux: Intel/AMD with VA-API, or NVIDIA; Windows: Direct3D 11). A computer without one uses its own GStreamer
     instead, if it has a software decoder: Settings > Streaming check says what to install (usually
     one package, gstreamer1.0-libav). (The download can't include a software H.264 decoder: patents.)
   - The Android app still plays streams in its built-in web page; its own native player comes later.
   - HOST SETUP (Linux): run  python3 desktop/stream_host.py --doctor  . It lists exactly what is
     missing (GStreamer pieces, a hardware encoder, permission for the virtual controller) with the
     install commands. Hosting is Linux only for now. Joining: the Linux download has the player window
-    built in; the Windows and Mac downloads with the player are not done yet (Settings > Streaming
-    check says so on those computers).
+    built in; there is an early Windows download with it too (not yet tried on a real Windows PC). No
+    Mac download yet.
   - On Wayland your desktop shows its own "share a window" picker: choose the game window.
   - Every session writes what the guest experienced (round trip, jitter buffer, decode time,
     frames per second, lost packets) AND what the host spent (capture age, convert, encode, pack)

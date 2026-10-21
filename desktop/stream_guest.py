@@ -230,9 +230,10 @@ def pick_decoders(available, prefer="auto"):
 def check_lines(elements, sdl_problem=""):
     """Pure: what this computer can do as the joining player. elements = set of GStreamer element names or None."""
     if elements is None and sys.platform in ("win32", "darwin"):
-        return ["[X ] The player window needs GStreamer, which this copy of Retro-Netplay doesn't carry yet on "
-                + ("Windows" if sys.platform == "win32" else "macOS") + ". Joining a friend's stream works from the "
-                "Linux download for now; the Windows and Mac downloads with the player built in come next."]
+        return ["[X ] The player window needs GStreamer, which this copy of Retro-Netplay doesn't carry"
+                + (". Use the Windows download (Retro-Netplay-windows-x86_64.zip), which has it built in."
+                   if sys.platform == "win32" else " on macOS yet. Joining a friend's stream works from the Linux "
+                   "and Windows downloads for now.")]
     if elements is None:
         return ["[X ] GStreamer for Python is not installed (needed to show the stream).",
                 "    Debian/Ubuntu: sudo apt install python3-gi gir1.2-gst-plugins-bad-1.0 gstreamer1.0-plugins-good "

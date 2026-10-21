@@ -22,8 +22,10 @@ SETUP (about 5 minutes)
        file as program", then double-click again. Or download the .zip, unzip it, open the folder and
        double-click "Retro-Netplay". Nothing else to install: Python is inside.
      Linux from source: run  sh install-linux.sh  once (or  sh start.sh ).
-     Windows: double-click "Start (Windows).bat". It needs Python from python.org first
-       (tick "Add python.exe to PATH"). A one-click Windows download is coming next.
+     Windows: download Retro-Netplay-windows-x86_64.zip from the Releases page (an EARLY test build,
+       not yet tried on a real Windows PC), unzip it and double-click Retro-Netplay. Joining a friend's
+       stream works from it; hosting a stream is Linux only. From source: "Start (Windows).bat" (needs
+       Python from python.org; tick "Add python.exe to PATH"), but joining streams then needs the download.
      RetroArch, Dolphin, PCSX2 or RPCS3 installed as a Flatpak are found automatically.
   3. The first time, a short setup opens: pick your game FOLDERS (every game inside is found and
      named for you, so it matches the other player's name), check your emulators, the online

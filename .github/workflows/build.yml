@@ -93,7 +93,7 @@ jobs:
 
   windows:
     # the Windows download: the app plus the player window with its own GStreamer (from MSYS2) and SDL.
-    # Not yet part of the release (it hasn't been tried on a real Windows PC): see README.txt.
+    # Released as an early test build: it hasn't been tried on a real Windows PC yet (see README.txt).
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -132,6 +132,9 @@ jobs:
           $out = & dist/Retro-Netplay/_internal/player/Retro-Netplay-Player.exe --check 2>&1 | Out-String
           Write-Output $out
           if ($out -notmatch "\[OK\] webrtcbin" -or $out -notmatch "\[OK\] window and controllers") { exit 1 }
+          $lic = (Get-ChildItem dist/Retro-Netplay/_internal/player/licenses).Count
+          Write-Output "licence files in the player: $lic"
+          if ($lic -lt 10) { exit 1 }
           exit 0     # (no graphics-card decoder on GitHub's Windows machines, so --check itself says [X] for that)
       - uses: actions/upload-artifact@v4
         with:
@@ -140,7 +143,7 @@ jobs:
 
   publish:
     if: github.ref == 'refs/heads/main'
-    needs: [android, linux, stream]
+    needs: [android, linux, stream, windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -153,13 +156,15 @@ jobs:
         run: |
           gh release delete latest --yes --cleanup-tag || true
           gh release create latest out/android/Retro-Netplay.apk out/linux/Retro-Netplay-linux-x86_64.zip out/linux/Retro-Netplay-x86_64.AppImage \
+            out/windows/Retro-Netplay-windows-x86_64.zip \
             --title "Retro-Netplay test build" \
             --notes "Early test build, from commit ${GITHUB_SHA::7}.
 
           - Android: Retro-Netplay.apk (install on your phone; debug-signed).
           - Linux: Retro-Netplay-x86_64.AppImage (one file: download, then double-click; if it won't open, right-click > Properties > Permissions > Allow executing as program), or Retro-Netplay-linux-x86_64.zip (unzip, open the folder, double-click Retro-Netplay).
 
-          New: joining a friend's PS2/PS3 stream opens Retro-Netplay's own player window (no web browser): Friends > Join, they tap Allow, the game appears. F11 full screen, F2 numbers, Esc twice to leave. Invites are netplay:// links plus a code to type under Enter code. Both computers need this version. The Android app still uses its built-in page. Windows/Mac: the download with the player isn't ready yet.
+          New: joining a friend's PS2/PS3 stream opens Retro-Netplay's own player window (no web browser): Friends > Join, they tap Allow, the game appears. F11 full screen, F2 numbers, Esc twice to leave. Invites are netplay:// links plus a code to type under Enter code. Both computers need this version. The Android app still uses its built-in page.
+          - Windows (EARLY TEST, never tried on a real Windows PC yet): Retro-Netplay-windows-x86_64.zip, unzip and double-click Retro-Netplay. It can join a friend's stream (hosting is Linux only). No Mac download yet.
 
           No games, BIOS or firmware are included. Licence GPL-3.0."
       - name: Screenshots from the automatic test (separate test release)

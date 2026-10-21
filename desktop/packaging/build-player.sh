@@ -40,8 +40,12 @@ if "$WIN":   # MSYS2's SDL2 and SDL2_ttf next to the player (PySDL2 is told to l
 else:
     sdl = [b for b in collect_dynamic_libs("sdl2dll") if "SDL2-2.0" in b[0] or "SDL2_ttf" in b[0]]
     sdl_data = collect_data_files("sdl2dll")
+# NSS's crypto modules: libsrtp (the video's encryption) uses NSS on Debian/Ubuntu, and NSS loads these at run time from
+# next to libnss3; without them SRTP can't start and no video arrives (only the controller channel works)
+nss = [(f, ".") for d in ("/usr/lib/x86_64-linux-gnu/nss", "/usr/lib64/nss", "/usr/lib/nss")
+       for n in ("libsoftokn3", "libfreebl3", "libfreeblpriv3") for f in glob.glob(f"{d}/{n}.*")]
 a = Analysis([r"$SRC/stream_guest.py"], pathex=[r"$SRC"],
-             binaries=sdl,
+             binaries=sdl + nss,
              datas=[(r"$SRC/fonts", "fonts")] + sdl_data,
              hiddenimports=["stream_signal", "stream_host", "uinput_pad", "sdl2", "sdl2.sdlttf"] + ([] if "$WIN" else ["sdl2dll"]),
              hooksconfig={"gstreamer": {"include_plugins": PLUGINS},

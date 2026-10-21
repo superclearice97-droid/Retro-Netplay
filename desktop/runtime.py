@@ -57,9 +57,11 @@ def guest_commands():
     ready-made player with its own GStreamer and SDL (it decodes on the graphics card); the computer's own Python and
     GStreamer come next (they may have a software decoder, which the download leaves out). From source: this Python."""
     out = []
-    exe = BASE / "player" / ("Retro-Netplay-Player.exe" if sys.platform == "win32" else "Retro-Netplay-Player")
-    if exe.exists():
-        out.append([str(exe)])
+    name = "Retro-Netplay-Player.exe" if sys.platform == "win32" else "Retro-Netplay-Player"
+    for exe in (BASE / "player" / name, BASE.parent / "Resources" / "player" / name):    # (Mac: inside the .app)
+        if exe.exists():
+            out.append([str(exe)])
+            break
     if not FROZEN:
         out.append([sys.executable, str(SRC / "stream_guest.py")])
     else:

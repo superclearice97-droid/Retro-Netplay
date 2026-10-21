@@ -181,9 +181,39 @@ jobs:
           name: windows
           path: Retro-Netplay-windows-x86_64.zip
 
+  mac:
+    # the Mac download (Apple Silicon): the app, netplay:// links, and the player window with Homebrew's GStreamer
+    # (video decoded by macOS's own VideoToolbox). Released as an early test build: not yet tried on a real Mac.
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: GStreamer, PyGObject, SDL2 (Homebrew) for the player; coturn for the relay test
+        run: brew install gstreamer pygobject3 sdl2 sdl2_ttf coturn
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build the app with the player inside
+        run: APP_PYTHON=python3 PLAYER_PYTHON="$(brew --prefix)/bin/python3" sh desktop/packaging/build-mac.sh
+      - name: The packaged player starts, links are registered, licences are inside
+        run: |
+          mkdir -p pk && ditto -x -k dist/Retro-Netplay-mac-arm64.zip pk
+          A=pk/Retro-Netplay.app
+          codesign --verify --deep --strict "$A"
+          plutil -extract CFBundleURLTypes.0.CFBundleURLSchemes.0 raw "$A/Contents/Info.plist" | grep -qx netplay
+          out="$("$A/Contents/Resources/player/Retro-Netplay-Player" --check 2>&1 || true)"; echo "$out"
+          echo "$out" | grep -q "\[OK\] webrtcbin" && echo "$out" | grep -q "\[OK\] window and controllers" \
+            && echo "$out" | grep -q "video decoder: vtdec"
+          n="$(ls "$A/Contents/Resources/player/licenses" | wc -l)"; echo "licence files in the player: $n"; [ "$n" -ge 10 ]
+      - name: The packaged player, end to end against the real host (this Mac's Homebrew GStreamer hosts)
+        run: NETPLAY_PLAYER="$PWD/pk/Retro-Netplay.app/Contents/Resources/player/Retro-Netplay-Player" "$(brew --prefix)/bin/python3" desktop/tests/test_native_guest.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac
+          path: dist/Retro-Netplay-mac-arm64.zip
+
   publish:
     if: github.ref == 'refs/heads/main'
-    needs: [android, android-player, linux, stream, windows]
+    needs: [android, android-player, linux, mac, stream, windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -196,15 +226,16 @@ jobs:
         run: |
           gh release delete latest --yes --cleanup-tag || true
           gh release create latest out/android/Retro-Netplay.apk out/linux/Retro-Netplay-linux-x86_64.zip out/linux/Retro-Netplay-x86_64.AppImage \
-            out/windows/Retro-Netplay-windows-x86_64.zip \
+            out/windows/Retro-Netplay-windows-x86_64.zip out/mac/Retro-Netplay-mac-arm64.zip \
             --title "Retro-Netplay test build" \
             --notes "Early test build, from commit ${GITHUB_SHA::7}.
 
           - Android: Retro-Netplay.apk (install on your phone; debug-signed).
           - Linux: Retro-Netplay-x86_64.AppImage (one file: download, then double-click; if it won't open, right-click > Properties > Permissions > Allow executing as program), or Retro-Netplay-linux-x86_64.zip (unzip, open the folder, double-click Retro-Netplay).
 
-          New: joining a friend's PS2/PS3 stream opens Retro-Netplay's own player window (no web browser): Friends > Join, they tap Allow, the game appears. F11 full screen, F2 numbers, Esc twice to leave. Invites are netplay:// links plus a code to type under Enter code. Both computers need this version. The Android app still uses its built-in page.
-          - Windows (EARLY TEST, never tried on a real Windows PC yet): Retro-Netplay-windows-x86_64.zip, unzip and double-click Retro-Netplay. It can join a friend's stream (hosting is Linux only). No Mac download yet.
+          New: joining a friend's PS2/PS3 stream opens Retro-Netplay's own player window (no web browser): Friends > Join, they tap Allow, the game appears. F11 full screen, F2 numbers, Esc twice to leave. Invites are netplay:// links plus a code to type under Enter code. Both computers need this version. The Android app has its own player now too (the phone's video chip decodes the picture; controller or on-screen buttons).
+          - Windows (EARLY TEST, never tried on a real Windows PC yet): Retro-Netplay-windows-x86_64.zip, unzip and double-click Retro-Netplay. It can join a friend's stream (hosting is Linux only).
+          - Mac (EARLY TEST, Apple Silicon M1 and later, never tried on a real Mac yet): Retro-Netplay-mac-arm64.zip, double-click to unzip, move Retro-Netplay to Applications and open it. It isn't signed by Apple, so the first time macOS refuses: open System Settings > Privacy & Security and press Open Anyway. It can join a friend's stream and opens netplay:// links.
 
           No games, BIOS or firmware are included. Licence GPL-3.0."
       - name: Screenshots from the automatic test (separate test release)

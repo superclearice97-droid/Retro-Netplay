@@ -16,12 +16,13 @@ trap 'rm -rf "$WORK"' EXIT
 "${PLAYER_PYTHON:-python3}" -m venv --system-site-packages "$WORK/venv"       # (sees the system's PyGObject / GStreamer)
 PY="$WORK/venv/bin/python"
 case "$(uname -s)" in MINGW*|MSYS*) WIN=1 ;; *) WIN="" ;; esac
+MAC=""; [ "$(uname -s)" != Darwin ] || MAC="$(brew --prefix)"     # macOS: Homebrew's GStreamer and SDL2
 SRC="$HERE"                                  # (as the build's Python sees it: C:/... on Windows)
 [ -z "$WIN" ] || SRC="$(cygpath -m "$HERE")"
 "$PY" -c "import PyInstaller" 2>/dev/null || "$PY" -m pip install --quiet pyinstaller==6.11.1
 "$PY" -m pip install --quiet pysdl2==0.9.17
-# SDL2 + SDL2_ttf: the pysdl2-dll package on Linux; on Windows (MSYS2) its own SDL2 packages
-[ -n "$WIN" ] || "$PY" -m pip install --quiet pysdl2-dll==2.30.2
+# SDL2 + SDL2_ttf: the pysdl2-dll package on Linux; on Windows (MSYS2) and macOS (Homebrew) their own SDL2 packages
+[ -n "$WIN$MAC" ] || "$PY" -m pip install --quiet pysdl2-dll==2.30.2
 
 cat > "$WORK/player.spec" <<SPEC
 # (written by build-player.sh)
@@ -37,6 +38,10 @@ if "$WIN":   # MSYS2's SDL2 and SDL2_ttf next to the player (PySDL2 is told to l
     sdl = [(f, ".") for n in ("SDL2.dll", "SDL2_ttf.dll") for f in [os.path.join(sys.base_prefix, "bin", n)]
            if os.path.exists(f)]
     sdl_data = []
+elif "$MAC":  # Homebrew's SDL2 and SDL2_ttf next to the player (PySDL2 is told to look there)
+    sdl = [(f, ".") for n in ("libSDL2-2.0.0.dylib", "libSDL2_ttf-2.0.0.dylib") for f in [os.path.join("$MAC", "lib", n)]
+           if os.path.exists(f)]
+    sdl_data = []
 else:
     sdl = [b for b in collect_dynamic_libs("sdl2dll") if "SDL2-2.0" in b[0] or "SDL2_ttf" in b[0]]
     sdl_data = collect_data_files("sdl2dll")
@@ -47,12 +52,12 @@ nss = [(f, ".") for d in ("/usr/lib/x86_64-linux-gnu/nss", "/usr/lib64/nss", "/u
 a = Analysis([r"$SRC/stream_guest.py"], pathex=[r"$SRC"],
              binaries=sdl + nss,
              datas=[(r"$SRC/fonts", "fonts")] + sdl_data,
-             hiddenimports=["stream_signal", "stream_host", "uinput_pad", "sdl2", "sdl2.sdlttf"] + ([] if "$WIN" else ["sdl2dll"]),
+             hiddenimports=["stream_signal", "stream_host", "uinput_pad", "sdl2", "sdl2.sdlttf"] + ([] if "$WIN$MAC" else ["sdl2dll"]),
              hooksconfig={"gstreamer": {"include_plugins": PLUGINS},
                           "gi": {"icons": [], "themes": [], "languages": ["en_US"]}},
              excludes=["tkinter", "pygame", "cryptography"])
 # Linux: use the computer's own VA-API library (it must match the computer's graphics drivers)
-if not "$WIN":
+if not "$WIN$MAC":
     a.binaries = [b for b in a.binaries if not os.path.basename(b[0]).startswith("libva")]
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="Retro-Netplay-Player", console=True)
@@ -95,6 +100,21 @@ elif command -v pacman >/dev/null 2>&1; then     # Windows (MSYS2): https://pack
     grep -q "^$pkg " "$LIC/PACKAGES.txt" && continue
     echo "$pkg $(pacman -Q "$pkg" | cut -d' ' -f2)" >> "$LIC/PACKAGES.txt"
     [ -d "/ucrt64/share/licenses/${pkg#mingw-w64-ucrt-x86_64-}" ] && cp -r "/ucrt64/share/licenses/${pkg#mingw-w64-ucrt-x86_64-}" "$LIC/$pkg"
+  done
+  sort -o "$LIC/PACKAGES.txt" "$LIC/PACKAGES.txt"
+elif [ -n "$MAC" ]; then         # macOS (Homebrew): https://formulae.brew.sh/formula/<formula>, the keg keeps its licence
+  : > "$LIC/PACKAGES.txt"
+  CELLAR="$(brew --cellar)"
+  find "$OUT/Retro-Netplay-Player/_internal" \( -name '*.dylib' -o -name '*.so' \) -type f | while read -r f; do
+    src="$(ls "$CELLAR"/*/*/lib/"$(basename "$f")" "$CELLAR"/*/*/lib/gstreamer-1.0/"$(basename "$f")" 2>/dev/null | head -1 || true)"
+    [ -n "$src" ] || continue
+    rel="${src#"$CELLAR"/}"; pkg="${rel%%/*}"; ver="$(echo "$rel" | cut -d/ -f2)"
+    grep -q "^$pkg " "$LIC/PACKAGES.txt" && continue
+    echo "$pkg $ver" >> "$LIC/PACKAGES.txt"
+    mkdir -p "$LIC/$pkg"
+    for l in "$CELLAR/$pkg/$ver"/LICEN[CS]E* "$CELLAR/$pkg/$ver"/COPYING* "$CELLAR/$pkg/$ver"/NOTICE*; do
+      [ -f "$l" ] && cp "$l" "$LIC/$pkg/"
+    done
   done
   sort -o "$LIC/PACKAGES.txt" "$LIC/PACKAGES.txt"
 fi

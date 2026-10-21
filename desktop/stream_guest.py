@@ -232,8 +232,8 @@ def check_lines(elements, sdl_problem=""):
     if elements is None and sys.platform in ("win32", "darwin"):
         return ["[X ] The player window needs GStreamer, which this copy of Retro-Netplay doesn't carry"
                 + (". Use the Windows download (Retro-Netplay-windows-x86_64.zip), which has it built in."
-                   if sys.platform == "win32" else " on macOS yet. Joining a friend's stream works from the Linux "
-                   "and Windows downloads for now.")]
+                   if sys.platform == "win32" else ". Use the Mac download (Retro-Netplay-mac-arm64.zip), which has it "
+                   "built in.")]
     if elements is None:
         return ["[X ] GStreamer for Python is not installed (needed to show the stream).",
                 "    Debian/Ubuntu: sudo apt install python3-gi gir1.2-gst-plugins-bad-1.0 gstreamer1.0-plugins-good "
@@ -580,8 +580,8 @@ CHIP = (228, 227, 223, 235)
 
 
 def sdl_problem():
-    if getattr(sys, "frozen", False) and sys.platform == "win32":
-        os.environ.setdefault("PYSDL2_DLL_PATH", sys._MEIPASS)     # the Windows player carries SDL2.dll next to it
+    if getattr(sys, "frozen", False) and sys.platform in ("win32", "darwin"):
+        os.environ.setdefault("PYSDL2_DLL_PATH", sys._MEIPASS)     # the Windows / Mac player carries SDL2 next to it
     try:
         import sdl2  # noqa: F401
         import sdl2.sdlttf  # noqa: F401

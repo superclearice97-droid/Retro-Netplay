@@ -49,8 +49,8 @@ BUILT-IN STREAMING (new, the default for PS2 / PS3)
     lost packets), Esc twice = leave. Keyboard: Z/X/A/S = A/B/X/Y, Q/W = shoulders, arrows = d-pad,
     Enter = Start, Shift = Select. If the host lets you choose, press 2, 3 or 4 to be that player.
     If anything goes wrong it says why on screen, including the host computer's own error message.
-  - The Linux and Windows downloads carry the player with its own GStreamer. It decodes the video on
-    your graphics card (Linux: Intel/AMD with VA-API, or NVIDIA; Windows: Direct3D 11). A computer without one uses its own GStreamer
+  - The Linux, Windows and Mac downloads carry the player with its own GStreamer. It decodes the video on
+    your graphics card (Linux: Intel/AMD with VA-API, or NVIDIA; Windows: Direct3D 11; Mac: VideoToolbox). A computer without one uses its own GStreamer
     instead, if it has a software decoder: Settings > Streaming check says what to install (usually
     one package, gstreamer1.0-libav). (The download can't include a software H.264 decoder: patents.)
   - The Android app plays streams in its own player too (no browser, no web page): the phone's video
@@ -60,8 +60,12 @@ BUILT-IN STREAMING (new, the default for PS2 / PS3)
   - HOST SETUP (Linux): run  python3 desktop/stream_host.py --doctor  . It lists exactly what is
     missing (GStreamer pieces, a hardware encoder, permission for the virtual controller) with the
     install commands. Hosting is Linux only for now. Joining: the Linux download has the player window
-    built in; there is an early Windows download with it too (not yet tried on a real Windows PC). No
-    Mac download yet.
+    built in; there are early Windows and Mac downloads with it too (not yet tried on a real Windows PC
+    or Mac).
+  - MAC (Apple Silicon, M1 and later): download Retro-Netplay-mac-arm64.zip, double-click it, drag
+    Retro-Netplay into Applications and open it. It is not signed by Apple (that needs a paid developer
+    account), so the first time macOS says it can't check it: open System Settings > Privacy & Security,
+    scroll down and press Open Anyway. After that it opens normally, and netplay:// links open it.
   - On Wayland your desktop shows its own "share a window" picker: choose the game window.
   - Every session writes what the guest experienced (round trip, jitter buffer, decode time,
     frames per second, lost packets) AND what the host spent (capture age, convert, encode, pack)
@@ -187,5 +191,6 @@ WHAT WAS AND WASN'T TESTED
   links opening the app on Windows and Mac; the controller shortcut and notifications on a real phone,
   a real RetroArch answering network commands, the real host's screen capture, GPU encoding and the
   virtual controller on a real /dev/uinput, the Wayland picker. So actual latency is unknown until you
-  run it. Also not tested: the Android screens and the RetroArch launch (never built or run on a phone),
+  run it. Also not tested: the Android screens and the RetroArch launch on a real phone (only the player
+  ran, in an emulator),
   and any real emulator session.

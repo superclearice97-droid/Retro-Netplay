@@ -382,7 +382,7 @@ class GstBackend:
     def __init__(self, session, opts, ice_servers):
         self.s, self.o, self.ice = session, opts, ice_servers
         self.pipe = self.wb = self.pad_ch = self.ctl_ch = None
-        self.offered = self.playing = False
+        self.offered = self.offering = self.playing = False
         self.keepalive = []
         self.timer = HostTimer() if opts.get("timing", True) else None
 
@@ -591,13 +591,17 @@ class GstBackend:
 
     def _make_offer(self, attempt=0):
         from gi.repository import GLib, Gst
-        if self.offered or self.wb is None:
+        # one offer at a time: the timer and webrtcbin's "negotiation needed" can both ask, and GStreamer 1.20 aborts
+        # the whole program on a second create-offer while the first is still being made
+        if self.offered or self.offering or self.wb is None:
             return False
+        self.offering = True
 
         def created(promise, _el, _u):
             reply = promise.get_reply()
             offer = reply.get_value("offer") if reply else None
             if offer is None or offer.sdp is None:
+                self.offering = False
                 err = reply.get_value("error") if reply and reply.has_field("error") else None
                 log(f"offer not ready yet (try {attempt + 1}):", err.message if err else "no details")
                 if attempt < 20:

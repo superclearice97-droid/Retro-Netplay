@@ -299,6 +299,12 @@ class Media:
                         lambda el, _p: self.events.put(("ice_state", el.get_property("ice-connection-state").value_nick)))
         self.wb.connect("pad-added", self._on_pad)
         self.wb.connect("on-data-channel", self._on_channel)
+        # say up front what we receive (the host's offer is send-only H.264 + Opus); GStreamer 1.20 doesn't make a
+        # receiver by itself for media it wasn't told to expect, and newer versions only guess
+        from gi.repository import GstWebRTC
+        for caps in ("application/x-rtp,media=video,encoding-name=H264,payload=96,clock-rate=90000",
+                     "application/x-rtp,media=audio,encoding-name=OPUS,payload=97,clock-rate=48000"):
+            self.wb.emit("add-transceiver", GstWebRTC.WebRTCRTPTransceiverDirection.RECVONLY, Gst.Caps.from_string(caps))
         bus = self.pipe.get_bus()
         bus.add_signal_watch()      # (watched by poll_bus from the window's loop; no GLib loop needed)
         self.bus = bus

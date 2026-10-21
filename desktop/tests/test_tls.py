@@ -24,6 +24,7 @@ def sh(*a):
     subprocess.run(a, cwd=d, check=True, capture_output=True)
 def make_ca(name):
     sh("openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2", "-subj", f"/CN={name}",
+       "-addext", "keyUsage=critical,keyCertSign,cRLSign",      # (Python 3.13+ checks this, as real authorities have it)
        "-keyout", f"{name}.key", "-out", f"{name}.crt")
 make_ca("ca"); make_ca("other-ca")
 open(os.path.join(d, "san.ext"), "w").write("subjectAltName=DNS:localhost\n")

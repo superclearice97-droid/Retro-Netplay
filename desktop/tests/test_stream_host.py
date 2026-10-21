@@ -41,7 +41,9 @@ vid, pid = struct.unpack_from("<2H", blk, 82)
 check("pad identifies as Xbox 360 (045e:028e)", (vid, pid) == (0x045E, 0x028E))
 absmax = struct.unpack_from("<64i", blk, 92)
 check("axis ranges set", absmax[U.ABS_X] == 32767 and absmax[U.ABS_Z] == 255 and absmax[U.ABS_HAT0X] == 1)
-check("uinput problem is explained in words here (no /dev/uinput in sandbox)", "uinput" in U.uinput_problem())
+usable = os.path.exists("/dev/uinput") and os.access("/dev/uinput", os.W_OK)
+check("uinput problem is explained in words (or none when /dev/uinput is usable)",
+      U.uinput_problem() == "" if usable else "uinput" in U.uinput_problem())
 
 # ---------------------------------------------------------------- encoder and ICE helpers
 check("hardware encoder preferred over x264", S.pick_encoder({"x264enc", "nvh264enc"})[0] == "nvh264enc")

@@ -8,7 +8,7 @@ import java.util.regex.Pattern;
 
 /** Pure decisions: what to offer the matchmaker, and what to do when matched. No Android classes here. */
 public final class Plan {
-    public enum Kind { LAUNCH_RETROARCH, OPEN_PARSEC, OPEN_STREAM, ERROR }
+    public enum Kind { LAUNCH_RETROARCH, OPEN_PARSEC, OPEN_STREAM, OPEN_PLAYER, ERROR }
 
     public final Kind kind;
     public final String message;
@@ -42,6 +42,7 @@ public final class Plan {
     public static Map<String, Object> streamInfo(boolean useParsec) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("backend", useParsec ? "parsec" : "own");
+        if (!useParsec) m.put("sig", "tcp");   // stream setup over the matchmaker connection; plays in the app's own player
         return m;
     }
 
@@ -66,6 +67,17 @@ public final class Plan {
 
     /** playUrl: the full guest-page address when the match is on the built-in stream, else "". */
     public static Plan make(Games.Sys sys, String lane, String role, Map<String, Object> peer, String playUrl) {
+        return make(sys, lane, role, peer, playUrl, false);
+    }
+
+    /** player: the match is a built-in stream whose key works on the stream connection (session sig "tcp"). */
+    public static Plan make(Games.Sys sys, String lane, String role, Map<String, Object> peer, String playUrl, boolean player) {
+        if ("stream".equals(lane) && player) {
+            if (!"guest".equals(role)) {
+                return new Plan(Kind.ERROR, "This phone can't host a stream, so this match can't start. Please search again.", "", "");
+            }
+            return new Plan(Kind.OPEN_PLAYER, "Opening the stream. Your controller works in it, or use the on-screen buttons.", "", "");
+        }
         if ("stream".equals(lane) && playUrl != null && !playUrl.isEmpty()) {
             if (!"guest".equals(role)) {
                 return new Plan(Kind.ERROR, "This phone can't host a stream, so this match can't start. Please search again.", "", "");

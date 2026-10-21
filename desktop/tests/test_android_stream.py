@@ -18,10 +18,11 @@ check("Java core compiles", r.returncode == 0, r.stderr[:300])
 port = free_port(); hport = port + 1      # the app assumes web port = TCP port + 1
 srv = subprocess.Popen([sys.executable, "-u", os.path.join(ROOT, "desktop/server.py"), str(port)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 time.sleep(1.0)
-def host_search(backend):
+def host_search(backend, sig="tcp"):
+    st = {"backend": backend, **({"sig": sig} if sig else {})}
     c = socket.create_connection(("127.0.0.1", port))
     c.sendall((json.dumps({"v": 1, "op": "search", "game": "ps2:urban-reign", "lanes": ["stream"], "client": "desktop-linux",
-                           "can_host": {"stream": True}, "info": {"stream": {"backend": backend}}}) + "\n").encode())
+                           "can_host": {"stream": True}, "info": {"stream": st}}) + "\n").encode())
     return c
 def rd(c):
     c.settimeout(10); buf = b""
@@ -34,11 +35,15 @@ try:
     hm = rd(h)
     check("Android core matched the desktop host on the stream lane as guest", kv.get("LANE") == "stream" and kv.get("ROLE") == "guest", j.stdout + j.stderr)
     check("Java parsed the session key", kv.get("KEYLEN") == str(len(hm["session"]["key"])), kv.get("KEYLEN"))
-    check("plan is OPEN_STREAM", kv.get("PLAN") == "OPEN_STREAM")
-    check("URL points at the matchmaker web port", kv.get("URL", "").startswith(f"http://127.0.0.1:{hport}/play?t="), kv.get("URL"))
-    page = urllib.request.urlopen(kv["URL"], timeout=5)
-    check("the URL Android would open serves the guest page", page.status == 200 and b"RTCPeerConnection" in page.read())
+    check("plan is OPEN_PLAYER (the app's own player, no web page)", kv.get("PLAN") == "OPEN_PLAYER", kv.get("PLAN"))
+    check("the phone's session is a TCP session with no page link", kv.get("SIG") == "tcp" and kv.get("URL", "") == "", kv)
     check("desktop host got the host-role key", "play" not in hm["session"] and hm["peer"]["client"] == "android")
+    h.close()
+    # an older desktop host (no TCP signaling) can't serve the phone's player: never paired
+    h3 = host_search("own", sig=None); time.sleep(0.3)
+    j3 = subprocess.run(["java", "-cp", out, "net.netplay.core.StreamTest", str(port), "own", "nomatch"], capture_output=True, text=True, timeout=30)
+    check("an older desktop host and the phone are never paired", "NOMATCH" in j3.stdout, j3.stdout + j3.stderr)
+    h3.close()
     check("IPv6 host is bracketed", "playUrl ipv6=http://[::1]:7778/play?t=abcdEFGH12" in j.stdout, j.stdout)
     check("empty play path -> empty url", "playUrl empty=[]" in j.stdout)
     # Parsec-mode phone must not pair with a built-in host

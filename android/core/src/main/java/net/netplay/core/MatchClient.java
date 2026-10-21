@@ -4,7 +4,6 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
-import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
@@ -20,6 +19,8 @@ public final class MatchClient {
         public final String sessionKey, play;
         /** True when the matchmaker's web port uses https (the server operator set up a certificate). */
         public final boolean secureWeb;
+        /** "tcp": this side's key works on the stream connection, and the player window plays it (PROTOCOL.md). */
+        public String sig = "";
         Match(String lane, String role, String via, Map<String, Object> peer, String sessionKey, String play) {
             this(lane, role, via, peer, sessionKey, play, false);
         }
@@ -65,11 +66,12 @@ public final class MatchClient {
     public Match search(String host, int port, String game, List<String> lanes,
                         Map<String, Object> info, Map<String, Boolean> canHost, String client,
                         String invite, boolean inviteOnly, Map<String, Object> extra) throws IOException {
-        Socket s = new Socket();
-        socket = s;
+        Socket s = null;
         try {
             if (cancelled) throw new Cancelled();
-            s.connect(new InetSocketAddress(host, port), 8000);
+            s = MmTls.connect(host, port, 8000);       // (encrypted when the matchmaker offers it)
+            socket = s;
+            if (cancelled) throw new Cancelled();
             s.setKeepAlive(true);
             Map<String, Object> req = new LinkedHashMap<>();
             req.put("v", 1L);
@@ -98,22 +100,25 @@ public final class MatchClient {
                 if ("matched".equals(op)) {
                     @SuppressWarnings("unchecked")
                     Map<String, Object> peer = m.get("peer") instanceof Map ? (Map<String, Object>) m.get("peer") : new LinkedHashMap<String, Object>();
-                    String key = "", play = "";
+                    String key = "", play = "", sig = "";
                     boolean https = false;
                     if (m.get("session") instanceof Map) {
                         Map<?, ?> sess = (Map<?, ?>) m.get("session");
                         key = sess.get("key") == null ? "" : String.valueOf(sess.get("key"));
                         play = sess.get("play") == null ? "" : String.valueOf(sess.get("play"));
                         https = "https".equals(sess.get("web"));
+                        sig = "tcp".equals(sess.get("sig")) ? "tcp" : "";
                     }
-                    return new Match(String.valueOf(m.get("lane")), String.valueOf(m.get("role")), m.get("via") == null ? "public" : String.valueOf(m.get("via")), peer, key, play, https);
+                    Match match = new Match(String.valueOf(m.get("lane")), String.valueOf(m.get("role")), m.get("via") == null ? "public" : String.valueOf(m.get("via")), peer, key, play, https);
+                    match.sig = sig;
+                    return match;
                 }
             }
         } catch (IOException e) {
             if (cancelled) throw new Cancelled();
             throw e;
         } finally {
-            try { s.close(); } catch (IOException ignored) { }
+            if (s != null) try { s.close(); } catch (IOException ignored) { }
         }
     }
 }

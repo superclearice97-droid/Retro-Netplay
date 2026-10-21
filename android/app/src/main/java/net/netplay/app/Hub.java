@@ -19,6 +19,7 @@ import net.netplay.core.Games;
 import net.netplay.core.Json;
 import net.netplay.core.Library;
 import net.netplay.core.MatchClient;
+import net.netplay.core.MmTls;
 import net.netplay.core.Plan;
 import net.netplay.core.Presence;
 import net.netplay.core.RetroCmd;
@@ -101,6 +102,16 @@ final class Hub {
         if (prefs.getString("my_name", "").isEmpty()) {
             prefs.edit().putString("my_name", "Player " + myId().substring(0, 4).toUpperCase()).apply();
         }
+        // matchmakers seen with encryption stay encrypted (a later plain-text answer is refused), across restarts
+        MmTls.seen = new MmTls.Seen() {
+            @Override public synchronized boolean has(String host) {
+                return prefs.getStringSet("tls_seen", java.util.Collections.emptySet()).contains(host);
+            }
+            @Override public synchronized void add(String host) {
+                java.util.Set<String> all = new java.util.HashSet<>(prefs.getStringSet("tls_seen", java.util.Collections.emptySet()));
+                if (all.add(host)) prefs.edit().putStringSet("tls_seen", all).apply();
+            }
+        };
     }
 
     // ================================================================ listeners
@@ -792,7 +803,7 @@ final class Hub {
         Map<String, Object> peer = new LinkedHashMap<>(m.peer);
         // the host is on the matchmaker's own network: reach it at the matchmaker's address
         if ("true".equals(m.peerString("at_matchmaker")) && !net.netplay.core.Lan.isLoopback(host)) peer.put("ip", host);
-        Plan plan = Plan.make(s, m.lane, m.role, peer, playUrl);
+        Plan plan = Plan.make(s, m.lane, m.role, peer, playUrl, "tcp".equals(m.sig));
         buzz(400);
         if (plan.kind == Plan.Kind.ERROR) {
             playingWith = "";
@@ -801,6 +812,16 @@ final class Hub {
             return;
         }
         String hello = "Matched with " + who + (friend ? " (friend)" : "") + "!";
+        if (plan.kind == Plan.Kind.OPEN_PLAYER) {      // the app's own player: no browser, no web page
+            playingKey = key(g);
+            sendStatus();
+            String link = PlayerActivity.link(host, port, m.sessionKey, String.valueOf(g.get("name")), prefs.getBoolean("use_relay", true));
+            lastStreamUrl = link;
+            Notify.matched(app, hello, "Tap to open the stream.", link);
+            PlayerActivity.open(app, link);
+            say(hello + " Opening the stream.", false);
+            return;
+        }
         if (plan.kind == Plan.Kind.OPEN_STREAM || plan.kind == Plan.Kind.OPEN_PARSEC) {
             playingKey = key(g);
             sendStatus();

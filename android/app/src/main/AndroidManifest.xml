@@ -54,7 +54,12 @@
             </intent-filter>
         </activity>
 
-        <!-- A friend's stream, played inside the app instead of a browser. -->
+        <!-- A friend's stream in the app's own player (video decoded by the phone's video chip). -->
+        <activity android:name=".PlayerActivity" android:exported="false" android:launchMode="singleTop"
+            android:screenOrientation="sensorLandscape" android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen"
+            android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation" />
+
+        <!-- (older computers only) their stream web page, inside the app instead of a browser. -->
         <activity android:name=".StreamActivity" android:exported="false" android:launchMode="singleTop"
             android:screenOrientation="sensorLandscape" android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen"
             android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation" />

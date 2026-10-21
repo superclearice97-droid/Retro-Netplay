@@ -53,7 +53,10 @@ BUILT-IN STREAMING (new, the default for PS2 / PS3)
     your graphics card (Linux: Intel/AMD with VA-API, or NVIDIA; Windows: Direct3D 11). A computer without one uses its own GStreamer
     instead, if it has a software decoder: Settings > Streaming check says what to install (usually
     one package, gstreamer1.0-libav). (The download can't include a software H.264 decoder: patents.)
-  - The Android app still plays streams in its built-in web page; its own native player comes later.
+  - The Android app plays streams in its own player too (no browser, no web page): the phone's video
+    chip decodes the picture. A controller paired with the phone works in it; without one, on-screen
+    buttons appear (the Buttons switch at the top hides them). Stats shows the numbers; Leave, or Back
+    twice, ends it. Older computers that don't have the new streaming still open their web page in the app.
   - HOST SETUP (Linux): run  python3 desktop/stream_host.py --doctor  . It lists exactly what is
     missing (GStreamer pieces, a hardware encoder, permission for the virtual controller) with the
     install commands. Hosting is Linux only for now. Joining: the Linux download has the player window
@@ -64,7 +67,7 @@ BUILT-IN STREAMING (new, the default for PS2 / PS3)
     frames per second, lost packets) AND what the host spent (capture age, convert, encode, pack)
     to ~/.netplay-matchmaker/stream-stats.csv (the joining computer writes the same file). Turn host timing
     off with --no-timing. The guest sees the same numbers on screen: F2 in the player window (on a phone:
-    tap the little status pill, top right).
+    tap Stats at the top of the player).
     Those numbers are how we tune latency.
   - Players only pair if both use the same streaming method (Built-in or Parsec, Settings).
   - Behind a strict router the stream may not connect directly. The fix is a TURN relay next to the
@@ -158,7 +161,7 @@ ANDROID APP: BUILD AND INSTALL
      file, for example /storage/emulated/0/ROMs/game.gba. Leave the path blank for PS2 / PS3 games
      you'll only stream.
   5. Tap a game. RetroArch opens with it and you're in the queue. For PS2/PS3/GameCube games the
-     phone joins a friend's stream instead: when matched, the stream plays inside the app (your controller works in it; swipe and press Back to leave).
+     phone joins a friend's stream instead: when matched, the stream plays inside the app (your controller works in it; press Back twice, or Leave, to stop).
 
 WHAT WAS AND WASN'T TESTED
   Tested: the matchmaker rules, the desktop app's engine, and the Android app's matching logic
@@ -169,6 +172,9 @@ WHAT WAS AND WASN'T TESTED
   slot choice, wrong keys are refused, the host's real error is shown, old and new apps never pair, and
   the stream also works through a real TURN relay (coturn) with the matchmaker's short-lived password.
   The same test runs against the PACKAGED player from the Linux download (both ways it can start).
+  The phone app's own player in an Android emulator against the REAL host: the video is decoded by
+  Android's own decoder, the test's button presses arrive at the host as Player 2, leaving tells the
+  host, and a wrong key is explained.
   Also: the Android app's web page in a real Chromium against the real host, access control, the
   host's session logic and the virtual-controller event translation, and the app's Join > Allow flow
   opening the player window by itself.

@@ -4,7 +4,6 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
-import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
@@ -108,10 +107,9 @@ public final class Presence {
     }
 
     private void session() throws IOException {
-        Socket s = new Socket();
+        Socket s = MmTls.connect(host, port, 8000);    // (encrypted when the matchmaker offers it)
         socket = s;
         try {
-            s.connect(new InetSocketAddress(host, port), 8000);
             s.setKeepAlive(true);
             s.setSoTimeout(30000);
             Map<String, Object> hello = new LinkedHashMap<>();

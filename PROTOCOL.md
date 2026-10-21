@@ -24,7 +24,7 @@ Transport: TCP, UTF-8, one JSON object per line (`\n`). One connection = one sea
 
 ## Server -> client
 - `{"op":"matched","v":1,"lane":"native","role":"host"|"guest","via":"public"|"invite","peer":{...info, "ip":"1.2.3.4","client":"android"}}` then the server closes the connection. `ip` is only included on the native lane. The server passes on only `info.<lane>` entries with short keys (letters, digits, `_`) and short text, number or true/false values.
-- When both players asked for `backend:"own"` on the stream lane, the message also has `"session":{"key":"...","sig":"tcp"}`: this side's own secret key, to use on the stream connection (see Built-in streaming). A side whose app doesn't send `info.stream.sig:"tcp"` (the current Android app) gets the deprecated web page way instead: `"session":{"key":"...","play":"/play?t=..."}` (guest) or `{"key":"..."}` (host), plus `"web":"https"` if the server's web port uses https (`NETPLAY_TLS_CERT` and `NETPLAY_TLS_KEY` set).
+- When both players asked for `backend:"own"` on the stream lane, the message also has `"session":{"key":"...","sig":"tcp"}`: this side's own secret key, to use on the stream connection (see Built-in streaming). A side whose app doesn't send `info.stream.sig:"tcp"` (Android app versions before its own player) gets the deprecated web page way instead: `"session":{"key":"...","play":"/play?t=..."}` (guest) or `{"key":"..."}` (host), plus `"web":"https"` if the server's web port uses https (`NETPLAY_TLS_CERT` and `NETPLAY_TLS_KEY` set).
 - `{"op":"ping"}` every 20 s while waiting. Ignore it.
 - A connection may first switch to TLS (see Encryption).
 - `{"op":"error","msg":"..."}` then the server closes the connection.
@@ -56,7 +56,7 @@ The matchmaker also relays the WebRTC setup between the two matched players, ove
 - `msg` types: `hello` (guest is ready), `offer` / `answer` (`sdp`), `ice` (`candidate`, `sdpMLineIndex`), `status` (`text`: what that side is doing, shown on the other screen while connecting) and `bye` (`why`: the reason in plain words, shown to the other player; empty when they simply left). After a `bye` is handed over, the session is over and its connections close.
 - Security: each side has its OWN key and a key only works for its own role and session. Keys of a TCP session never work on the web port, and keys of a web session never work here. Sessions end after 2 hours. One message is at most 16 KB, at most 200 wait unread per side, at most 300 per minute per connection, and opening stream connections counts toward the per-address limit for searches. A new connection with the same key replaces the old one (reconnecting after a network hiccup).
 
-**Web page way (DEPRECATED).** Only for the current Android app, whose player is a web page in the app. Desktop apps never use it. It will be removed once the Android native player ships.
+**Web page way (DEPRECATED).** Only for older Android app versions, whose player was a web page in the app. Desktop apps and current Android apps never use it. It will be removed soon.
 - Guest: open `http://<host>:<N+1><play>` (the `play` path from the match). That page is served by the matchmaker (`desktop/web/guest.html`).
 - `GET /cfg?t=<key>` -> `{"iceServers":[...], "role":"host"|"guest", "game":"...", "v":1}`.
 - `GET /sig?t=<key>&wait=<seconds, max 25>` -> `{"msgs":[...], "closed":false}`: messages for this role (long-poll). `404` = session over (or not a web session key).

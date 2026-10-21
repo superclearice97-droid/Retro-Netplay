@@ -9,6 +9,8 @@ android {
         targetSdk 34
         versionCode 1
         versionName "1.0"
+        // (automatic tests: plays a real stream in an emulator, see androidTest/PlayerCheck.java)
+        testInstrumentationRunner "net.netplay.app.PlayerCheck"
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
@@ -18,4 +20,7 @@ android {
 
 dependencies {
     implementation project(':core')
+    // WebRTC for the stream player (Apache 2.0; Google's libwebrtc inside is BSD). Plays VP8 itself; H.264 only
+    // through the phone's own video decoder (MediaCodec), so nothing patented ships in the app.
+    implementation 'io.getstream:stream-webrtc-android:1.2.2'
 }

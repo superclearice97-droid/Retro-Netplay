@@ -219,7 +219,9 @@ public class MainActivity extends Activity implements Hub.Ui {
         streamButton = new InkButton(this, Icons.PLAY, "Open stream", false);
         streamButton.onPress(() -> {
             String u = hub.lastStreamUrl;
-            if (u.startsWith("http")) StreamActivity.open(this, u); else if (!u.isEmpty()) hub.openUrl(u);
+            if (u.startsWith("player:")) PlayerActivity.open(this, u);
+            else if (u.startsWith("http")) StreamActivity.open(this, u);
+            else if (!u.isEmpty()) hub.openUrl(u);
         });
         actions.addView(leaveButton, half(0));
         actions.addView(streamButton, half(10));
@@ -716,10 +718,13 @@ public class MainActivity extends Activity implements Hub.Ui {
         final InkCheck autoPorts = new InkCheck(this, "Open the port on my router automatically (recommended)", prefs.getBoolean("auto_ports", true));
         final InkCheck canHost = new InkCheck(this, "I opened port 55435 on my router myself", prefs.getBoolean("can_host", false));
         final InkCheck useParsec = new InkCheck(this, "Use Parsec instead of built-in streaming (PS2/PS3)", prefs.getBoolean("use_parsec", false));
+        final InkCheck useRelay = new InkCheck(this, "Use the matchmaker's relay server when a direct stream connection fails",
+                prefs.getBoolean("use_relay", true));
         box.addView(autoQueue, fill(14));
         box.addView(autoPorts, fill(2));
         box.addView(canHost, fill(2));
         box.addView(useParsec, fill(2));
+        box.addView(useRelay, fill(2));
         final Dialog[] me = new Dialog[1];
         InkButton again = new InkButton(this, Icons.CHECK, "Run setup again", false);
         again.onPress(() -> { if (me[0] != null) me[0].dismiss(); setup.start(); });
@@ -733,6 +738,7 @@ public class MainActivity extends Activity implements Hub.Ui {
                     .putString("invite_host", inviteHost.getText().toString().trim())
                     .putBoolean("auto_queue", autoQueue.isOn())
                     .putBoolean("use_parsec", useParsec.isOn())
+                    .putBoolean("use_relay", useRelay.isOn())
                     .putBoolean("auto_ports", autoPorts.isOn()).apply();
             hub.setName(name.getText().toString());
             if (serverChanged) hub.restartPresence();

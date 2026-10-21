@@ -11,6 +11,8 @@ import threading
 import time
 from urllib.parse import parse_qs, quote, urlsplit
 
+import mmtls
+
 ID_RE = re.compile(r"^[0-9a-f]{24}$")
 SHORT_RE = re.compile(r"^[2-9A-HJ-NP-Z]{6}$")      # friend codes like K7M-4QZ (no 0/O/1/I to mix up)
 SECRET_RE = re.compile(r"^[0-9a-f]{32,64}$")
@@ -239,7 +241,7 @@ class Presence(threading.Thread):
             backoff = min(30, backoff * 2)
 
     def _session(self):
-        s = socket.create_connection((self.host, self.port), 8)
+        s = mmtls.connect(self.host, self.port, 8)     # (encrypted when the matchmaker offers it)
         s.settimeout(30)
         self.sock = s
         try:

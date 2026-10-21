@@ -24,6 +24,7 @@ import instance
 import invites
 import lan
 import library
+import mmtls
 import portmap
 import runtime
 import secretbox
@@ -782,7 +783,13 @@ class Engine:
             request["invite"], request["invite_only"] = code, only
         writer = None
         try:
-            reader, writer = await asyncio.wait_for(asyncio.open_connection(host, port), 8)
+            # encrypted when the matchmaker offers it (see mmtls.py)
+            sock, tls = await asyncio.get_running_loop().run_in_executor(None, mmtls.negotiate, host, port)
+            sock.setblocking(False)
+            reader, writer = await asyncio.wait_for(asyncio.open_connection(
+                sock=sock, **({"ssl": tls, "server_hostname": host} if tls else {})), 8)
+            if tls:
+                mmtls.tls_done(host)
             writer.write((json.dumps(request) + "\n").encode())
             await writer.drain()
             if code and not join:

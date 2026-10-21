@@ -11,6 +11,8 @@ import socket
 import threading
 import time
 
+import mmtls
+
 LINE_LIMIT = 32768
 PING_SECONDS = 20
 
@@ -51,7 +53,9 @@ class TcpSignaling:
     def connect(self):
         """Open the connection and return the matchmaker's answer ({"role", "game", "iceServers", "relay"})."""
         try:
-            sock = socket.create_connection(self.addr, self.timeout)
+            sock = mmtls.connect(self.addr[0], self.addr[1], self.timeout)     # (encrypted when the matchmaker offers it)
+        except mmtls.TlsError as e:
+            raise SignalError(str(e), "tls")
         except OSError as e:
             raise SignalError(f"Couldn't reach the matchmaker at {self.addr[0]}:{self.addr[1]} ({e}).", "unreachable")
         try:

@@ -26,6 +26,7 @@ python3 -m PyInstaller --noconfirm --clean --windowed --name Retro-Netplay \
   --add-data "$HERE/uinput_pad.py:hostpy" \
   --add-data "$HERE/portal_capture.py:hostpy" \
   --add-data "$HERE/stream_signal.py:hostpy" \
+  --add-data "$HERE/mmtls.py:hostpy" \
   --add-data "$HERE/stream_guest.py:hostpy" \
   --add-data "$HERE/fonts:hostpy/fonts" \
   --add-data "$WORK/sdlpy/sdl2:hostpy/sdl2" \

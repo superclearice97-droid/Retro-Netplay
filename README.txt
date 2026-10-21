@@ -71,6 +71,13 @@ BUILT-IN STREAMING (new, the default for PS2 / PS3)
     matchmaker (below). The apps use it by themselves whenever the matchmaker has one; without one, the
     player window says so in plain words when the direct connection fails.
 
+ENCRYPTION (for whoever runs a matchmaker on the internet)
+  Give the matchmaker a domain name and a certificate for it (for example free from Let's Encrypt), and
+  start it with NETPLAY_TLS_CERT=/path/fullchain.pem NETPLAY_TLS_KEY=/path/privkey.pem. Apps that use the
+  matchmaker by that name then encrypt everything they send it (searches, friends, stream setup), and
+  refuse to connect if the encryption ever disappears. Old apps can still connect without it. At home
+  (matchmaker found on your Wi-Fi) nothing is encrypted to the matchmaker: certificates need a name.
+
 TURN RELAY (for friends behind strict routers; optional, for whoever runs the matchmaker)
   The relay passes the stream along when two devices can't reach each other directly. The video stays
   encrypted end to end: the relay only sees how much data passes. Nothing is set up by default, and no

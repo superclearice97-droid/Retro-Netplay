@@ -7,10 +7,11 @@ meets the person who shared it. Announcing means posting that link to places the
 import json
 import re
 import secrets
-import socket
 import time
 import urllib.request
 from urllib.parse import parse_qs, quote, urlencode, urlsplit
+
+import mmtls
 
 ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"   # no 0/O/1/I so codes survive being read aloud
 CODE_RE = re.compile(r"^[A-Za-z0-9]{4,32}$")
@@ -80,7 +81,7 @@ def lookup_code(host, port, code, timeout=5):
     """Ask the matchmaker which game is waiting under this invite code. -> game key, '' (no such invite right now),
     or None (couldn't reach the matchmaker)."""
     try:
-        with socket.create_connection((host, int(port)), timeout=timeout) as s:
+        with mmtls.connect(host, port, timeout) as s:
             s.sendall((json.dumps({"v": 1, "op": "invite", "code": code}) + "\n").encode())
             s.settimeout(timeout)
             reply = json.loads(s.makefile("rb").readline(8192) or b"{}")

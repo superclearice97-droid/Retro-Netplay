@@ -85,7 +85,7 @@ jobs:
         run: |
           for t in test_tcp_signal test_stream_guest test_app_own test_android_stream test_two_devices test_desktop_queue \
                    test_friends test_friends_java test_library test_portal test_portmap test_portmap_java test_autofind \
-                   test_stream_host test_stream_web test_demo; do
+                   test_stream_host test_stream_web test_demo test_tls; do
             echo "== $t"; /usr/bin/python3 desktop/tests/$t.py || exit 1
           done
       - name: Native player window (headless) against the real stream host over TCP, also through a relay

@@ -451,6 +451,19 @@ async def handle(reader, writer):
             req = json.loads(line)
         except ValueError:
             req = None
+        if isinstance(req, dict) and req.get("op") == "starttls":
+            # encrypt this connection (when the operator set up a certificate), then it starts over with its real first line
+            writer.write((json.dumps({"op": "starttls", "v": 1, "ok": TLS is not None}) + "\n").encode())
+            await writer.drain()
+            if TLS is not None:
+                await asyncio.wait_for(start_tls(writer, TLS), FIRST_LINE_TIMEOUT)
+            line = await asyncio.wait_for(reader.readline(), FIRST_LINE_TIMEOUT)
+            if not line or len(line) > MAX_LINE:
+                return
+            try:
+                req = json.loads(line)
+            except ValueError:
+                req = None
         if isinstance(req, dict) and req.get("op") == "probe":
             problem = validate_probe(req) or admit(ip, asyncio.get_running_loop().time())
             if problem:
@@ -518,7 +531,7 @@ async def handle(reader, writer):
         ping = asyncio.create_task(pinger(w))
         while await reader.read(1024):   # until the client cancels (closes); anything it sends is ignored
             pass
-    except (ConnectionError, asyncio.IncompleteReadError):
+    except (ConnectionError, asyncio.IncompleteReadError, asyncio.TimeoutError, OSError):   # (OSError: a TLS handshake failed)
         pass
     finally:
         if counted:
@@ -992,9 +1005,18 @@ def friend_page(host_header, tcp_port, fid, name, code=""):
             "<p>Friends get matched with each other first, and you choose what each friend may do.</p>")
 
 
+async def start_tls(writer, ctx):
+    """Switch an accepted connection to TLS in place (StreamWriter.start_tls is Python 3.11+)."""
+    if hasattr(writer, "start_tls"):
+        return await writer.start_tls(ctx)
+    loop = asyncio.get_running_loop()
+    writer._transport = await loop.start_tls(writer.transport, writer.transport.get_protocol(), ctx, server_side=True)
+
+
 def tls_context():
-    """Optional https for the web port (stream pages and signaling). Set NETPLAY_TLS_CERT and
-    NETPLAY_TLS_KEY to a certificate and key, e.g. from Let's Encrypt, for the server's domain name."""
+    """Optional encryption: https on the web port, and TLS on the matchmaker port for apps that ask ("starttls").
+    Set NETPLAY_TLS_CERT and NETPLAY_TLS_KEY to a certificate and key, e.g. from Let's Encrypt, for the server's
+    domain name."""
     cert, key = os.environ.get("NETPLAY_TLS_CERT", ""), os.environ.get("NETPLAY_TLS_KEY", "")
     if not (cert and key):
         return None

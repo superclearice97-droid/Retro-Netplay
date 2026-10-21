@@ -47,8 +47,9 @@ a = Analysis([r"$SRC/stream_guest.py"], pathex=[r"$SRC"],
              hooksconfig={"gstreamer": {"include_plugins": PLUGINS},
                           "gi": {"icons": [], "themes": [], "languages": ["en_US"]}},
              excludes=["tkinter", "pygame", "cryptography"])
-# use the computer's own VA-API library (it must match the computer's graphics drivers)
-a.binaries = [b for b in a.binaries if not os.path.basename(b[0]).startswith("libva")]
+# Linux: use the computer's own VA-API library (it must match the computer's graphics drivers)
+if not "$WIN":
+    a.binaries = [b for b in a.binaries if not os.path.basename(b[0]).startswith("libva")]
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="Retro-Netplay-Player", console=True)
 coll = COLLECT(exe, a.binaries, a.datas, name="Retro-Netplay-Player")

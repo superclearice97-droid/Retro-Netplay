@@ -275,6 +275,7 @@ class Media:
         self.sample = None           # newest decoded frame, for the window
         self.stats = None            # set by the window: Stats
         self.dec_in = {}
+        self.offer_sdp = ""
 
     def start(self):
         from gi.repository import Gst
@@ -324,6 +325,7 @@ class Media:
     # ---- negotiation (the host makes the offer; we answer)
     def set_offer(self, sdp):
         from gi.repository import Gst, GstSdp, GstWebRTC
+        self.offer_sdp = sdp
         ok, msg = GstSdp.SDPMessage.new()
         GstSdp.sdp_message_parse_buffer(bytes(sdp.encode()), msg)
         offer = GstWebRTC.WebRTCSessionDescription.new(GstWebRTC.WebRTCSDPType.OFFER, msg)
@@ -344,9 +346,28 @@ class Media:
         self.wb.emit("add-ice-candidate", int(index), candidate)
 
     # ---- media branches
-    def _on_pad(self, el, pad):
+    def media_of(self, pad):
+        """'video' / 'audio' / '' for a new output pad. Newer GStreamer puts it in the pad's caps; 1.20 may add the pad
+        before its caps, so ask its transceiver, or find its place among the offer's m= lines."""
         caps = pad.get_current_caps()
-        media = caps.get_structure(0).get_string("media") if caps else ""
+        media = caps.get_structure(0).get_string("media") if caps and caps.get_size() else None
+        if media:
+            return media, "caps"
+        tr = pad.get_property("transceiver") if pad.find_property("transceiver") else None
+        if tr is not None and tr.find_property("kind"):
+            kind = tr.get_property("kind").value_nick
+            if kind in ("video", "audio"):
+                return kind, "transceiver"
+        idx = tr.get_property("mlineindex") if tr is not None else None
+        if idx is None:
+            name = pad.get_name()
+            idx = int(name.rsplit("_", 1)[1]) if name.rsplit("_", 1)[-1].isdigit() else None
+        kinds = [l[2:].split()[0] for l in self.offer_sdp.splitlines() if l.startswith("m=")]
+        return (kinds[idx] if idx is not None and 0 <= idx < len(kinds) else ""), "offer order"
+
+    def _on_pad(self, el, pad):
+        media, how = self.media_of(pad)
+        log(f"incoming {media or 'unknown'} ({how}, pad {pad.get_name()})")
         if media == "video":
             self.video_src = pad
             self._build_video()

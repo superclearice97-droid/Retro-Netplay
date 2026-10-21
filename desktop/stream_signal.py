@@ -98,9 +98,9 @@ class TcpSignaling:
             s.close()
 
     def flush(self, timeout=2.0):
-        """Wait (a little) until everything queued has been written."""
+        """Wait (a little) until everything queued has really been written (the goodbye must not be lost)."""
         end = time.monotonic() + timeout
-        while not self.out.empty() and time.monotonic() < end:
+        while self.out.unfinished_tasks and time.monotonic() < end:
             time.sleep(0.02)
 
     def _write(self, obj):
@@ -119,6 +119,7 @@ class TcpSignaling:
             try:
                 self._write(item)
                 pending = None
+                self.out.task_done()
             except OSError:
                 pending = item          # sent again once the connection is back
                 time.sleep(0.2)

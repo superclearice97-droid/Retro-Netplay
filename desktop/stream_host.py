@@ -1,7 +1,7 @@
 """Host side of the built-in streamer (Linux).
 
 Captures a window/screen + game audio, encodes it with the fastest encoder available, and sends it
-to ONE guest's browser over WebRTC. The guest's controller comes back over a data channel and is
+to ONE guest over WebRTC (the desktop app's player window, or the Android app's page). The guest's controller comes back over a data channel and is
 fed into a virtual gamepad. The matchmaker only relays the setup messages.
 
   python3 stream_host.py --mm HOST:PORT --key KEY                 (the app starts this for you)

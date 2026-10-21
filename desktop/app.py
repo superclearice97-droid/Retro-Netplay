@@ -16,11 +16,11 @@ import subprocess
 import sys
 import threading
 import time
-import webbrowser
 from pathlib import Path
 
 import controls
 import ink
+import instance
 import invites
 import lan
 import library
@@ -269,6 +269,10 @@ def checklist(cfg, g, ncontrollers=None):
         ok, note = own_host_ready()
         # Not being able to host is fine: you can still join someone else's stream.
         items.append((True if ok else None, note))
+    if own and "v" in _guest_cache and not _guest_cache["v"][0]:      # (checked in the background at start)
+        first = next((l[4:].strip() for l in _guest_cache["v"][1].splitlines() if l.startswith("[X")), "")
+        items.append((None, "Joining a friend's stream won't work yet: " + (first or _guest_cache["v"][1][:160]).rstrip(".")
+                      + ". Settings > Streaming check shows how to fix it."))
     else:
         items.append((stream_on, "Parsec streaming on" if stream_on else
                       f"{s['label']} has no netplay, so it needs your Parsec ID in Settings."))
@@ -315,10 +319,29 @@ def own_host_ready(refresh=False):
     return _own_cache["v"]
 
 
+_guest_cache = {}
+
+
+def guest_ready(refresh=False):
+    """-> (ok, report). Can THIS computer show a friend's built-in stream (the player's own --check)?"""
+    if refresh or "v" not in _guest_cache:
+        cmd = runtime.guest_command()
+        if not cmd:
+            _guest_cache["v"] = (False, "The player window is missing from this copy of Retro-Netplay. Download it again.")
+        else:
+            try:
+                r = subprocess.run(cmd + ["--check"], capture_output=True, text=True, timeout=30)
+                _guest_cache["v"] = (r.returncode == 0, (r.stdout or r.stderr or "").strip())
+            except (OSError, subprocess.SubprocessError) as e:
+                _guest_cache["v"] = (False, f"Couldn't check the player ({e})")
+    return _guest_cache["v"]
+
+
 def stream_offer(cfg):
     """-> (lane_enabled, can_host, info) for the stream lane under the chosen backend."""
     if cfg.get("stream_backend", "own") == "own":
-        return True, own_host_ready()[0], {"backend": "own"}
+        # sig "tcp": this app sets up streams over the matchmaker connection and joins in its own player window
+        return True, own_host_ready()[0], {"backend": "own", "sig": "tcp"}
     pid = cfg["parsec_peer_id"].strip()
     return bool(pid), True, {"peer_id": pid, "backend": "parsec"}
 
@@ -699,7 +722,8 @@ class Engine:
         self.emit("link", link, link)  # the window shows it and copies it
         note = "" if invites.link_is_shareable(cfg) else (
             " (This link only works on your own network until you set a public address in Invites.)")
-        self.emit("searching", f"Looking for an opponent for {g['name']}... Invite link copied.{note}", None)
+        self.emit("searching", f"Looking for an opponent for {g['name']}... Invite link copied. Or tell your friend "
+                               f"the code {invites.pretty_code(code)} (they type it under Enter code).{note}", None)
         if cfg["invite"]["auto_announce"] and invites.link_is_shareable(cfg):
             threading.Thread(target=self._announce, args=(cfg, g, link), daemon=True).start()
 
@@ -831,7 +855,7 @@ class Engine:
             pid = safe_peer_id(peer)
             if not pid:
                 return self.set("idle", "Your opponent didn't share a valid Parsec ID. Press the button to search again.")
-            webbrowser.open(what)
+            open_app_link(what)
             return self.set("session", f"Opening Parsec. If it doesn't connect, join peer ID {pid} in Parsec "
                                        f"(copied to your clipboard).", clip=pid)
         if lane == "native" and role == "guest" and not safe_ip(peer):
@@ -854,17 +878,47 @@ class Engine:
             self.set("idle", "Session ended. Press the button to find a new opponent.")
 
 
+    async def play_as_guest(self, host, port, sess, friend, peer):
+        """Open the player window on the friend's stream and wait until it closes. Never a web browser."""
+        key = str(sess.get("key", ""))
+        if sess.get("sig") != "tcp":
+            return self.set("idle", "The matchmaker you're using is an older version: it can only send your friend's game "
+                                    "as a web page, and this app plays it in its own window. Update Retro-Netplay on the "
+                                    "computer that runs the matchmaker, then press Join again.")
+        if not re.fullmatch(r"[A-Za-z0-9_-]{8,64}", key):
+            return self.set("idle", "The matchmaker sent a stream key that doesn't look right. Press Join again.")
+        cmd = runtime.guest_command()
+        if not cmd:
+            return self.set("idle", "The player that shows your friend's game is missing from this copy of Retro-Netplay. "
+                                    "Download the app again.")
+        name = social.clean_name(peer.get("name"))
+        cmd += ["--mm", f"{host}:{port}", f"--key={key}"] + ([f"--name={name}"] if name else [])
+        log_path = CONFIG_PATH.parent / "stream-guest.log"      # what the player did, for "why didn't it work?"
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_f = open(log_path, "w")
+        except OSError:
+            log_f = None
+        try:
+            self.stream_proc = await asyncio.create_subprocess_exec(*cmd, stdout=log_f or asyncio.subprocess.DEVNULL,
+                                                                    stderr=asyncio.subprocess.STDOUT)
+        except OSError as e:
+            return self.set("idle", f"Couldn't open the player window: {e}")
+        self.set("session", f"{friend}Your friend's game opens in its own window. Your controller is Player 2 "
+                            "(or use the keyboard). F11: full screen. Esc twice: leave.")
+        await self.stream_proc.wait()
+        if log_f:
+            log_f.close()
+        why = guest_result(log_path)
+        self.stream_proc = None
+        if self.state == "session":
+            self.set("idle", (f"{why} " if why and why != "you left" else "") + "Press the button to play again.")
+
     async def play_own_stream(self, cfg, g, role, sess, friend="", peer=None):
         host, port = self.mm
         web = f"{'https' if sess.get('web') == 'https' else 'http'}://{host}:{port + 1}"
         if role == "guest":
-            play = str(sess.get("play", ""))
-            if not re.fullmatch(r"/play\?t=[A-Za-z0-9_-]{8,64}", play):
-                return self.set("idle", "The matchmaker sent a stream link that doesn't look right. Search again.")
-            url = web + play
-            webbrowser.open(url)
-            return self.set("session", f"{friend}Opening the stream in your browser. Plug in a controller first "
-                                       f"(or use the on-screen / keyboard controls). If nothing opens, go to: {url}", clip=url)
+            return await self.play_as_guest(host, port, sess, friend, peer or {})
         s = SYSTEMS[g["system"]]
         if self.ingame_alive():
             self.proc, self.ingame = self.ingame["proc"], None     # the game is already on screen: stream it
@@ -878,8 +932,9 @@ class Engine:
                 return self.set("idle", f"Couldn't start {EMUS[s['emu']][0]}: {e}")
             await asyncio.sleep(NATIVE_GUEST_DELAY)   # give the emulator a moment to open its window
         tcp = sess.get("sig") == "tcp"     # else an older matchmaker: DEPRECATED web signaling
+        # --key=...: a key may start with "-", which would otherwise be read as an option
         cmd = [runtime.host_python(), str(runtime.host_script()), *(["--mm", f"{host}:{port}"] if tcp else ["--server", web]),
-               "--key", sess.get("key", ""), "--slot", "2"]
+               f"--key={sess.get('key', '')}", "--slot", "2"]
         tell = lambda text: tell_guest(web, sess.get("key", ""), text, (host, port) if tcp else None)
         log_path = CONFIG_PATH.parent / "stream-host.log"     # what the stream did, for "why didn't it work?"
         try:
@@ -917,6 +972,19 @@ class Engine:
                      "Session ended. Press the button to find a new opponent.")
 
 
+def guest_result(log_path):
+    """The player's last word: why it closed (its 'GUEST ENDED:' line), or ''."""
+    try:
+        lines = open(log_path, errors="replace").read().splitlines()
+    except OSError:
+        return ""
+    hit = [l for l in lines if l.startswith("GUEST ENDED:")]
+    if hit:
+        return hit[-1][len("GUEST ENDED:"):].strip()[:300]
+    tb = [l for l in lines if l.strip()]
+    return ("The player closed unexpectedly: " + tb[-1].strip()[:200]) if tb else ""
+
+
 def last_problem(log_path):
     """The most telling line of the stream host's output (an error if there is one), in a short form."""
     try:
@@ -945,6 +1013,19 @@ def tell_guest(web, key, text, mm=None):
                                      headers={"content-type": "application/json"}, method="POST")
         urllib.request.urlopen(req, timeout=4).close()
     except Exception:
+        pass
+
+
+def open_app_link(url):
+    """Hand an app link (parsec://...) to the program registered for it. Not a web browser."""
+    try:
+        if IS_WIN:
+            os.startfile(url)                      # noqa: S606 (only parsec:// links built above)
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", url])
+        else:
+            subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError:
         pass
 
 
@@ -1067,6 +1148,8 @@ def auto_matchmaker_on(cfg):
 
 
 def run_gui():
+    if instance.hand_over(sys.argv[1:]):
+        return            # the app is already open: it got the link (or just came to the front)
     runtime.restore_child_env()
     import tkinter as tk
     from tkinter import filedialog, messagebox, simpledialog, ttk
@@ -1179,7 +1262,7 @@ def run_gui():
     bottom2.pack(fill="x", side="bottom", pady=(0, 6))
     ttk.Button(bottom2, text="Friends...", command=lambda: open_friends()).pack(side="left")
     ttk.Button(bottom2, text="Invites & posting...", command=lambda: open_invites()).pack(side="left", padx=(6, 0))
-    ttk.Button(bottom2, text="Join / address...", command=lambda: join_with_link()).pack(side="left", padx=(6, 0))
+    ttk.Button(bottom2, text="Enter code...", command=lambda: join_with_link()).pack(side="left", padx=(6, 0))
     ttk.Button(bottom, text="Settings...", command=lambda: open_settings()).pack(side="left")
     ttk.Button(bottom, text="Controllers...", command=lambda: open_controllers()).pack(side="left", padx=(6, 0))
     ttk.Button(bottom, text="Set controller hotkey", command=lambda: set_hotkey()).pack(side="left", padx=(6, 0))
@@ -1423,7 +1506,8 @@ def run_gui():
         body.pack(fill="both", expand=True)
         ttk.Label(body, wraplength=560, justify="left", text=(
             "Hosting a PS2/PS3 stream for a friend uses GStreamer from your computer. Lines marked [X] need the "
-            "package shown; copy the install command into a terminal. Joining someone else's stream needs none of this.")
+            "package shown; copy the install command into a terminal. Joining a friend's stream uses the player "
+            "window, checked at the bottom.")
                   ).pack(anchor="w")
         txt = tk.Text(body, width=86, height=16, font=(fam, 10), wrap="word", bg="#efeeea", fg=ink.INK, relief="solid", borderwidth=1)
         txt.pack(fill="both", expand=True, pady=(8, 8))
@@ -1431,8 +1515,10 @@ def run_gui():
         def work():
             ok, report = stream_doctor()
             own_host_ready(refresh=True)
-            msgs.put(("call", None, lambda: (txt.delete("1.0", "end"), txt.insert("end", ("All set: you can host.\n\n" if ok else "") + report),
-                                             refresh(), resend_status())))
+            gok, greport = guest_ready(refresh=True)
+            text = (("All set: you can host.\n\n" if ok else "") + report + "\n\nJOINING A FRIEND'S STREAM (the player window)\n"
+                    + ("All set: you can join.\n" if gok else "") + greport)
+            msgs.put(("call", None, lambda: (txt.delete("1.0", "end"), txt.insert("end", text), refresh(), resend_status())))
         threading.Thread(target=work, daemon=True).start()
         ttk.Button(body, text="Close", command=win.destroy).pack(side="right")
 
@@ -1617,9 +1703,14 @@ def run_gui():
             status.config(text="Invite link copied. Paste it anywhere to invite people.")
 
     def join_with_link(text=None):
-        text = text or simpledialog.askstring("Join with a link", "Paste an invite link, a friend code, or a friend's address (like 203.0.113.5:7777):", parent=root)
+        text = text or simpledialog.askstring("Enter code", "Type the invite code your friend gave you (like ABCD-2345) "
+                                              "or a friend code (like K7M-4QZ).\nYou can also paste an invite link or a "
+                                              "friend's address (like 203.0.113.5:7777).", parent=root)
         if not text:
             return
+        code = invites.typed_code(text)
+        if code:
+            return join_code(code)
         f = social.parse_friend(text)
         if f and "/join" not in text:
             return add_friend_from(f)
@@ -1631,6 +1722,24 @@ def run_gui():
             messagebox.showinfo("Link", "That doesn't look like a Retro-Netplay invite, friend link, friend code or address.")
             return
         engine.join(parsed)
+
+    def join_code(code):
+        """An invite code typed in: ask this computer's matchmaker which game it is, then join like a link would."""
+        host, port = cfg["server_host"], int(cfg["server_port"])
+        status.config(text=f"Looking up the code {invites.pretty_code(code)}...")
+        def work():
+            game = invites.lookup_code(host, port, code)
+            def done():
+                if game is None:
+                    status.config(text="Couldn't reach the matchmaker to look up that code. " + (no_matchmaker_hint(cfg) or
+                                       "Check your connection and try again."))
+                elif not game:
+                    status.config(text=f"No game is waiting under the code {invites.pretty_code(code)} right now. Check the "
+                                       "code, and that your friend is still looking for a match (and on the same matchmaker).")
+                else:
+                    engine.join({"host": host, "port": port, "game": game, "code": code})
+            msgs.put(("call", None, done))
+        threading.Thread(target=work, daemon=True).start()
 
     def connect_to(host, port):
         """Use a friend's matchmaker by its address (what they copied from 'Your address')."""
@@ -1662,7 +1771,7 @@ def run_gui():
                 if v and v != "unknown" and not v.startswith("asking"):
                     root.clipboard_clear()
                     root.clipboard_append(lan.share_text(*v.rsplit(":", 1)) if ":" in v else v)
-                    status.config(text="Copied. Send it to your friend; they paste it into Join / address... (phone: Settings > My address / connect by address).")
+                    status.config(text="Copied. Send it to your friend; they paste it into Enter code... (phone: Settings > My address / connect by address).")
             ttk.Button(row, text="Copy", command=copy).pack(side="right")
             if note:
                 ttk.Label(body, text=note, foreground=ink.SOFT, wraplength=520, justify="left").pack(anchor="w")
@@ -1671,7 +1780,7 @@ def run_gui():
         if hosting:
             ttk.Label(body, wraplength=520, justify="left", text=(
                 "This computer runs the matchmaker. Give friends one of these addresses; they paste it in their app "
-                "(Join / address... on a computer; Settings > My address / connect by address on a phone).")).pack(anchor="w")
+                "(Enter code... on a computer; Settings > My address / connect by address on a phone).")).pack(anchor="w")
             home = lan.lan_ip()
             line("Friends on your Wi-Fi", f"{home}:{port}" if home else "", "Same home network only.")
             pub = line("Friends anywhere else", "asking your router...",
@@ -1813,6 +1922,7 @@ def run_gui():
 
         def work():
             ok = own_host_ready(refresh=True)[0]
+            guest_ready(refresh=True)
             social_state["stream_checking"] = False
             if ok:
                 msgs.put(("call", None, lambda: (resend_status(), refresh())))
@@ -2262,6 +2372,9 @@ def run_gui():
             msg = runtime.install_menu_entry()
             if msg:
                 hint.config(text=msg)
+        msg = runtime.register_link_handler()     # Windows: netplay:// links open this app
+        if msg:
+            hint.config(text=msg)
 
     def start_background():
         """Pick up new games in the folders and keep the router ports open, without slowing the window."""
@@ -2274,6 +2387,8 @@ def run_gui():
             bad = [v["message"] for v in res.values() if v["state"] in ("closed", "failed")]
             if bad:
                 msgs.put(("note", bad[0], None))
+            if cfg.get("stream_backend", "own") == "own" and not guest_ready(refresh=True)[0]:
+                msgs.put(("call", None, refresh))     # the setup check then says why joining a stream won't work yet
         threading.Thread(target=work, daemon=True).start()
 
     refresh()
@@ -2282,9 +2397,19 @@ def run_gui():
     restart_presence()
     root.after(1500, lambda: auto_find(force=True))   # after this computer's own matchmaker is up
     root.after(30000, keep_finding)
-    given = [a for a in sys.argv[1:] if a.startswith("netplay://") or "/join?" in a or "/friend?" in a]
-    if given:
-        root.after(800, lambda: join_with_link(given[0]))
+    def open_args(args):
+        given = [a for a in args if a.startswith("netplay://") or "/join?" in a or "/friend?" in a]
+        root.deiconify()
+        root.lift()
+        if given:
+            join_with_link(given[0])
+    instance.listen(lambda args: msgs.put(("call", None, lambda: open_args(args))))
+    try:
+        root.createcommand("::tk::mac::LaunchURL", lambda *urls: open_args(list(urls)))   # macOS hands links over this way
+    except tk.TclError:
+        pass
+    if any(a.startswith("netplay://") or "/join?" in a or "/friend?" in a for a in sys.argv[1:]):
+        root.after(800, lambda: open_args(sys.argv[1:]))
     if not cfg.get("setup_done"):
         root.after(300, open_wizard)
     else:

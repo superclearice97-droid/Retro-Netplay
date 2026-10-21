@@ -28,7 +28,7 @@ cfg = {"invite": {"host": ""}, "server_host": "127.0.0.1", "server_port": P, "ru
 host = invites.link_host(cfg)
 check("links made on the matchmaker computer never say 127.0.0.1", host and not lan.is_loopback(host), host)
 link = invites.build_link(cfg, "gba:sonic-battle", "ABCD2345")
-check("invite link uses the home-network address", f"http://{host}:{P + 1}/join?" in link, link)
+check("invite link uses the home-network address", link.startswith(f"netplay://join?host={host}&port={P}&"), link)
 
 found = lan.discover(1.2, P + 2)
 check("desktop 'Find on my network' sees the matchmaker", any(f["port"] == P for f in found), found)

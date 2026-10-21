@@ -52,6 +52,19 @@ def host_python():
     return shutil.which("python3") or shutil.which("python") or ""
 
 
+def guest_command():
+    """How to start the player window (stream_guest.py), as a command list, or [] if this computer can't.
+    The download carries the player ready-made (with its own GStreamer and SDL); from source it runs with this Python."""
+    exe = BASE / "player" / ("Retro-Netplay-Player.exe" if sys.platform == "win32" else "Retro-Netplay-Player")
+    if exe.exists():
+        return [str(exe)]
+    if not FROZEN:
+        return [sys.executable, str(SRC / "stream_guest.py")]
+    py = host_python()
+    script = BASE / "hostpy" / "stream_guest.py"
+    return [py, str(script)] if py and script.exists() else []
+
+
 def icon_file():
     return BASE / "icon-256.png"
 
@@ -91,6 +104,24 @@ def install_menu_entry(home=None):
         return "Added Retro-Netplay to your app menu."
     except OSError as e:
         return f"Couldn't add the app to your menu ({e})."
+
+
+def register_link_handler():
+    """Windows: let netplay:// links open this app (per user, no admin rights). Returns a message or ''."""
+    if sys.platform != "win32":
+        return ""
+    try:
+        import winreg
+        exe = sys.executable if FROZEN else str(Path(sys.executable).with_name("pythonw.exe"))
+        cmd = f'"{exe}" "%1"' if FROZEN else f'"{exe}" "{SRC / "app.py"}" "%1"'
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\netplay") as k:
+            winreg.SetValueEx(k, "", 0, winreg.REG_SZ, "URL:Retro-Netplay link")
+            winreg.SetValueEx(k, "URL Protocol", 0, winreg.REG_SZ, "")
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\netplay\shell\open\command") as k:
+            winreg.SetValueEx(k, "", 0, winreg.REG_SZ, cmd)
+        return ""
+    except OSError as e:
+        return f"Couldn't set up netplay:// links ({e})."
 
 
 def menu_entry_points_here(home=None):

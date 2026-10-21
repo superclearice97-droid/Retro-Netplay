@@ -1,12 +1,13 @@
 """Invite links and opt-in announcements. Pure logic: no GUI.
 
-An invite link opens a small web page on the matchmaker (see server.py) that hands the friend to the
-app. The same code makes a private room on the matchmaker, so a friend who follows the link meets the
-person who shared it. Announcing means posting that link to places the player chose to connect.
+An invite is a netplay:// app link (it opens Retro-Netplay straight away), and a short code a friend can type
+under Enter code instead. The code makes a private room on the matchmaker, so a friend who follows the link
+meets the person who shared it. Announcing means posting that link to places the player chose to connect.
 """
 import json
 import re
 import secrets
+import socket
 import time
 import urllib.request
 from urllib.parse import parse_qs, quote, urlencode, urlsplit
@@ -57,8 +58,38 @@ def link_is_shareable(cfg):
 
 
 def build_link(cfg, game_key, code):
-    port = int(cfg["server_port"])
-    return f"http://{link_host(cfg)}:{port + 1}/join?" + urlencode({"g": game_key, "c": code, "p": port})
+    """The app link a friend clicks: it opens Retro-Netplay and joins (no web page in between)."""
+    return "netplay://join?" + urlencode({"host": link_host(cfg), "port": int(cfg["server_port"]), "g": game_key, "c": code})
+
+
+INVITE_CODE_RE = re.compile(r"^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}$")
+
+
+def pretty_code(code):
+    """ABCD2345 -> ABCD-2345 (easier to read out)."""
+    return code[:4] + "-" + code[4:] if len(code) == 8 else code
+
+
+def typed_code(text):
+    """What someone typed under Enter code -> an invite code (8 characters), or ''."""
+    c = re.sub(r"[\s-]", "", str(text or "")).upper()
+    return c if INVITE_CODE_RE.match(c) else ""
+
+
+def lookup_code(host, port, code, timeout=5):
+    """Ask the matchmaker which game is waiting under this invite code. -> game key, '' (no such invite right now),
+    or None (couldn't reach the matchmaker)."""
+    try:
+        with socket.create_connection((host, int(port)), timeout=timeout) as s:
+            s.sendall((json.dumps({"v": 1, "op": "invite", "code": code}) + "\n").encode())
+            s.settimeout(timeout)
+            reply = json.loads(s.makefile("rb").readline(8192) or b"{}")
+    except (OSError, ValueError):
+        return None
+    if reply.get("op") != "invite":
+        return None
+    game = reply.get("game") or ""
+    return game if reply.get("found") and GAME_RE.match(game) else ""
 
 
 def parse_link(text):

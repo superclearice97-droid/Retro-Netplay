@@ -34,6 +34,7 @@ import sessions
 PING_SECONDS = 20          # keeps phones on flaky mobile networks from lingering as ghosts
 LANES = ("native", "stream")
 CODE_RE = re.compile(r"^[A-Za-z0-9]{4,32}$")
+INVITE_CODE_RE = re.compile(r"^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}$")   # the codes the apps make for invites
 GAME_RE = re.compile(r"^[a-z0-9]+:[a-z0-9-]+$")
 HOST_RE = re.compile(r"^[A-Za-z0-9.\-\[\]:]{1,255}$")
 pools = {}                 # (room key, lane) -> [Waiter]
@@ -465,6 +466,16 @@ async def handle(reader, writer):
                                       "id": INSTANCE, "name": computer_name()}) + "\n").encode())
             await writer.drain()
             return
+        if isinstance(req, dict) and req.get("op") == "invite":
+            # "which game is waiting under this invite code?" so a friend can type the code instead of a link
+            code = str(req.get("code", "")).upper()
+            problem = admit(ip, asyncio.get_running_loop().time())
+            game = "" if problem or not INVITE_CODE_RE.match(code) else next(
+                (w.game for (room, _lane), lst in pools.items() if room.endswith("#" + code) for w in lst if not w.done), "")
+            reply = {"op": "error", "msg": problem} if problem else {"op": "invite", "v": 1, "found": bool(game), "game": game}
+            writer.write((json.dumps(reply) + "\n").encode())
+            await writer.drain()
+            return
         if isinstance(req, dict) and req.get("op") == "stream":
             await stream_conn(reader, writer, req, ip)
             return
@@ -566,7 +577,7 @@ async def stream_conn(reader, writer, req, ip):
     if not problem and not hit:
         problem = "This stream has ended, or its key is wrong."
     if problem:
-        s_send(writer, {"op": "error", "msg": problem, "why": "bad_key" if not hit else "busy"})
+        s_send(writer, {"op": "error", "msg": problem, "why": "bad_key" if problem.startswith("This stream") else "busy"})
         await writer.drain()
         return
     s, role = hit
@@ -960,7 +971,7 @@ def landing_page(host_header, tcp_port, game, code):
             f"<p><a class='btn' href='{html.escape(deep, quote=True)}'>Open in Netplay Matchmaker</a></p>"
             "<p>Don't have the app yet? Install Netplay Matchmaker on your phone or computer, "
             "then come back to this page and tap the button again.</p>"
-            "<p>The button does nothing? In the app choose <b>Join with a link</b> and paste this "
+            "<p>The button does nothing? In the app choose <b>Enter code</b> and paste this "
             "page's address.</p>")
 
 

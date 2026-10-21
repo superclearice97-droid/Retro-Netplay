@@ -229,6 +229,14 @@ check("the secret itself is never sent", "s3cret" not in json.dumps(r))
 sessions.configure_turn([], "")
 
 mm.recent_by_ip.clear()
+mm.recent_by_ip.clear()
+h = search("ps2:busy"); time.sleep(0.2); g = search("ps2:busy", can_host=False)
+k = g.read()["session"]["key"]; h.read()
+mm.recent_by_ip["127.0.0.1"] = [time.monotonic()] * mm.SEARCHES_PER_MIN     # (the server's loop clock is monotonic)
+r = Line({"v": 1, "op": "stream", "key": k}).read()
+check("the per-address limit applies to stream connections, and says so (not 'wrong key')",
+      r["op"] == "error" and r["why"] == "busy" and "too many" in r["msg"], r)
+mm.recent_by_ip.clear()
 # ---- 9. the client class (what the host, the player and the app use)
 h = search("ps2:client"); time.sleep(0.2); g = search("ps2:client", can_host=False)
 hk, gk = h.read()["session"]["key"], g.read()["session"]["key"]

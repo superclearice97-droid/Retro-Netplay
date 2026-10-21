@@ -834,6 +834,7 @@ class Player:
         self.video_at = None
         self.vpad = None
         self.shot = False
+        self.quit = False
 
     # ---- set-up
     def connect(self):
@@ -1005,7 +1006,7 @@ class Player:
         last_tick = last_csv = 0.0
         chips, quit_ = [], False
         try:
-            while not quit_:
+            while not quit_ and not self.quit:
                 now = time.monotonic()
                 for kind, d in self.win.events(4 if self.media and not self.ended else 50):
                     if kind == "quit":
@@ -1051,6 +1052,8 @@ class Player:
                         self.say(end_text("no host"))
                     if not self.playing and self.heard and now - self.start > 45:
                         self.say(end_text("no video"))
+                    if a.seconds and not self.video_at and now - self.start > 30:     # (tests: never wait forever)
+                        self.finish(end_text("no video" if self.heard else "no host"), error=True)
                     if a.seconds and self.video_at and now - self.video_at > a.seconds:
                         log("test time is up")
                         quit_ = True
@@ -1158,7 +1161,10 @@ def main(argv=None):
         return 0 if not any(l.startswith("[X") for l in lines) else 1
     if not a.mm or not a.key:
         ap.error("--mm and --key are required (or use --check)")
-    return Player(a).run()
+    player = Player(a)
+    import signal
+    signal.signal(signal.SIGTERM, lambda *_: setattr(player, "quit", True))   # the app's End session: leave politely
+    return player.run()
 
 
 if __name__ == "__main__":

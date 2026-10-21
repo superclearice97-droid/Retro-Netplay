@@ -55,13 +55,17 @@ def pair(port, game):
 port = free_port()
 srv = subprocess.Popen([sys.executable, "-u", os.path.join(D, "server.py"), str(port), "0"], stdout=subprocess.DEVNULL,
                        stderr=subprocess.STDOUT, env={**os.environ, "NETPLAY_DATA": tempfile.mkdtemp(), "NETPLAY_ICE_JSON": "[]"})
-time.sleep(1.0)
+for _ in range(100):                 # until the matchmaker answers (a busy machine can take a few seconds)
+    try:
+        socket.create_connection(("127.0.0.1", port), 0.5).close(); break
+    except OSError:
+        time.sleep(0.1)
 MM = f"127.0.0.1:{port}"
 procs = []
 
 def host(key, *extra, env=None):
     log = tempfile.mktemp(suffix=".log"); pads = tempfile.mktemp(suffix=".jsonl")
-    p = subprocess.Popen([sys.executable, "-u", os.path.join(HERE, "recording_host.py"), "--mm", MM, "--key", key,
+    p = subprocess.Popen([sys.executable, "-u", os.path.join(HERE, "recording_host.py"), "--mm", MM, f"--key={key}",
                           "--capture", "test", "--no-audio", "--encoder", "x264enc", "--fps", "60", *extra],
                          stdout=open(log, "w"), stderr=subprocess.STDOUT,
                          env={**(env or os.environ), "NETPLAY_PAD_LOG": pads, "HOME": tempfile.mkdtemp()})
@@ -70,10 +74,16 @@ def host(key, *extra, env=None):
 
 def guest(key, *extra, timeout=60):
     stats = os.path.join(tempfile.mkdtemp(), "stream-stats.csv")
-    r = subprocess.run([sys.executable, "-u", os.path.join(D, "stream_guest.py"), "--mm", MM, "--key", key, "--headless",
-                        "--stats-file", stats, *extra], capture_output=True, text=True, timeout=timeout,
-                       env={**os.environ, "HOME": tempfile.mkdtemp()})
-    return r, stats
+    p = subprocess.Popen([sys.executable, "-u", os.path.join(D, "stream_guest.py"), "--mm", MM, f"--key={key}", "--headless",
+                          "--stats-file", stats, *extra], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                         env={**os.environ, "HOME": tempfile.mkdtemp()})
+    try:
+        out, err = p.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        p.kill()
+        out, err = p.communicate()
+        out += "\n(player TIMED OUT)"
+    return subprocess.CompletedProcess(p.args, p.returncode, out, err), stats
 
 try:
     # ---- 1. the real stream, with a pretend controller
@@ -115,7 +125,7 @@ try:
     time.sleep(1.0)
     r, _ = guest(gk, "--seconds", "2", "--want-slot", "3")
     stats = [json.loads(l[6:]) for l in r.stdout.splitlines() if l.startswith("STATS ")]
-    check("asking for Player 3 makes the host switch to Player 3", stats and stats[-1]["slot"] == 3, r.stdout[-800:])
+    check("asking for Player 3 makes the host switch to Player 3", stats and stats[-1]["slot"] == 3, r.stdout[-1500:] + r.stderr[-1500:] + open(hlog).read()[-1500:])
     time.sleep(0.5)
     check("...and the host now drives Player 3's pad", "guest switched to Player 3" in open(hlog).read(), open(hlog).read()[-800:])
 

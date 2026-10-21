@@ -70,7 +70,7 @@ try:
     a = search(port, "desktop-host", True); time.sleep(0.2); b = search(port, "odin-guest", False)
     ma, mb = read_msg(a), read_msg(b)
     hk = ma["session"]["key"]
-    host = subprocess.Popen([sys.executable, "-u", HOST, "--server", base, "--key", hk, "--capture", "test",
+    host = subprocess.Popen([sys.executable, "-u", HOST, "--server", base, f"--key={hk}", "--capture", "test",
                              "--no-audio", "--encoder", "x264enc", "--fps", "30"],
                             stdout=open(hostlog, "w"), stderr=subprocess.STDOUT, env={**os.environ, "HOME": tempfile.mkdtemp()})
     time.sleep(1.5)

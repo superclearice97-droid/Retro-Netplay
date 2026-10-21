@@ -9,6 +9,11 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 cd "$HERE"
 python3 -m pip install --quiet pyinstaller==6.11.1 pygame==2.6.1
+# the player window that shows a friend's stream: ready-made, with its own GStreamer and SDL (built with the system's
+# Python, which has GStreamer), plus its script and SDL for the computer's own Python as the fallback
+PLAYER_PYTHON="${PLAYER_PYTHON:-/usr/bin/python3}" sh "$HERE/packaging/build-player.sh" "$WORK/player"
+python3 -m pip install --quiet --target "$WORK/sdlpy" pysdl2==0.9.17 pysdl2-dll==2.30.2
+find "$WORK/sdlpy/sdl2dll/dll" -type f ! -name 'libSDL2-2.0*' ! -name 'libSDL2_ttf*' -delete   # only SDL2 and its text
 
 mkdir -p "$WORK/notices"
 cp "$ROOT/LICENSE" "$ROOT/NOTICE.md" "$ROOT/PRIVACY.md" "$ROOT/TERMS.md" "$WORK/notices/"
@@ -21,13 +26,18 @@ python3 -m PyInstaller --noconfirm --clean --windowed --name Retro-Netplay \
   --add-data "$HERE/uinput_pad.py:hostpy" \
   --add-data "$HERE/portal_capture.py:hostpy" \
   --add-data "$HERE/stream_signal.py:hostpy" \
+  --add-data "$HERE/stream_guest.py:hostpy" \
+  --add-data "$HERE/fonts:hostpy/fonts" \
+  --add-data "$WORK/sdlpy/sdl2:hostpy/sdl2" \
+  --add-data "$WORK/sdlpy/sdl2dll:hostpy/sdl2dll" \
   --add-data "$WORK/notices:notices" \
   --hidden-import server --hidden-import sessions --hidden-import stream_signal --hidden-import wizard --hidden-import social \
   --hidden-import pygame \
-  --exclude-module stream_host --exclude-module portal_capture --exclude-module gi \
+  --exclude-module stream_host --exclude-module stream_guest --exclude-module portal_capture --exclude-module gi \
   "$HERE/app.py"
 
 APP="$WORK/dist/Retro-Netplay"
+cp -a "$WORK/player/Retro-Netplay-Player" "$APP/_internal/player"     # runtime.guest_commands() looks here
 mkdir -p "$OUT"
 
 # 1) zip: unzip, open the folder, double-click Retro-Netplay

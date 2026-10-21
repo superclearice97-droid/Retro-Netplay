@@ -323,17 +323,24 @@ _guest_cache = {}
 
 
 def guest_ready(refresh=False):
-    """-> (ok, report). Can THIS computer show a friend's built-in stream (the player's own --check)?"""
+    """-> (ok, report). Can THIS computer show a friend's built-in stream? Asks each way of starting the player
+    (runtime.guest_commands) for its own --check and remembers the first that works."""
     if refresh or "v" not in _guest_cache:
-        cmd = runtime.guest_command()
-        if not cmd:
-            _guest_cache["v"] = (False, "The player window is missing from this copy of Retro-Netplay. Download it again.")
-        else:
+        cmds, reports = runtime.guest_commands(), []
+        _guest_cache["cmd"] = cmds[0] if cmds else []
+        for cmd in cmds:
             try:
                 r = subprocess.run(cmd + ["--check"], capture_output=True, text=True, timeout=30)
-                _guest_cache["v"] = (r.returncode == 0, (r.stdout or r.stderr or "").strip())
+                ok, report = r.returncode == 0, (r.stdout or r.stderr or "").strip()
             except (OSError, subprocess.SubprocessError) as e:
-                _guest_cache["v"] = (False, f"Couldn't check the player ({e})")
+                ok, report = False, f"Couldn't check the player ({e})"
+            if ok:
+                _guest_cache.update(v=(True, report), cmd=cmd)
+                break
+            reports.append(report)
+        else:
+            _guest_cache["v"] = (False, "\n\n".join(reports) if reports else
+                                 "The player window is missing from this copy of Retro-Netplay. Download it again.")
     return _guest_cache["v"]
 
 
@@ -887,7 +894,9 @@ class Engine:
                                     "computer that runs the matchmaker, then press Join again.")
         if not re.fullmatch(r"[A-Za-z0-9_-]{8,64}", key):
             return self.set("idle", "The matchmaker sent a stream key that doesn't look right. Press Join again.")
-        cmd = runtime.guest_command()
+        if "cmd" not in _guest_cache:
+            await asyncio.get_running_loop().run_in_executor(None, guest_ready)
+        cmd = list(_guest_cache.get("cmd") or [])
         if not cmd:
             return self.set("idle", "The player that shows your friend's game is missing from this copy of Retro-Netplay. "
                                     "Download the app again.")

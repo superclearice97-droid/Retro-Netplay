@@ -32,12 +32,29 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Tools
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq xvfb imagemagick xdotool zip libfuse2 >/dev/null
+      - name: Tools (and GStreamer + Python GObject for the player window, which carries its own copy)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb imagemagick xdotool zip libfuse2 python3-gi python3-venv \
+            gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 gir1.2-gst-plugins-bad-1.0 gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-nice gstreamer1.0-pulseaudio gstreamer1.0-alsa >/dev/null
       - name: Build zip and AppImage
-        run: sh desktop/packaging/build-linux.sh
+        run: PLAYER_PYTHON=/usr/bin/python3 sh desktop/packaging/build-linux.sh
       - name: Open the app on a virtual screen and take screenshots
         run: sh desktop/packaging/smoke-test.sh dist/Retro-Netplay-x86_64.AppImage shots
+      - name: The packaged player, end to end against the real host over TCP (also through a relay)
+        # CI has no graphics card, so only for this test the ready-made player borrows the system's software decoder
+        # (the download itself carries none: see build-player.sh)
+        run: |
+          sudo apt-get install -y -qq gstreamer1.0-plugins-ugly gstreamer1.0-libav coturn >/dev/null
+          mkdir -p pk && (cd pk && unzip -q ../dist/Retro-Netplay-linux-x86_64.zip)
+          P="$PWD/pk/Retro-Netplay/_internal"
+          "$P/player/Retro-Netplay-Player" --check || true
+          echo "== the ready-made player"
+          NETPLAY_PLAYER="$P/player/Retro-Netplay-Player" GST_PLUGIN_PATH_1_0="$P/player/_internal/gst_plugins:/usr/lib/x86_64-linux-gnu/gstreamer-1.0" \
+            /usr/bin/python3 desktop/tests/test_native_guest.py
+          echo "== the fallback: the player script with the computer's own Python and GStreamer"
+          NETPLAY_PLAYER="/usr/bin/python3 $P/hostpy/stream_guest.py" /usr/bin/python3 desktop/tests/test_native_guest.py
       - uses: actions/upload-artifact@v4
         with:
           name: linux
@@ -49,7 +66,7 @@ jobs:
           path: shots/*
 
   stream:
-    # the real stream host (GStreamer WebRTC) streaming a test picture to the real friend's page in Chromium
+    # the real stream host (GStreamer WebRTC) streaming to the native player and to the Android app's page in Chromium
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -58,11 +75,18 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq python3-gi gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 gir1.2-gst-plugins-bad-1.0 \
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly \
-            gstreamer1.0-nice gstreamer1.0-libav >/dev/null
-          /usr/bin/python3 -m pip install --break-system-packages -q playwright
+            gstreamer1.0-nice gstreamer1.0-libav coturn python3-tk >/dev/null
+          /usr/bin/python3 -m pip install --break-system-packages -q playwright pysdl2==0.9.17 pysdl2-dll==2.30.2
           /usr/bin/python3 -m playwright install --with-deps chromium >/dev/null
           sudo modprobe uinput && sudo chmod 666 /dev/uinput
-      - name: Real stream, end to end
+      - name: Stream setup over TCP, the player's logic, the app's join flow, the Android app's path
+        run: |
+          for t in test_tcp_signal test_stream_guest test_app_own test_android_stream test_two_devices; do
+            echo "== $t"; /usr/bin/python3 desktop/tests/$t.py || exit 1
+          done
+      - name: Native player window (headless) against the real stream host over TCP, also through a relay
+        run: /usr/bin/python3 desktop/tests/test_native_guest.py
+      - name: Real stream to the Android app's web page (deprecated path), end to end
         run: /usr/bin/python3 desktop/tests/test_real_host.py
 
   publish:

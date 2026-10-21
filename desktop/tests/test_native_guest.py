@@ -3,7 +3,8 @@
 Checks: video frames arrive at about 60 fps, controller packets from a pretend SDL controller arrive intact at the
 host, the stats file is written, a friend may pick their player slot, a wrong key is refused, the host's real error
 is shown, and old and new apps aren't paired. The host's virtual controller is a recorder (tests/recording_host.py),
-so this runs without /dev/uinput. Skips without GStreamer webrtcbin + x264enc + a decoder, or PySDL2."""
+so this runs without /dev/uinput. Skips without GStreamer webrtcbin + x264enc + a decoder, or PySDL2.
+NETPLAY_PLAYER="<command>" runs another player program (the packaged one) instead of stream_guest.py."""
 import json, os, socket, subprocess, sys, tempfile, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -14,7 +15,9 @@ try:
     from gi.repository import Gst
     Gst.init(None)
     assert Gst.ElementFactory.find("webrtcbin") and Gst.ElementFactory.find("x264enc") and Gst.ElementFactory.find("avdec_h264")
-    import sdl2, sdl2.sdlttf  # noqa: F401
+    PLAYER = os.environ.get("NETPLAY_PLAYER", "").split()     # e.g. the packaged player; default: stream_guest.py
+    if not PLAYER:
+        import sdl2, sdl2.sdlttf  # noqa: F401
 except Exception as e:  # noqa: BLE001
     print(f"SKIP (needs GStreamer webrtcbin + x264enc + avdec_h264, PyGObject and PySDL2: {e})")
     sys.exit(0)
@@ -74,7 +77,7 @@ def host(key, *extra, env=None):
 
 def guest(key, *extra, timeout=60):
     stats = os.path.join(tempfile.mkdtemp(), "stream-stats.csv")
-    p = subprocess.Popen([sys.executable, "-u", os.path.join(D, "stream_guest.py"), "--mm", MM, f"--key={key}", "--headless",
+    p = subprocess.Popen((PLAYER or [sys.executable, "-u", os.path.join(D, "stream_guest.py")]) + ["--mm", MM, f"--key={key}", "--headless",
                           "--stats-file", stats, *extra], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                          env={**os.environ, "HOME": tempfile.mkdtemp()})
     try:

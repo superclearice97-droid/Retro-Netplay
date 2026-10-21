@@ -35,7 +35,8 @@ done.wait(15)
 bye = [m for m in got if m.get("type") == "bye"]
 print("GUEST ENDED: " + ("The stream stopped on your friend's computer: " + bye[0]["why"] + "." if bye and bye[0].get("why") else "you left"), flush=True)
 """)
-runtime.guest_command = lambda: [sys.executable, str(player)]
+runtime.guest_commands = lambda: [[sys.executable, str(player)]]
+app._guest_cache.update(v=(True, "ok"), cmd=[sys.executable, str(player)])
 PORT = 7810
 threading.Thread(target=lambda: asyncio.run(mm.main(PORT)), daemon=True).start(); time.sleep(0.6)
 
@@ -153,4 +154,13 @@ app._guest_cache["v"] = (False, "[OK] webrtcbin\n[X ] no H.264 video decoder. In
 c["stream_backend"] = "own"
 check("the setup check says when joining a stream won't work yet, and why",
       any(st is None and "no H.264 video decoder" in t for st, t in app.checklist(c, g)), app.checklist(c, g))
+# the download's own player can't decode here (no graphics-card decoder), the computer's GStreamer can: use that
+bundled = d / "bundled_check.py"; bundled.write_text('print("[X ] no H.264 video decoder."); raise SystemExit(1)\n')
+system = d / "system_check.py"; system.write_text('print("[OK] video decoder: avdec_h264  (software)")\n')
+runtime.guest_commands = lambda: [[sys.executable, str(bundled)], [sys.executable, str(system)]]
+good, rep = app.guest_ready(refresh=True)
+check("joining uses the first way of starting the player that can decode", good and app._guest_cache["cmd"][-1] == str(system), rep)
+runtime.guest_commands = lambda: [[sys.executable, str(bundled)]]
+good, rep = app.guest_ready(refresh=True)
+check("...and says why when none can", not good and "no H.264 video decoder" in rep, rep)
 print("ALL PASSED" if ok else "SOME FAILED"); sys.exit(0 if ok else 1)

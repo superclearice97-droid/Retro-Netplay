@@ -52,17 +52,21 @@ def host_python():
     return shutil.which("python3") or shutil.which("python") or ""
 
 
-def guest_command():
-    """How to start the player window (stream_guest.py), as a command list, or [] if this computer can't.
-    The download carries the player ready-made (with its own GStreamer and SDL); from source it runs with this Python."""
+def guest_commands():
+    """Ways to start the player window (stream_guest.py), best first, as command lists. The download carries a
+    ready-made player with its own GStreamer and SDL (it decodes on the graphics card); the computer's own Python and
+    GStreamer come next (they may have a software decoder, which the download leaves out). From source: this Python."""
+    out = []
     exe = BASE / "player" / ("Retro-Netplay-Player.exe" if sys.platform == "win32" else "Retro-Netplay-Player")
     if exe.exists():
-        return [str(exe)]
+        out.append([str(exe)])
     if not FROZEN:
-        return [sys.executable, str(SRC / "stream_guest.py")]
-    py = host_python()
-    script = BASE / "hostpy" / "stream_guest.py"
-    return [py, str(script)] if py and script.exists() else []
+        out.append([sys.executable, str(SRC / "stream_guest.py")])
+    else:
+        py, script = host_python(), BASE / "hostpy" / "stream_guest.py"
+        if py and script.exists():
+            out.append([py, str(script)])
+    return out
 
 
 def icon_file():

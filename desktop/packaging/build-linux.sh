@@ -20,8 +20,9 @@ python3 -m PyInstaller --noconfirm --clean --windowed --name Retro-Netplay \
   --add-data "$HERE/stream_host.py:hostpy" \
   --add-data "$HERE/uinput_pad.py:hostpy" \
   --add-data "$HERE/portal_capture.py:hostpy" \
+  --add-data "$HERE/stream_signal.py:hostpy" \
   --add-data "$WORK/notices:notices" \
-  --hidden-import server --hidden-import sessions --hidden-import wizard --hidden-import social \
+  --hidden-import server --hidden-import sessions --hidden-import stream_signal --hidden-import wizard --hidden-import social \
   --hidden-import pygame \
   --exclude-module stream_host --exclude-module portal_capture --exclude-module gi \
   "$HERE/app.py"

@@ -4,7 +4,8 @@ Captures a window/screen + game audio, encodes it with the fastest encoder avail
 to ONE guest's browser over WebRTC. The guest's controller comes back over a data channel and is
 fed into a virtual gamepad. The matchmaker only relays the setup messages.
 
-  python3 stream_host.py --server http://HOST:PORT --key KEY      (the app starts this for you)
+  python3 stream_host.py --mm HOST:PORT --key KEY                 (the app starts this for you)
+  python3 stream_host.py --server http://HOST:PORT --key KEY      (DEPRECATED web way, for older matchmakers)
   python3 stream_host.py --doctor                                  (checks this computer, no network)
 
 The orchestration (Session) and all packing/choosing logic are plain Python and unit-tested.
@@ -79,9 +80,12 @@ def ice_to_gst(servers):
     return stun, turns
 
 
-# ===================================================================== signaling over HTTP
+# ===================================================================== signaling over HTTP (DEPRECATED)
 class Signaling:
-    """Long-polls the matchmaker for messages and posts ours. Runs on its own threads."""
+    """Long-polls the matchmaker's web port for messages and posts ours. Runs on its own threads.
+
+    DEPRECATED: only for a matchmaker too old to have the TCP stream connection (stream_signal.TcpSignaling,
+    which the app uses whenever the match says sig "tcp"). Remove with the web guest page."""
 
     def __init__(self, base, key, on_msg, on_end):
         self.base, self.key, self.on_msg, self.on_end = base.rstrip("/"), key, on_msg, on_end
@@ -843,7 +847,8 @@ def test_share(session_type):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Netplay Matchmaker stream host")
-    ap.add_argument("--server", help="matchmaker web address, e.g. http://1.2.3.4:7778")
+    ap.add_argument("--mm", help="matchmaker address for the stream connection, e.g. 1.2.3.4:7777")
+    ap.add_argument("--server", help="DEPRECATED: matchmaker web address (older matchmakers), e.g. http://1.2.3.4:7778")
     ap.add_argument("--key", help="session key from the match")
     ap.add_argument("--doctor", action="store_true", help="check this computer and exit")
     ap.add_argument("--test-share", action="store_true", help="open the 'share your screen' box once and say if it worked")
@@ -867,8 +872,8 @@ def main(argv=None):
         return 0 if not any(l.startswith("[X") for l in lines) else 1
     if a.test_share:
         return test_share(session_type)
-    if not a.server or not a.key:
-        ap.error("--server and --key are required (or use --doctor)")
+    if not (a.mm or a.server) or not a.key:
+        ap.error("--mm (or --server) and --key are required (or use --doctor)")
     if elements is None:
         print("\n".join(doctor_lines(None, session_type, "", False)))
         return 2
@@ -908,14 +913,26 @@ def main(argv=None):
     loop = GLib.MainLoop()
     pad = uinput_pad.UinputPad(f"Netplay Virtual Pad (Player {a.slot})")
     pad.open()
-    sig = Signaling(a.server, a.key, on_msg=lambda m: GLib.idle_add(lambda: session.on_signal(m) and False),
-                    on_end=lambda why: GLib.idle_add(lambda: (session.end(why), False)[1]))
-    try:
-        ice = sig.get_json("/cfg").get("iceServers", [])
-    except (urllib.error.URLError, OSError, ValueError) as e:
-        print("Can't reach the matchmaker:", e)
-        pad.close()
-        return 2
+    on_msg = lambda m: GLib.idle_add(lambda: session.on_signal(m) and False)
+    on_end = lambda why: GLib.idle_add(lambda: (session.end(why), False)[1])
+    if a.mm:
+        import stream_signal
+        host, port = stream_signal.parse_address(a.mm)
+        sig = stream_signal.TcpSignaling(host, port, a.key, on_msg=on_msg, on_end=on_end)
+        try:
+            ice = sig.connect().get("iceServers", [])
+        except stream_signal.SignalError as e:
+            print(f"STREAM ERROR: can't reach the matchmaker: {e}", flush=True)
+            pad.close()
+            return 2
+    else:
+        sig = Signaling(a.server, a.key, on_msg=on_msg, on_end=on_end)
+        try:
+            ice = sig.get_json("/cfg").get("iceServers", [])
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            print("Can't reach the matchmaker:", e)
+            pad.close()
+            return 2
     def new_pad(n):
         p = uinput_pad.UinputPad(f"Netplay Virtual Pad (Player {n})")
         p.open()
@@ -936,6 +953,8 @@ def main(argv=None):
     except KeyboardInterrupt:
         session.end("interrupted")
     finally:
+        if hasattr(sig, "flush"):
+            sig.flush()
         time.sleep(0.3)      # let the final 'bye' go out
         sig.stop()
         session.pad.close()   # (the guest may have switched to another player's pad)

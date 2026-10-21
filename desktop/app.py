@@ -877,8 +877,10 @@ class Engine:
             except OSError as e:
                 return self.set("idle", f"Couldn't start {EMUS[s['emu']][0]}: {e}")
             await asyncio.sleep(NATIVE_GUEST_DELAY)   # give the emulator a moment to open its window
-        cmd = [runtime.host_python(), str(runtime.host_script()), "--server", web,
+        tcp = sess.get("sig") == "tcp"     # else an older matchmaker: DEPRECATED web signaling
+        cmd = [runtime.host_python(), str(runtime.host_script()), *(["--mm", f"{host}:{port}"] if tcp else ["--server", web]),
                "--key", sess.get("key", ""), "--slot", "2"]
+        tell = lambda text: tell_guest(web, sess.get("key", ""), text, (host, port) if tcp else None)
         log_path = CONFIG_PATH.parent / "stream-host.log"     # what the stream did, for "why didn't it work?"
         try:
             log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -889,7 +891,7 @@ class Engine:
             self.stream_proc = await asyncio.create_subprocess_exec(*cmd, stdout=log_f or asyncio.subprocess.DEVNULL,
                                                                     stderr=asyncio.subprocess.STDOUT)
         except OSError as e:
-            tell_guest(web, sess.get("key", ""), f"The stream couldn't start on your friend's computer: {e}")
+            tell(f"couldn't start the stream program: {e}")
             return self.set("idle", f"Couldn't start the stream: {e}")
         self.emit("share", "When your friend connects, a 'share your screen' box opens (only the first time): "
                            "choose the game window. Can't see it? Press Alt+Tab, it may be behind the game.", None)
@@ -900,7 +902,7 @@ class Engine:
         why = ""
         if self.stream_proc.returncode not in (None, 0):
             why = last_problem(log_path) or f"the stream stopped (code {self.stream_proc.returncode})"
-            tell_guest(web, sess.get("key", ""), f"The stream stopped on your friend's computer: {why}")
+            tell(why)
         if log_f:
             log_f.close()
         for p in (self.stream_proc, self.proc):
@@ -928,10 +930,16 @@ def last_problem(log_path):
     return lines[-1][:200] if lines else ""
 
 
-def tell_guest(web, key, text):
-    """Show text on the friend's stream page (through the matchmaker, as the host of that session)."""
+def tell_guest(web, key, text, mm=None):
+    """Tell the friend why the stream stopped, in the host program's own words (through the matchmaker, as the
+    host of that session). mm = (host, port): over the stream connection, which ends the friend's player with this
+    reason. Without it: the DEPRECATED web page way (older matchmakers), as a status line."""
+    if mm:
+        import stream_signal
+        return stream_signal.send_once(mm[0], mm[1], key, [{"type": "bye", "why": text[:300]}])
     import urllib.request
     from urllib.parse import quote
+    text = f"The stream stopped on your friend's computer: {text}"
     try:
         req = urllib.request.Request(f"{web}/sig?t={quote(key)}", data=json.dumps({"type": "status", "text": text[:300]}).encode(),
                                      headers={"content-type": "application/json"}, method="POST")

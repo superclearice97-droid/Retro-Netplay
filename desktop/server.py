@@ -297,7 +297,26 @@ def rank(a, b, key, now):
     return None
 
 
+def tcp_sig(w):
+    """Does this player's app signal over the TCP stream connection (info.stream.sig == "tcp")? Apps without it
+    (the current Android app, older desktop apps) only know the web page way."""
+    st = w.info.get("stream")
+    return isinstance(st, dict) and st.get("sig") == "tcp"
+
+
 def roles(w, other, lane, key=""):
+    """(host, guest) or None. See _roles. On the built-in stream, an app that only knows TCP signaling can't join an
+    app that only knows the web page way, so when exactly one of them speaks TCP, that one must host (a new host
+    still serves an old web guest); if it can't host, they aren't paired at all."""
+    hg = _roles(w, other, lane, key)
+    if hg and lane == "stream" and wants_own_stream(w) and wants_own_stream(other) and tcp_sig(w) != tcp_sig(other):
+        new = w if tcp_sig(w) else other
+        old = other if new is w else w
+        return (new, old) if new.can_host[lane] else None
+    return hg
+
+
+def _roles(w, other, lane, key=""):
     """(host, guest) or None. The player who waited longer hosts, unless only one can, or one asked to.
     In a friend's join, the friend who accepted hosts whenever they can."""
     code = key.split("#", 1)[1] if "#" in key else ""
@@ -345,12 +364,20 @@ def do_match(w, key, lane, hg):
     to_host = {"op": "matched", "v": 1, "lane": lane, "role": "host", "via": via, "peer": peer_view(guest, lane, host)}
     to_guest = {"op": "matched", "v": 1, "lane": lane, "role": "guest", "via": via, "peer": peer_view(host, lane, guest)}
     if lane == "stream" and wants_own_stream(host) and wants_own_stream(guest):
-        sess = sessions.create(w.game)
+        # each side signals over the TCP stream connection if its app can; roles() made sure a TCP-only guest
+        # never gets a host that only knows the web page way
+        sig = {"host": "tcp" if tcp_sig(host) else "http", "guest": "tcp" if tcp_sig(guest) else "http"}
+        sess = sessions.create(w.game, sig)
         if sess:    # else: server is full, fall through to the plain match
-            to_host["session"] = {"key": sess.keys["host"]}
-            to_guest["session"] = {"key": sess.keys["guest"], "play": f"/play?t={sess.keys['guest']}"}
-            if TLS:
-                to_host["session"]["web"] = to_guest["session"]["web"] = "https"
+            for role, msg in (("host", to_host), ("guest", to_guest)):
+                msg["session"] = {"key": sess.keys[role]}
+                if sig[role] == "tcp":
+                    msg["session"]["sig"] = "tcp"
+                else:   # DEPRECATED web page way (current Android app only)
+                    if role == "guest":
+                        msg["session"]["play"] = f"/play?t={sess.keys['guest']}"
+                    if TLS:
+                        msg["session"]["web"] = "https"
     for x, msg in ((host, to_host), (guest, to_guest)):
         try:
             send(x, msg)
@@ -369,7 +396,11 @@ def dead_end(w):
             common = [l for l in LANES if l in w.lanes and l in o.lanes]
             if any(compatible(o, w, l) and roles(w, o, l, key) for l in common):
                 continue
-            if not common:
+            own = "stream" in common and wants_own_stream(w) and wants_own_stream(o)
+            if own and tcp_sig(w) != tcp_sig(o) and "native" not in common:
+                why = ("Your apps can't stream to each other: one of you has an older Retro-Netplay. "
+                       "Update the app on both devices, then try again.")
+            elif not common:
                 why = ("You can't play this game together: one of you can only join a stream, and the other can't host "
                        "one or play it with emulator netplay.")
             elif "stream" in common and not ("native" in common):
@@ -413,6 +444,8 @@ async def handle(reader, writer):
             return
         if not line:
             return
+        if len(line) > MAX_LINE:
+            return
         try:
             req = json.loads(line)
         except ValueError:
@@ -431,6 +464,9 @@ async def handle(reader, writer):
             writer.write((json.dumps({"op": "whoami", "v": 1, "ip": ip, "app": "retro-netplay", "since": int(START),
                                       "id": INSTANCE, "name": computer_name()}) + "\n").encode())
             await writer.drain()
+            return
+        if isinstance(req, dict) and req.get("op") == "stream":
+            await stream_conn(reader, writer, req, ip)
             return
         if isinstance(req, dict) and req.get("op") == "hello":
             await presence(reader, writer, req, ip)
@@ -486,6 +522,123 @@ async def handle(reader, writer):
             if w.timer:
                 w.timer.cancel()
         writer.close()
+
+
+# ----------------------------------------------------------------- stream signaling over TCP
+# A matched player opens one more connection, {"op":"stream","key":...}, and the two apps swap their WebRTC setup
+# messages through it (see sessions.py). The key only works for its own role and its own session.
+STREAM_LINE = sessions.MAX_BODY + 512   # one setup message per line (an offer is a few KB)
+SIG_PER_MIN = 300                       # setup messages one connection may send per minute (a setup takes ~20)
+STREAM_IDLE = 70                        # seconds of silence before a stream connection is dropped (apps ping every 20)
+
+
+def s_send(writer, msg):
+    writer.write((json.dumps(msg) + "\n").encode())
+
+
+async def stream_pump(s, role, writer):
+    """Hand this role every message the other side sends, as it arrives; close once the session is over."""
+    try:
+        while True:
+            if time.time() - s.created > sessions.SESSION_TTL:
+                s_send(writer, {"op": "error", "msg": "This stream session is over (sessions last 2 hours). "
+                                                     "Press Join again to keep playing.", "why": "expired"})
+                await writer.drain()
+                sessions.drop(s)
+                return
+            msgs = await sessions.poll(s, role, PING_SECONDS)
+            for m in msgs:
+                s_send(writer, {"op": "sig", "msg": m})
+            if not msgs:
+                s_send(writer, {"op": "ping"})
+            await writer.drain()
+            if s.closed and not s.q[role]:
+                return                      # the goodbye was handed over: nothing more will come
+    except (ConnectionError, RuntimeError):
+        pass
+    finally:
+        writer.close()
+
+
+async def stream_conn(reader, writer, req, ip):
+    problem = admit(ip, asyncio.get_running_loop().time())
+    hit = None if problem else sessions.lookup(req.get("key"), "tcp")
+    if not problem and not hit:
+        problem = "This stream has ended, or its key is wrong."
+    if problem:
+        s_send(writer, {"op": "error", "msg": problem, "why": "bad_key" if not hit else "busy"})
+        await writer.drain()
+        return
+    s, role = hit
+    if s.conn[role]:
+        s.conn[role]()                      # the same player reconnected: the newest connection wins
+    pump = asyncio.ensure_future(stream_pump(s, role, writer))
+
+    def close():
+        pump.cancel()
+        writer.close()
+    s.conn[role] = close
+    open_by_ip[ip] = open_by_ip.get(ip, 0) + 1
+    ice = sessions.ice_servers(role)
+    s_send(writer, {"op": "stream", "v": 1, "role": role, "game": s.game, "iceServers": ice,
+                    "relay": sessions.has_relay(ice)})
+    times, last = [], time.monotonic()
+    try:
+        await writer.drain()
+        while not pump.done():
+            try:
+                line = await asyncio.wait_for(reader.readline(), PING_SECONDS)
+            except asyncio.TimeoutError:
+                if time.monotonic() - last > STREAM_IDLE:
+                    break                   # the app went quiet (it pings every 20 s): free the slot
+                continue
+            if not line:
+                break
+            last = time.monotonic()
+            try:
+                m = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(m, dict) or m.get("op") != "sig":
+                continue                    # "ping" and anything unknown: nothing to do
+            now = time.monotonic()
+            times = [t for t in times if now - t < 60] + [now]
+            if len(times) > SIG_PER_MIN:
+                s_send(writer, {"op": "error", "msg": "too many messages", "why": "rate"})
+                break
+            msg = m.get("msg")
+            err = ("message too large" if len(json.dumps(msg)) > sessions.MAX_BODY else "") or sessions.push(s, role, msg)
+            if err:
+                s_send(writer, {"op": "error_soft", "msg": err})
+            await writer.drain()
+    except (ConnectionError, ValueError, asyncio.LimitOverrunError, asyncio.IncompleteReadError):
+        pass
+    finally:
+        open_by_ip[ip] -= 1
+        if open_by_ip[ip] <= 0:
+            open_by_ip.pop(ip, None)
+        if s.conn[role] is close:
+            s.conn[role] = None
+        close()
+
+
+def load_turn():
+    """The relay for strict routers, if whoever runs this matchmaker set one up (see README.txt, "TURN relay"):
+    NETPLAY_TURN_URLS (comma-separated turn:/turns: addresses) and NETPLAY_TURN_SECRET, or the same as
+    {"urls": [...], "secret": "..."} in turn.json in the server's data folder. Nothing is set up by default."""
+    urls = [u.strip() for u in os.environ.get("NETPLAY_TURN_URLS", "").replace(" ", ",").split(",") if u.strip()]
+    secret = os.environ.get("NETPLAY_TURN_SECRET", "")
+    if not (urls and secret):
+        try:
+            with open(os.path.join(data_dir(), "turn.json")) as f:
+                raw = json.load(f)
+            urls, secret = raw.get("urls") or [], raw.get("secret") or ""
+        except (OSError, ValueError, AttributeError):
+            return False
+    ok = sessions.configure_turn(urls, secret)
+    print("relay for strict routers: " + (", ".join(sessions.TURN["urls"]) if ok else "set up wrong (needs turn: addresses "
+          "and a secret of 16+ characters)"), flush=True)
+    return ok
 
 
 # ----------------------------------------------------------------- friends online
@@ -878,7 +1031,11 @@ def json_response(status, obj):
 
 
 async def stream_routes(method, u, q, body):
-    """/play (guest page), /cfg, /sig (signaling). Returns raw HTTP bytes, or None if not ours."""
+    """/play (guest page), /cfg, /sig (signaling). Returns raw HTTP bytes, or None if not ours.
+
+    DEPRECATED: the web page way to join a stream, kept ONLY for the current Android app (its player is this page
+    in a web view). Desktop apps signal over the TCP stream connection (stream_conn) and never use these; keys of a
+    role that signals over TCP don't work here. Remove /play, /cfg and /sig once the Android native player ships."""
     first = lambda k: (q.get(k) or [""])[0][:200]
     if DEMO and method == "GET" and u.path == "/demo":
         return respond("200 OK", read_web("demo.html"), csp=DEMO_CSP)
@@ -899,7 +1056,7 @@ async def stream_routes(method, u, q, body):
             return json_response("404 Not Found", {"error": "session ended"})
         sess, role = hit
         if u.path == "/cfg" and method == "GET":
-            return json_response("200 OK", {"iceServers": sessions.ice_servers(), "role": role,
+            return json_response("200 OK", {"iceServers": sessions.ice_servers(role), "role": role,
                                             "game": sess.game, "v": 1})
         if u.path == "/sig" and method == "GET":
             wait = first("wait")
@@ -1009,6 +1166,7 @@ async def main(port, http_port=None, discovery=True, ready=None):
     START = time.time()
     http_port = port + 1 if http_port is None else http_port
     load_codes()
+    load_turn()
     if discovery:
         try:
             await asyncio.get_running_loop().create_datagram_endpoint(
@@ -1016,7 +1174,7 @@ async def main(port, http_port=None, discovery=True, ready=None):
             print(f"home-network discovery on udp :{port + 2}", flush=True)
         except OSError as e:
             print(f"home-network discovery off ({e})", flush=True)
-    srv = await asyncio.start_server(handle, "0.0.0.0", port, limit=MAX_LINE)
+    srv = await asyncio.start_server(handle, "0.0.0.0", port, limit=STREAM_LINE)
     print(f"matchmaker on :{port}", flush=True)
     if ready:
         ready()

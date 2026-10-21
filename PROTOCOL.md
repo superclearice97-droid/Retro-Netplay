@@ -24,7 +24,7 @@ Transport: TCP, UTF-8, one JSON object per line (`\n`). One connection = one sea
 
 ## Server -> client
 - `{"op":"matched","v":1,"lane":"native","role":"host"|"guest","via":"public"|"invite","peer":{...info, "ip":"1.2.3.4","client":"android"}}` then the server closes the connection. `ip` is only included on the native lane. The server passes on only `info.<lane>` entries with short keys (letters, digits, `_`) and short text, number or true/false values.
-- When both players asked for `backend:"own"` on the stream lane, the message also has `"session":{"key":"..."}` (host) or `"session":{"key":"...","play":"/play?t=..."}` (guest). If the server's web port uses https (`NETPLAY_TLS_CERT` and `NETPLAY_TLS_KEY` set), both also get `"web":"https"`. See Built-in streaming.
+- When both players asked for `backend:"own"` on the stream lane, the message also has `"session":{"key":"...","sig":"tcp"}`: this side's own secret key, to use on the stream connection (see Built-in streaming). A side whose app doesn't send `info.stream.sig:"tcp"` (the current Android app) gets the deprecated web page way instead: `"session":{"key":"...","play":"/play?t=..."}` (guest) or `{"key":"..."}` (host), plus `"web":"https"` if the server's web port uses https (`NETPLAY_TLS_CERT` and `NETPLAY_TLS_KEY` set).
 - `{"op":"ping"}` every 20 s while waiting. Ignore it.
 - `{"op":"error","msg":"..."}` then the server closes the connection.
 
@@ -43,16 +43,30 @@ Matchmaker TCP port N, invite web page on HTTP port N+1 (`python3 server.py [N] 
 The desktop app can post the invite text to a Discord webhook or a Telegram chat the player connected. It is off until the player turns it on, only sends the message template with the link, and waits at least the configured cooldown between posts. Android shares through the system share sheet instead, so no logins are stored.
 
 ## Built-in streaming (stream lane, backend "own")
-The matchmaker also relays the WebRTC setup between the two matched players. Everything is plain HTTP on the web port (N+1), so a guest only needs a browser.
+The matchmaker also relays the WebRTC setup between the two matched players, over the same TCP port as everything else. The joining player never opens a web browser: the desktop app opens its own player window.
 
-- Each side gets its OWN secret `key`. A key only works for its own role (`host` / `guest`). Sessions expire after 2 hours.
+**Capability.** A search on the stream lane sends `"info":{"stream":{"backend":"own","sig":"tcp"}}` when the app signals over TCP (every desktop app from this version on). Two such apps get a TCP session. When only ONE of the two has `sig:"tcp"`, that one must be the host (it can still serve an older guest's web page); if it can't host, the two are never paired (in a friend's room both get `{"op":"error","why":"no_common_lane"}` saying one app is too old). Apps without `sig` pair with each other exactly as before.
+
+**Stream connection.** Each matched player opens ONE more TCP connection to the matchmaker and sends, as its first line, `{"v":1,"op":"stream","key":"<its session key>"}`.
+- Answer: `{"op":"stream","v":1,"role":"host"|"guest","game":"...","iceServers":[...],"relay":true|false}`. `iceServers` is a WebRTC list: STUN, plus the relay with a short-lived username and password when the matchmaker has one (`relay:true`; see TURN relay below).
+- Or: `{"op":"error","msg":"...","why":"bad_key"}` (wrong key, a key of the other kind, or the session is over) and the connection closes.
+- Then client -> server: `{"op":"sig","msg":{"type":"..."}}` (relayed to the OTHER role) and `{"op":"ping"}` at least every 60 s. Server -> client: `{"op":"sig","msg":{...}}` (from the other role, in order; messages sent before you connected wait for you), `{"op":"ping"}` every 20 s, `{"op":"error_soft","msg":"..."}` (that one message was refused) and `{"op":"error","msg":"...","why":"expired"|"rate"}` (then it closes).
+- `msg` types: `hello` (guest is ready), `offer` / `answer` (`sdp`), `ice` (`candidate`, `sdpMLineIndex`), `status` (`text`: what that side is doing, shown on the other screen while connecting) and `bye` (`why`: the reason in plain words, shown to the other player; empty when they simply left). After a `bye` is handed over, the session is over and its connections close.
+- Security: each side has its OWN key and a key only works for its own role and session. Keys of a TCP session never work on the web port, and keys of a web session never work here. Sessions end after 2 hours. One message is at most 16 KB, at most 200 wait unread per side, at most 300 per minute per connection, and opening stream connections counts toward the per-address limit for searches. A new connection with the same key replaces the old one (reconnecting after a network hiccup).
+
+**Web page way (DEPRECATED).** Only for the current Android app, whose player is a web page in the app. Desktop apps never use it. It will be removed once the Android native player ships.
 - Guest: open `http://<host>:<N+1><play>` (the `play` path from the match). That page is served by the matchmaker (`desktop/web/guest.html`).
-- `GET /cfg?t=<key>` -> `{"iceServers":[...], "role":"host"|"guest", "game":"...", "v":1}`. STUN by default; set the `NETPLAY_ICE_JSON` environment variable on the server to add a TURN relay.
-- `GET /sig?t=<key>&wait=<seconds, max 25>` -> `{"msgs":[...], "closed":false}`: messages for this role (long-poll). `404` = session over.
-- `POST /sig?t=<key>` with one JSON object `{"type":"..."}` (max 16 KB): queued for the OTHER role. Types: `hello` (guest is ready), `offer` / `answer` (`sdp`), `ice` (`candidate`, `sdpMLineIndex`), `bye`.
+- `GET /cfg?t=<key>` -> `{"iceServers":[...], "role":"host"|"guest", "game":"...", "v":1}`.
+- `GET /sig?t=<key>&wait=<seconds, max 25>` -> `{"msgs":[...], "closed":false}`: messages for this role (long-poll). `404` = session over (or not a web session key).
+- `POST /sig?t=<key>` with one `msg` object as above (max 16 KB): queued for the OTHER role. A web guest and a TCP host share one session: the matchmaker relays between the two ways.
+
+**Media and controller (both ways of signaling).**
 - The host creates the offer after `hello` and adds two data channels: `pad` (unordered, no retransmits) and `ctl` (reliable, JSON).
 - `pad` packet, 16 bytes little-endian: `ver u8 (=1), seq u8, buttons u32, lx ly rx ry i16, lt rt u8`. Button bit n = W3C standard-gamepad button n (12-15 = d-pad up/down/left/right). Sticks: -32767..32767, up = negative.
+- The guest's video uses a small jitter buffer; the host sends H.264 (constrained baseline) and Opus audio.
 - `ctl` messages: guest `{"t":"hi"}`, `{"t":"ping","ts":n}`, `{"t":"stats","s":{...}}`; host `{"t":"slot","n":2}`, `{"t":"pong","ts":n}`, `{"t":"host","s":{captureAgeMs, convertMs, encodeMs, encodeP95, payMs, totalMs, frames}}` (every 2 s: how long the host spent on each stage, in milliseconds).
+
+**TURN relay.** Behind strict routers the two devices can't reach each other directly. If whoever runs the matchmaker also runs a TURN relay (for example coturn, see README.txt), the matchmaker shares one secret with it and hands each player a password that works for 3 hours: `username = "<unix time it expires>:netplay-<role>"`, `credential = base64(HMAC-SHA1(secret, username))` (coturn's `use-auth-secret` / "TURN REST API"). Set `NETPLAY_TURN_URLS` (comma-separated `turn:` / `turns:` addresses) and `NETPLAY_TURN_SECRET` (16+ characters) on the matchmaker, or put `{"urls":[...],"secret":"..."}` in `turn.json` in its data folder. No relay is set up by default and no relay password is ever built into the apps. `NETPLAY_ICE_JSON` (a fixed JSON list) still works and replaces the default STUN list.
 
 ## Port check (optional)
 A client may send one line instead of a search: `{"v":1,"op":"probe","port":55435,"token":"<8-64 hex digits>"}`. The server connects back to the address that sent it, on that port (1024-65535 only), reads one line, and answers `{"op":"probe","v":1,"port":55435,"open":true|false,"ip":"<your public address>"}`. `open` is true only if the line it read equals the token, so another program on that port doesn't count. The client listens on the port with a short-lived socket that answers with the token. Counts toward the same per-address rate limit as searches.

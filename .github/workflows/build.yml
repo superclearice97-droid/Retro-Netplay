@@ -51,7 +51,7 @@ jobs:
           P="$PWD/pk/Retro-Netplay/_internal"
           "$P/player/Retro-Netplay-Player" --check || true
           echo "== the ready-made player"
-          NETPLAY_PLAYER="$P/player/Retro-Netplay-Player" GST_PLUGIN_PATH_1_0="$P/player/_internal/gst_plugins:/usr/lib/x86_64-linux-gnu/gstreamer-1.0" \
+          NETPLAY_PLAYER="$P/player/Retro-Netplay-Player" GST_PLUGIN_PATH_1_0="$P/player/_internal/gst_plugins:/usr/lib/x86_64-linux-gnu/gstreamer-1.0" GST_DEBUG="webrtcbin:4,webrtctransportstream:4" \
             /usr/bin/python3 desktop/tests/test_native_guest.py
           echo "== the fallback: the player script with the computer's own Python and GStreamer"
           NETPLAY_PLAYER="/usr/bin/python3 $P/hostpy/stream_guest.py" /usr/bin/python3 desktop/tests/test_native_guest.py

@@ -336,7 +336,10 @@ class Media:
             if answer is None:
                 return self.events.put(("error", "the video connection couldn't be set up (WebRTC answer)"))
             self.wb.emit("set-local-description", answer, Gst.Promise.new())
-            self.events.put(("answer", answer.sdp.as_text()))
+            text = answer.sdp.as_text()
+            log("answer:", " | ".join(l for l in text.splitlines() if l.startswith(("m=", "a=rtpmap", "a=sendrecv",
+                                                                                 "a=recvonly", "a=sendonly", "a=inactive"))))
+            self.events.put(("answer", text))
 
         def remote_set(promise, _el, _u):
             self.wb.emit("create-answer", None, Gst.Promise.new_with_change_func(answered, None, None))

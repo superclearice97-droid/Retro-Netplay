@@ -97,7 +97,8 @@ try:
     out = r.stdout
     stats = [json.loads(l[6:]) for l in out.splitlines() if l.startswith("STATS ")]
     fps = [s.get("fps") or 0 for s in stats]
-    check("the player connected and showed video", any(l.startswith("[player] video:") for l in out.splitlines()), out + r.stderr)
+    check("the player connected and showed video", any(l.startswith("[player] video:") for l in out.splitlines()),
+          out + "\n--- player's stderr (set GST_DEBUG for more):\n" + r.stderr[-6000:])
     check("frames arrive at about 60 fps", stats and max(fps) >= 55 and sorted(fps)[len(fps) // 2] >= 50, fps)
     check("the picture is the host's full size (640x480)", stats and stats[-1]["w"] == 640 and stats[-1]["h"] == 480, stats[-1:])
     check("decode time and round trip are measured", stats and stats[-1]["decodeMs"] is not None and stats[-1]["rttMs"] is not None, stats[-1:])

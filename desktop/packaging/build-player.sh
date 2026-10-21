@@ -15,23 +15,36 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 "${PLAYER_PYTHON:-python3}" -m venv --system-site-packages "$WORK/venv"       # (sees the system's PyGObject / GStreamer)
 PY="$WORK/venv/bin/python"
-"$PY" -m pip install --quiet pyinstaller==6.11.1 pysdl2==0.9.17 pysdl2-dll==2.30.2
+case "$(uname -s)" in MINGW*|MSYS*) WIN=1 ;; *) WIN="" ;; esac
+"$PY" -c "import PyInstaller" 2>/dev/null || "$PY" -m pip install --quiet pyinstaller==6.11.1
+"$PY" -m pip install --quiet pysdl2==0.9.17
+# SDL2 + SDL2_ttf: the pysdl2-dll package on Linux; on Windows (MSYS2) its own SDL2 packages
+[ -n "$WIN" ] || "$PY" -m pip install --quiet pysdl2-dll==2.30.2
 
 cat > "$WORK/player.spec" <<SPEC
 # (written by build-player.sh)
+import glob, os, shutil
+# Linux: VA-API, NVIDIA; Windows: Direct3D 11/12 (the graphics card through Windows' own DXVA); macOS: VideoToolbox
 PLUGINS = ["coreelements", "app", "videoconvert", "videoconvertscale", "webrtc", "nice", "dtls", "srtp", "sctp",
            "rtp", "rtpmanager", "videoparsersbad", "opus", "audioconvert", "audioresample", "autodetect",
-           "pulseaudio", "alsa", "va", "nvcodec", "typefindfunctions"]
+           "pulseaudio", "alsa", "va", "nvcodec", "typefindfunctions", "d3d11", "d3d12", "wasapi", "wasapi2",
+           "directsound", "applemedia", "osxaudio"]
 from PyInstaller.utils.hooks import collect_dynamic_libs, collect_data_files
+if "$WIN":   # MSYS2's SDL2 and SDL2_ttf next to the player (PySDL2 is told to look there)
+    sdl = [(f, ".") for n in ("SDL2.dll", "SDL2_ttf.dll") for f in [shutil.which(n)] if f]
+    sdl_data = []
+else:
+    sdl = [b for b in collect_dynamic_libs("sdl2dll") if "SDL2-2.0" in b[0] or "SDL2_ttf" in b[0]]
+    sdl_data = collect_data_files("sdl2dll")
 a = Analysis([r"$HERE/stream_guest.py"], pathex=[r"$HERE"],
-             binaries=[b for b in collect_dynamic_libs("sdl2dll") if "SDL2-2.0" in b[0] or "SDL2_ttf" in b[0]],
-             datas=[(r"$HERE/fonts", "fonts")] + collect_data_files("sdl2dll"),
-             hiddenimports=["stream_signal", "stream_host", "uinput_pad", "sdl2", "sdl2.sdlttf", "sdl2dll"],
+             binaries=sdl,
+             datas=[(r"$HERE/fonts", "fonts")] + sdl_data,
+             hiddenimports=["stream_signal", "stream_host", "uinput_pad", "sdl2", "sdl2.sdlttf"] + ([] if "$WIN" else ["sdl2dll"]),
              hooksconfig={"gstreamer": {"include_plugins": PLUGINS},
                           "gi": {"icons": [], "themes": [], "languages": ["en_US"]}},
              excludes=["tkinter", "pygame", "cryptography"])
 # use the computer's own VA-API library (it must match the computer's graphics drivers)
-a.binaries = [b for b in a.binaries if not b[0].split("/")[-1].startswith("libva")]
+a.binaries = [b for b in a.binaries if not os.path.basename(b[0]).startswith("libva")]
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="Retro-Netplay-Player", console=True)
 coll = COLLECT(exe, a.binaries, a.datas, name="Retro-Netplay-Player")
@@ -62,9 +75,22 @@ if command -v dpkg >/dev/null 2>&1; then
     [ -f "/usr/share/doc/$pkg/copyright" ] && cp "/usr/share/doc/$pkg/copyright" "$LIC/$pkg.txt"
   done
   sort -o "$LIC/PACKAGES.txt" "$LIC/PACKAGES.txt"
+elif command -v pacman >/dev/null 2>&1; then     # Windows (MSYS2): https://packages.msys2.org/base/<package>
+  : > "$LIC/PACKAGES.txt"
+  find "$OUT/Retro-Netplay-Player/_internal" -iname '*.dll' -type f | while read -r f; do
+    src="$(command -v "$(basename "$f")" 2>/dev/null || true)"
+    [ -n "$src" ] || src="$(ls /ucrt64/lib/gstreamer-1.0/"$(basename "$f")" 2>/dev/null || true)"
+    [ -n "$src" ] || continue
+    pkg="$(pacman -Qqo "$src" 2>/dev/null | head -1)"
+    [ -n "$pkg" ] || continue
+    grep -q "^$pkg " "$LIC/PACKAGES.txt" && continue
+    echo "$pkg $(pacman -Q "$pkg" | cut -d' ' -f2)" >> "$LIC/PACKAGES.txt"
+    [ -d "/ucrt64/share/licenses/${pkg#mingw-w64-ucrt-x86_64-}" ] && cp -r "/ucrt64/share/licenses/${pkg#mingw-w64-ucrt-x86_64-}" "$LIC/$pkg"
+  done
+  sort -o "$LIC/PACKAGES.txt" "$LIC/PACKAGES.txt"
 fi
 for f in "$("$PY" -c 'import sdl2dll, os; print(os.path.dirname(sdl2dll.__file__))' 2>/dev/null)"/../pysdl2_dll-*.dist-info/LICENSE*; do
   [ -f "$f" ] && cp "$f" "$LIC/pysdl2-dll-$(basename "$f")"
 done
-"$OUT/Retro-Netplay-Player/Retro-Netplay-Player" --check || true
+"$OUT/Retro-Netplay-Player/Retro-Netplay-Player" --check || true    # (.exe on Windows)
 du -sh "$OUT/Retro-Netplay-Player"

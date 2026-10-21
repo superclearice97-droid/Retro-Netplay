@@ -12,7 +12,8 @@ SETUP (about 5 minutes)
                     and download mGBA, PCSX ReARMed and/or Flycast)
        Dolphin    - GameCube / Wii
        PCSX2      - PS2        RPCS3 - PS3
-       PS2/PS3 streaming - nothing extra to install on Windows/Mac guests (a web browser is enough).
+       PS2/PS3 streaming - joining a friend's stream opens Retro-Netplay's own player window (the Linux
+                    download carries it). Settings > Streaming check says if anything is missing.
                     To HOST a stream from Linux run  python3 stream_host.py --doctor  and follow it.
                     (Parsec still works: pick it in Settings > Streaming.)
      You need your own game files.
@@ -68,8 +69,9 @@ INVITE LINKS AND POSTING
     this device (in a private file). Anyone who has them can post as you.
   - X, Instagram, Facebook and similar don't allow apps to post for you without a registered
     developer app, so use "Copy link" and paste it there. On Android the share sheet does this.
-  - Friend sent you a link? Click "Join with a link..." and paste it. On Linux, clicking a
-    netplay:// link opens the app directly after you run install-linux.sh.
+  - Friend sent you a link or a code? Clicking a netplay:// link opens the app directly (Linux: the app
+    adds itself to the menu; Windows: the app registers the link type when it starts). Or click
+    "Enter code..." and type the code (like ABCD-2345), or paste the link.
 
 NOTES
   - Emulator netplay (RetroArch) also needs the host's router to allow port 55435.

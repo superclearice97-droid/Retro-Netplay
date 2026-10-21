@@ -33,8 +33,9 @@ Transport: TCP, UTF-8, one JSON object per line (`\n`). One connection = one sea
 ## Invite links
 Matchmaker TCP port N, invite web page on HTTP port N+1 (`python3 server.py [N] [http_port]`, `0` turns the page off).
 
-- Web link (what people share): `http://<host>:<N+1>/join?g=<game>&c=<code>&p=<N>`
-- App link (what the page's button opens): `netplay://join?host=<host>&port=<N>&g=<game>&c=<code>`
+- App link (what the desktop app shares): `netplay://join?host=<host>&port=<N>&g=<game>&c=<code>`
+- Web link (what the Android app shares; its page's button opens the app link): `http://<host>:<N+1>/join?g=<game>&c=<code>&p=<N>`
+- Invite code: the desktop app also shows the code (8 characters from `ABCDEFGHJKLMNPQRSTUVWXYZ23456789`, shown as `ABCD-2345`) so a friend on the same matchmaker can type it. `{"v":1,"op":"invite","code":"ABCD2345"}` as the only line -> `{"op":"invite","v":1,"found":true|false,"game":"<game key>"}` (a search is waiting in that private room right now), then the server closes. It counts toward the per-address search limit. The app then runs the same `invite_only` search a link would.
 - `g` must look like `<system>:<slug>`; `c` is the invite code. Apps MUST ignore any link that doesn't match these shapes, and MUST NOT run anything from it except starting an `invite_only` search on that host.
 - Without `p`, the TCP port is the link's port minus 1.
 - The page validates and escapes everything from the URL before showing it.

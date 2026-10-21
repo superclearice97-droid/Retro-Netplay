@@ -40,18 +40,31 @@ HOW THEY WORK TOGETHER
 BUILT-IN STREAMING (new, the default for PS2 / PS3)
   Our own low-latency streamer, so Linux can host (Parsec can't). The host's computer captures
   the game window and its sound, encodes it (on the graphics card if possible) and sends it over
-  WebRTC. The guest just opens a link in a web browser: nothing to install, and no pairing PIN.
-  The guest's controller (or keyboard, or on-screen buttons on a phone) goes back and appears on
-  the host as a virtual Xbox 360 controller = Player 2. A guest can only press game buttons;
-  they never get your mouse, keyboard or desktop.
+  WebRTC. Joining feels like Parsec or emulator netplay: Friends > Join, your friend taps Allow,
+  and the game appears in Retro-Netplay's own player window with your controller working. No web
+  browser, nothing to copy or click. The guest's controller (or keyboard, or on-screen buttons on a
+  phone) goes back and appears on the host as a virtual Xbox 360 controller = Player 2. A guest can
+  only press game buttons; they never get your mouse, keyboard or desktop.
+  - PLAYER WINDOW: F11 or Alt+Enter = full screen, F2 = the numbers (round trip, fps, decode time,
+    lost packets), Esc twice = leave. Keyboard: Z/X/A/S = A/B/X/Y, Q/W = shoulders, arrows = d-pad,
+    Enter = Start, Shift = Select. If the host lets you choose, press 2, 3 or 4 to be that player.
+    If anything goes wrong it says why on screen, including the host computer's own error message.
+  - The Linux download carries the player with its own GStreamer. It decodes the video on your
+    graphics card (Intel/AMD with VA-API, or NVIDIA). A computer without one uses its own GStreamer
+    instead, if it has a software decoder: Settings > Streaming check says what to install (usually
+    one package, gstreamer1.0-libav). (The download can't include a software H.264 decoder: patents.)
+  - The Android app still plays streams in its built-in web page; its own native player comes later.
   - HOST SETUP (Linux): run  python3 desktop/stream_host.py --doctor  . It lists exactly what is
     missing (GStreamer pieces, a hardware encoder, permission for the virtual controller) with the
-    install commands. Windows/Mac computers can join built-in streams but can't host them yet.
+    install commands. Hosting is Linux only for now. Joining: the Linux download has the player window
+    built in; the Windows and Mac downloads with the player are not done yet (Settings > Streaming
+    check says so on those computers).
   - On Wayland your desktop shows its own "share a window" picker: choose the game window.
   - Every session writes what the guest experienced (round trip, jitter buffer, decode time,
     frames per second, lost packets) AND what the host spent (capture age, convert, encode, pack)
-    to ~/.netplay-matchmaker/stream-stats.csv. Turn host timing off with --no-timing. The guest can show
-    the same numbers on screen: click the little status pill (top right) or press F2.
+    to ~/.netplay-matchmaker/stream-stats.csv (the joining computer writes the same file). Turn host timing
+    off with --no-timing. The guest sees the same numbers on screen: F2 in the player window (on a phone:
+    tap the little status pill, top right).
     Those numbers are how we tune latency.
   - Players only pair if both use the same streaming method (Built-in or Parsec, Settings).
   - Behind a strict router the stream may not connect directly. The fix is a TURN relay next to the
@@ -113,11 +126,14 @@ TESTING WITHOUT A SECOND PERSON OR YOUR HOME PC
 
 INVITE LINKS
   Starting a search makes an invite link on either app. Friends who open it join you in a private
-  match; everyone else can still match you at random (switchable). The desktop app can also post
+  match; everyone else can still match you at random (switchable). On a computer the invite is a
+  netplay:// link that opens Retro-Netplay directly, plus a short code (like ABCD-2345) your friend can
+  type under Enter code... instead (same matchmaker). Clicking a link while the app is open hands it to
+  the open window. The desktop app can also post
   the link to Discord or Telegram for you if you connect them (off until you turn it on). The
   Android app uses the share sheet, so every social app you have works and no login is stored.
-  The matchmaker serves a small web page for these links on port 7778 (TCP port + 1), so allow
-  that port as well as 7777 if you host it.
+  The matchmaker serves a small web page for the Android app's links on port 7778 (TCP port + 1), so
+  allow that port as well as 7777 if you host it.
 
 ANDROID APP: BUILD AND INSTALL
   NO COMPUTER? Let GitHub build it. Put this whole folder in a GitHub repository (the file
@@ -140,16 +156,23 @@ ANDROID APP: BUILD AND INSTALL
 WHAT WAS AND WASN'T TESTED
   Tested: the matchmaker rules, the desktop app's engine, and the Android app's matching logic
   (it was run against the real server with the desktop app as the other player).
-  Tested for the built-in streamer (tests in desktop/tests/): the guest web page in a real
-  Chromium, over real WebRTC against a stand-in host: video arrives at 60 fps, controller/keyboard
-  packets arrive intact, latency numbers are measured, access control (each side's own key), the
-  host's session logic and the virtual-controller event translation.
+  Tested for the built-in streamer (tests in desktop/tests/, run by the automatic build on every change):
+  the native player window (with a pretend screen) against the REAL stream host over the matchmaker's
+  TCP connection: video arrives at 60 fps, controller packets from a pretend SDL controller arrive intact,
+  slot choice, wrong keys are refused, the host's real error is shown, old and new apps never pair, and
+  the stream also works through a real TURN relay (coturn) with the matchmaker's short-lived password.
+  The same test runs against the PACKAGED player from the Linux download (both ways it can start).
+  Also: the Android app's web page in a real Chromium against the real host, access control, the
+  host's session logic and the virtual-controller event translation, and the app's Join > Allow flow
+  opening the player window by itself.
   Tested for queue and friends: friends-first matching, priority, friends-only, mutual adds, the
   online list and calls (server, Android core and desktop app against the real matchmaker), the
   desktop Play/hotkey flow with a pretend RetroArch, and the RetroArch commands against a
   pretend RetroArch.
-  NOT tested: the controller shortcut and notifications on a real phone, a real RetroArch
-  answering network commands, the real host (screen capture, GPU encoding, GStreamer, the virtual controller on a
-  real /dev/uinput, the Wayland picker), so actual latency is unknown until you run it. Also not
-  tested: the Android screens and the RetroArch launch (never built or run on a phone), the
-  desktop windows on screen, and any real emulator session.
+  NOT tested: anything on real hardware. The player window on a real screen with a real controller,
+  decoding on a real graphics card (VA-API / NVIDIA), sound, full screen on a real desktop; netplay://
+  links opening the app on Windows and Mac; the controller shortcut and notifications on a real phone,
+  a real RetroArch answering network commands, the real host's screen capture, GPU encoding and the
+  virtual controller on a real /dev/uinput, the Wayland picker. So actual latency is unknown until you
+  run it. Also not tested: the Android screens and the RetroArch launch (never built or run on a phone),
+  and any real emulator session.

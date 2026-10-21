@@ -5,7 +5,7 @@ host, the stats file is written, a friend may pick their player slot, a wrong ke
 is shown, and old and new apps aren't paired. The host's virtual controller is a recorder (tests/recording_host.py),
 so this runs without /dev/uinput. Skips without GStreamer webrtcbin + x264enc + a decoder, or PySDL2.
 NETPLAY_PLAYER="<command>" runs another player program (the packaged one) instead of stream_guest.py."""
-import json, os, socket, subprocess, sys, tempfile, time
+import json, os, site, socket, subprocess, sys, tempfile, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 D = os.path.join(HERE, "..")
@@ -79,7 +79,7 @@ def guest(key, *extra, timeout=60):
     stats = os.path.join(tempfile.mkdtemp(), "stream-stats.csv")
     p = subprocess.Popen((PLAYER or [sys.executable, "-u", os.path.join(D, "stream_guest.py")]) + ["--mm", MM, f"--key={key}", "--headless",
                           "--stats-file", stats, *extra], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                         env={**os.environ, "HOME": tempfile.mkdtemp()})
+                         env={**os.environ, "HOME": tempfile.mkdtemp(), "PYTHONUSERBASE": site.getuserbase()})
     try:
         out, err = p.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:

@@ -16,18 +16,23 @@ This project contains no games, BIOS files or console firmware. You must own the
 | pygame and SDL2 | controller input; **included** in the Linux download (installed by `start.sh` when run from source) | pygame LGPL 2.1 (source: https://github.com/pygame/pygame), SDL2 zlib licence |
 | PyInstaller bootloader | packs the Linux download | GPL 2.0 with an exception that allows packing any program |
 | AppImage runtime (appimagetool) | makes the single-file Linux download | MIT |
-| GStreamer and plugins, PyGObject | used from the host's own system for streaming | LGPL (some plugin sets, such as x264 in plugins-ugly, carry other licenses: check your distro's packages) |
+| GStreamer and plugins, PyGObject | hosting a stream: used from the host's own system. Joining: **included** in the Linux download inside the player window (`_internal/player`), only the plugins it needs | LGPL 2.1+ (GStreamer, GLib, PyGObject); some plugin sets carry other licenses, e.g. x264 in plugins-ugly (GPL), which the download does NOT include |
+| libnice, libsrtp2, usrsctp (in GStreamer's sctp plugin), OpenSSL, GnuTLS, Opus and the other libraries GStreamer needs | **included** in the player window (WebRTC connection, encryption, sound) | LGPL 2.1 / MPL 1.1 (libnice), BSD (libsrtp2, usrsctp, Opus), Apache 2.0 (OpenSSL 3), LGPL 2.1+ (GnuTLS); every bundled library's own licence text is in `_internal/player/licenses/` |
+| PySDL2, SDL2, SDL2_ttf (with FreeType and HarfBuzz) | the player window: picture, keyboard and controllers; **included** (pysdl2-dll binaries) | PySDL2 public domain / zlib; SDL2 and SDL2_ttf zlib; FreeType FTL; HarfBuzz MIT |
 | Android SDK, Gradle, Android Gradle Plugin | build the Android app (GitHub Actions or your machine) | Apache 2.0 (SDK components have their own terms) |
-| Chromium, Playwright | used only by the automated tests in `desktop/tests/` | BSD-style / Apache 2.0 |
+| Chromium, Playwright, coturn | used only by the automated tests in `desktop/tests/` | BSD-style / Apache 2.0 / BSD |
+| coturn (TURN relay) | optional, run by whoever runs a matchmaker (not included) | BSD 3-clause |
 | RetroArch and libretro cores | started by the app | GPLv3 and per-core licenses |
 | Dolphin, PCSX2, RPCS3 | started by the app | GPLv2+ / GPLv3 |
 | Google STUN server | optional default for connecting through routers (see PRIVACY.md) | a public service, no software included |
 
 The Android app and desktop app only launch the emulators above as separate programs; no emulator code is part of this package.
 
-In the Linux download, pygame/SDL2 and the other libraries are separate shared library files inside the app's `_internal` folder, so you can replace them with your own builds as the LGPL allows. The source code of Retro-Netplay itself, for every download, is this repository at the commit named in the release notes.
+In the Linux download, pygame/SDL2 and the other libraries are separate shared library files inside the app's `_internal` folder, so you can replace them with your own builds as the LGPL allows. The same goes for the player window's GStreamer and its libraries in `_internal/player/_internal`. Those are Ubuntu 22.04's own builds, unchanged: `_internal/player/licenses/PACKAGES.txt` names each package and its exact version, and its source code is available with `apt source <package>=<version>` or from https://launchpad.net/ubuntu/+source/<package>. The source code of Retro-Netplay itself, for every download, is this repository at the commit named in the release notes.
+
+**Video codecs.** The download contains no software H.264 video encoder or decoder (no x264, gst-libav/FFmpeg or OpenH264), because H.264 is covered by patent licensing. The player decodes the stream with your graphics card's own decoder (VA-API on Intel/AMD, NVIDIA's decoder), which comes with your graphics driver, or with the H.264 decoder your system's own GStreamer provides if you installed one (for example gstreamer1.0-libav). The host uses the encoder installed on its own system. Opus (sound) is royalty-free.
 
 This notice is a good-faith summary, not legal advice. Have a lawyer review it before commercial distribution.
 
 ## Look and fonts
-The icons are our own drawings (design/make_icons.py); no third-party icon files are used. The Android app bundles DejaVu Sans Mono, which is free to use and redistribute under the Bitstream Vera / DejaVu licence (assets/DejaVu-LICENSE.txt). The desktop and browser pages use whatever monospace font your system already has.
+The icons are our own drawings (design/make_icons.py); no third-party icon files are used. The Android app and the desktop player window bundle DejaVu Sans Mono, which is free to use and redistribute under the Bitstream Vera / DejaVu licence (android/app/src/main/assets/DejaVu-LICENSE.txt, desktop/fonts/DejaVu-LICENSE.txt). The rest of the desktop app and the browser pages use whatever monospace font your system already has.

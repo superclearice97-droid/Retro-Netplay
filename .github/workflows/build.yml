@@ -89,6 +89,52 @@ jobs:
       - name: Real stream to the Android app's web page (deprecated path), end to end
         run: /usr/bin/python3 desktop/tests/test_real_host.py
 
+  windows:
+    # the Windows download: the app plus the player window with its own GStreamer (from MSYS2) and SDL.
+    # Not yet part of the release (it hasn't been tried on a real Windows PC): see README.txt.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: zip
+          pacboy: >-
+            python:p python-gobject:p python-pip:p pyinstaller:p gstreamer:p gst-plugins-base:p gst-plugins-good:p
+            gst-plugins-bad:p libnice:p SDL2:p SDL2_ttf:p
+      - name: Build the player window (own GStreamer + SDL, no software H.264 decoder)
+        shell: msys2 {0}
+        run: PLAYER_PYTHON=python3 sh desktop/packaging/build-player.sh player-out
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build the app and put the player inside
+        shell: pwsh
+        run: |
+          python -m pip install --quiet pyinstaller==6.11.1 pygame==2.6.1
+          New-Item -ItemType Directory -Force notices | Out-Null
+          Copy-Item LICENSE, NOTICE.md, PRIVACY.md, TERMS.md notices/
+          python -m PyInstaller --noconfirm --clean --windowed --name Retro-Netplay `
+            --add-data "desktop/web;web" --add-data "desktop/icon-256.png;." --add-data "notices;notices" `
+            --hidden-import server --hidden-import sessions --hidden-import stream_signal --hidden-import wizard `
+            --hidden-import social --hidden-import pygame `
+            --exclude-module stream_host --exclude-module stream_guest --exclude-module portal_capture --exclude-module gi `
+            desktop/app.py
+          Copy-Item -Recurse player-out/Retro-Netplay-Player dist/Retro-Netplay/_internal/player
+          Copy-Item LICENSE dist/Retro-Netplay/LICENSE.txt
+          Compress-Archive -Path dist/Retro-Netplay -DestinationPath Retro-Netplay-windows-x86_64.zip
+      - name: The player starts and finds its own GStreamer
+        shell: pwsh
+        run: |
+          $out = & dist/Retro-Netplay/_internal/player/Retro-Netplay-Player.exe --check 2>&1 | Out-String
+          Write-Output $out
+          if ($out -notmatch "\[OK\] webrtcbin" -or $out -notmatch "\[OK\] window and controllers") { exit 1 }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: Retro-Netplay-windows-x86_64.zip
+
   publish:
     if: github.ref == 'refs/heads/main'
     needs: [android, linux, stream]

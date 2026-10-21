@@ -269,13 +269,13 @@ def checklist(cfg, g, ncontrollers=None):
         ok, note = own_host_ready()
         # Not being able to host is fine: you can still join someone else's stream.
         items.append((True if ok else None, note))
+    else:
+        items.append((stream_on, "Parsec streaming on" if stream_on else
+                      f"{s['label']} has no netplay, so it needs your Parsec ID in Settings."))
     if own and "v" in _guest_cache and not _guest_cache["v"][0]:      # (checked in the background at start)
         first = next((l[4:].strip() for l in _guest_cache["v"][1].splitlines() if l.startswith("[X")), "")
         items.append((None, "Joining a friend's stream won't work yet: " + (first or _guest_cache["v"][1][:160]).rstrip(".")
                       + ". Settings > Streaming check shows how to fix it."))
-    else:
-        items.append((stream_on, "Parsec streaming on" if stream_on else
-                      f"{s['label']} has no netplay, so it needs your Parsec ID in Settings."))
     if ncontrollers is not None:
         if ncontrollers >= 2:
             items.append((True, f"{ncontrollers} controllers detected (Player 1 and Player 2 ready)"))

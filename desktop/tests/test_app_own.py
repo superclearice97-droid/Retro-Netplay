@@ -150,6 +150,10 @@ c, _, _ = mk(); g = c["games"][0]
 check("built-in streaming needs no Parsec id", app.readiness(c, g) == (["stream"], ""))
 c["stream_backend"] = "parsec"
 check("Parsec backend still needs the id", app.readiness(c, g)[0] == [] and "Parsec" in app.readiness(c, g)[1])
+app._guest_cache["v"] = (True, "[OK] everything")
+c["stream_backend"] = "own"
+check("with the built-in streamer, the setup check never talks about Parsec", not any("Parsec" in t for _, t in app.checklist(c, g)),
+      app.checklist(c, g))
 app._guest_cache["v"] = (False, "[OK] webrtcbin\n[X ] no H.264 video decoder. Install gstreamer1.0-libav (gst-libav).")
 c["stream_backend"] = "own"
 check("the setup check says when joining a stream won't work yet, and why",

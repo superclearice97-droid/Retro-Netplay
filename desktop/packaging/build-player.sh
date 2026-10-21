@@ -16,6 +16,8 @@ trap 'rm -rf "$WORK"' EXIT
 "${PLAYER_PYTHON:-python3}" -m venv --system-site-packages "$WORK/venv"       # (sees the system's PyGObject / GStreamer)
 PY="$WORK/venv/bin/python"
 case "$(uname -s)" in MINGW*|MSYS*) WIN=1 ;; *) WIN="" ;; esac
+SRC="$HERE"                                  # (as the build's Python sees it: C:/... on Windows)
+[ -z "$WIN" ] || SRC="$(cygpath -m "$HERE")"
 "$PY" -c "import PyInstaller" 2>/dev/null || "$PY" -m pip install --quiet pyinstaller==6.11.1
 "$PY" -m pip install --quiet pysdl2==0.9.17
 # SDL2 + SDL2_ttf: the pysdl2-dll package on Linux; on Windows (MSYS2) its own SDL2 packages
@@ -31,14 +33,16 @@ PLUGINS = ["coreelements", "app", "videoconvert", "videoconvertscale", "webrtc",
            "directsound", "applemedia", "osxaudio"]
 from PyInstaller.utils.hooks import collect_dynamic_libs, collect_data_files
 if "$WIN":   # MSYS2's SDL2 and SDL2_ttf next to the player (PySDL2 is told to look there)
-    sdl = [(f, ".") for n in ("SDL2.dll", "SDL2_ttf.dll") for f in [shutil.which(n)] if f]
+    import sys
+    sdl = [(f, ".") for n in ("SDL2.dll", "SDL2_ttf.dll") for f in [os.path.join(sys.base_prefix, "bin", n)]
+           if os.path.exists(f)]
     sdl_data = []
 else:
     sdl = [b for b in collect_dynamic_libs("sdl2dll") if "SDL2-2.0" in b[0] or "SDL2_ttf" in b[0]]
     sdl_data = collect_data_files("sdl2dll")
-a = Analysis([r"$HERE/stream_guest.py"], pathex=[r"$HERE"],
+a = Analysis([r"$SRC/stream_guest.py"], pathex=[r"$SRC"],
              binaries=sdl,
-             datas=[(r"$HERE/fonts", "fonts")] + sdl_data,
+             datas=[(r"$SRC/fonts", "fonts")] + sdl_data,
              hiddenimports=["stream_signal", "stream_host", "uinput_pad", "sdl2", "sdl2.sdlttf"] + ([] if "$WIN" else ["sdl2dll"]),
              hooksconfig={"gstreamer": {"include_plugins": PLUGINS},
                           "gi": {"icons": [], "themes": [], "languages": ["en_US"]}},

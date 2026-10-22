@@ -95,7 +95,7 @@ DEFAULT_CFG = {
     "hotkey": [6, 7], "hold": 3.0, "hold_v2": True,
     "slots": controls.default_slots(), "controller_check_done": False,
     "setup_done": False, "game_folders": [], "folder_answers": {}, "auto_ports": True, "port_status": {},
-    "secret": "", "my_name": "", "friends": [], "auto_queue": True,
+    "secret": "", "my_name": "", "friends": [], "auto_queue": True, "sounds": True,
 }
 invites.fill_defaults(DEFAULT_CFG)
 
@@ -1244,7 +1244,7 @@ def run_gui():
     games_lb.pack(side="left", fill="x", expand=True)
     games_sb.pack(side="left", fill="y")
 
-    go_btn = ink.InkButton(tk, frame, "Play", "play", lambda: engine.play_game(), fam)
+    go_btn = ink.InkButton(tk, frame, "Play", "play", lambda: card_play(), fam)
     go_btn.pack(fill="x")
     status = ttk.Label(frame, text="Ready.", wraplength=530, justify="left")
     status.pack(anchor="w", pady=(10, 4))
@@ -1306,7 +1306,7 @@ def run_gui():
                 r.pack(fill="x", anchor="w", pady=1)
                 tk.Label(r, text=mark, bg=ink.spectrum(tone), fg=ink.INK, width=4, font=(fam, 9, "bold")).pack(side="left", padx=(0, 8))
                 ttk.Label(r, text=text, wraplength=470, justify="left").pack(side="left")
-            hint.config(text="Double-click a game (or select it and press Play) to start it and join the queue.")
+            hint.config(text="Double-click a game to see its title card. Play starts it and joins the queue.")
         update_squares(g)
         combo_name = "Start + Select" if sorted(cfg["hotkey"]) == [6, 7] else "buttons " + " + ".join(str(b) for b in cfg["hotkey"])
         hot_lbl.config(text=f"In a game: hold {combo_name} for {cfg['hold']:g} s to join or leave the queue")
@@ -1336,15 +1336,59 @@ def run_gui():
         sel = games_lb.curselection()
         if sel and sel[0] < len(cfg["games"]) and sel[0] != cfg["last_game"]:
             cfg["last_game"] = sel[0]
+            sound("move")
             refresh()
     games_lb.bind("<<ListboxSelect>>", on_pick)
 
-    def play_selected(_e=None):
+    # ---- the title card of the selected game (art and details from Skraper / ES-DE / RetroArch files)
+    import gameinfo
+    import titlecard
+    card = {"c": None, "last": "idle"}
+
+    def sound(name):
+        if not cfg.get("sounds", True):
+            return
+        try:
+            import pygame
+            if not pygame.mixer.get_init():
+                pygame.mixer.init()
+            snd = card.setdefault("snd", {})
+            if name not in snd:
+                snd[name] = pygame.mixer.Sound(str(HERE / "sounds" / f"{name}.wav"))
+            snd[name].play()
+        except Exception:      # no sound device, no pygame: stay quiet
+            pass
+
+    def open_card(_e=None):
         on_pick()
-        if cfg["games"] and engine.state == "idle":
+        g = current()
+        if g is None:
+            return
+        old = card["c"]
+        if old and old.alive and old.game is g:
+            old.win.lift()
+            old.win.focus_force()
+            return
+        if old and old.alive:
+            old.on_close = None
+            old.close()
+        ra = cfg["paths"].get("retroarch", "")
+        info = gameinfo.Finder([str(Path(ra).parent)] if ra else []).find(g)     # looked up fresh: Skraper may have run
+        def play():
             engine.play_game()
-    games_lb.bind("<Double-Button-1>", play_selected)
-    games_lb.bind("<Return>", play_selected)
+        c = titlecard.Card(root, tk, fam, g, info, SYSTEMS[g["system"]]["label"], play, sound,
+                           on_close=lambda: card.__setitem__("c", None))
+        c.set_state(engine.state, "")
+        card["c"] = c
+        return "break"
+
+    def card_play():
+        if engine.state == "idle":
+            open_card()
+            sound("play")
+        engine.play_game()
+    games_lb.bind("<Double-Button-1>", open_card)
+    games_lb.bind("<Return>", open_card)
 
     def ask_system(exts_name, options):
         win = tk.Toplevel(root)
@@ -1436,6 +1480,8 @@ def run_gui():
         ttk.Checkbutton(body, text="Use the matchmaker's relay server when a direct stream connection fails\n"
                                     "(only if whoever runs the matchmaker set one up; the stream stays encrypted)",
                         variable=relay_var).pack(anchor="w", pady=(0, 4))
+        sounds_var = tk.BooleanVar(value=cfg.get("sounds", True))
+        ttk.Checkbutton(body, text="Interface sounds (game list, title card, match found)", variable=sounds_var).pack(anchor="w", pady=(0, 4))
         field("Your Parsec peer ID", "parsec_peer_id", cfg)
         ttk.Label(body, text="(Parsec ID is only used when Streaming is set to Parsec)", foreground="#666").pack(anchor="w")
         field("Matchmaker address", "server_host", cfg)
@@ -1476,6 +1522,7 @@ def run_gui():
             cfg["auto_mm"] = lan.is_loopback(h) or lan.is_private(h)    # an internet address typed on purpose stays put
             cfg["stream_backend"] = "own" if be_var.get().startswith("Built-in") else "parsec"
             cfg["use_relay"] = relay_var.get()
+            cfg["sounds"] = sounds_var.get()
             try:
                 cfg["server_port"] = int(cfg["server_port"])
             except ValueError:
@@ -2351,6 +2398,11 @@ def run_gui():
                     continue
                 if state in colors:
                     go_btn.set(labels[state], colors[state], loop=(state == "searching"))
+                    if card["c"] and card["c"].alive:
+                        card["c"].set_state(state, text)
+                    if card["last"] == "searching" and state == "session":
+                        sound("found")
+                    card["last"] = state
                     presence_status(state)
                     sq_state["searching"] = state == "searching"
                     if not sq_state["searching"]:
@@ -2430,8 +2482,8 @@ def run_gui():
     show = os.environ.get("NETPLAY_SHOW", "")
     if show == "streamcheck":     # Streaming check opened from Settings (the smoke test clicks its Close button)
         root.after(1500, lambda: (open_settings(), root.after(800, show_stream_check)))
-    if show in ("friends", "settings", "controllers", "address", "card"):
-        root.after(1500, {"friends": lambda: open_friends(), "settings": lambda: open_settings(),
+    if show in ("friends", "settings", "controllers", "address", "card", "titlecard"):
+        root.after(1500, {"friends": lambda: open_friends(), "settings": lambda: open_settings(), "titlecard": lambda: open_card(),
                           "controllers": lambda: open_controllers(), "address": lambda: open_address(),
                           "card": lambda: toasts.show("Join request", "Odin wants to join you in F-Zero GX.",
                                                       [("Allow", lambda: None, True), ("Deny", lambda: None, False)])}[show])

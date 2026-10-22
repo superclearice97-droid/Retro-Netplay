@@ -14,7 +14,7 @@ shot() {   # name, seconds, extra env...
     pid=\$!
     sleep $wait
     import -window root \"$OUT/$name.png\"
-    xdotool search --name 'Retro-Netplay' >> \"$OUT/$name.windows\" 2>/dev/null
+    xdotool search --name '.' getwindowname %@ >> \"$OUT/$name.windows\" 2>/dev/null
     kill \$pid 2>/dev/null; sleep 1; kill -9 \$pid 2>/dev/null; true"
   if grep -q "Traceback" "$OUT/$name.log"; then echo "CRASH in $name:"; cat "$OUT/$name.log"; fail=1; fi
   [ -s "$OUT/$name.png" ] || { echo "no screenshot for $name"; fail=1; }
@@ -45,6 +45,29 @@ shot settings 12 HOME="$H2" NETPLAY_SHOW=settings
 shot controllers 12 HOME="$H2" NETPLAY_SHOW=controllers
 shot address 12 HOME="$H2" NETPLAY_SHOW=address
 shot card 12 HOME="$H2" NETPLAY_SHOW=card
+
+# 2a) a game's title card, with art and details as Skraper writes them (pictures made here: no real game art)
+H3="$(mktemp -d)"
+G="$H3/Games/GBA"
+mkdir -p "$H3/.netplay-matchmaker" "$G/media/box2dfront" "$G/media/images" "$G/media/wheel"
+: > "$G/Sonic Battle (USA).gba"
+convert -size 300x420 plasma:royalblue-gold -blur 0x2 "$G/media/box2dfront/Sonic Battle (USA).png"
+convert -size 240x160 plasma:skyblue-forestgreen -scale 25% -scale 400% "$G/media/images/Sonic Battle (USA).png"
+cat > "$G/gamelist.xml" <<XML
+<?xml version="1.0"?>
+<gameList><game><path>./Sonic Battle (USA).gba</path><name>Sonic Battle</name>
+<desc>A test description: fighters battle in arenas &amp; collect skills. Written for this test, not from the game.</desc>
+<image>./media/images/Sonic Battle (USA).png</image><thumbnail>./media/box2dfront/Sonic Battle (USA).png</thumbnail>
+<rating>0.7</rating><releasedate>20031204T000000</releasedate><developer>Test Developer</developer>
+<genre>Fighting</genre><players>1-4</players></game></gameList>
+XML
+cat > "$H3/.netplay-matchmaker/config.json" <<CFG
+{"setup_done": true, "menu_entry": false, "server_host": "127.0.0.1", "run_server": true, "server_port": 17779,
+ "games": [{"name": "Sonic Battle", "system": "gba", "rom": "$G/Sonic Battle (USA).gba"}], "last_game": 0,
+ "my_name": "Sam", "secret": "0123456789abcdef0123456789abcdef", "sounds": false}
+CFG
+shot titlecard 14 HOME="$H3" NETPLAY_SHOW=titlecard
+grep -qx "Sonic Battle" "$OUT/titlecard.windows" && echo "title card: ok" || { echo "title card: no window"; fail=1; }
 
 # 2b) a window opened from Settings must take clicks (Settings holds all clicks while it's open):
 #     open Streaming check from Settings, click its Close button with the real mouse, it must close.

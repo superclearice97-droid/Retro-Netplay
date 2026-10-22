@@ -8,7 +8,7 @@ OUT="$ROOT/dist"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 cd "$HERE"
-python3 -m pip install --quiet pyinstaller==6.11.1 pygame==2.6.1
+python3 -m pip install --quiet pyinstaller==6.11.1 pygame==2.6.1 pillow==11.0.0
 # the player window that shows a friend's stream: ready-made, with its own GStreamer and SDL (built with the system's
 # Python, which has GStreamer), plus its script and SDL for the computer's own Python as the fallback
 PLAYER_PYTHON="${PLAYER_PYTHON:-/usr/bin/python3}" sh "$HERE/packaging/build-player.sh" "$WORK/player"
@@ -21,6 +21,7 @@ cp "$ROOT/LICENSE" "$ROOT/NOTICE.md" "$ROOT/PRIVACY.md" "$ROOT/TERMS.md" "$WORK/
 python3 -m PyInstaller --noconfirm --clean --windowed --name Retro-Netplay \
   --distpath "$WORK/dist" --workpath "$WORK/build" --specpath "$WORK" \
   --add-data "$HERE/icon-256.png:." \
+  --add-data "$HERE/sounds:sounds" \
   --add-data "$HERE/stream_host.py:hostpy" \
   --add-data "$HERE/uinput_pad.py:hostpy" \
   --add-data "$HERE/portal_capture.py:hostpy" \
@@ -32,7 +33,7 @@ python3 -m PyInstaller --noconfirm --clean --windowed --name Retro-Netplay \
   --add-data "$WORK/sdlpy/sdl2dll:hostpy/sdl2dll" \
   --add-data "$WORK/notices:notices" \
   --hidden-import server --hidden-import sessions --hidden-import stream_signal --hidden-import wizard --hidden-import social \
-  --hidden-import pygame \
+  --hidden-import pygame --hidden-import titlecard --hidden-import gameinfo --hidden-import PIL.ImageTk \
   --exclude-module stream_host --exclude-module stream_guest --exclude-module portal_capture --exclude-module gi \
   "$HERE/app.py"
 

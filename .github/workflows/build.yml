@@ -77,13 +77,13 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq python3-gi gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 gir1.2-gst-plugins-bad-1.0 \
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly \
-            gstreamer1.0-nice gstreamer1.0-libav coturn python3-tk >/dev/null
+            gstreamer1.0-nice gstreamer1.0-libav coturn python3-tk python3-pil >/dev/null
           /usr/bin/python3 -m pip install --break-system-packages -q pysdl2==0.9.17 pysdl2-dll==2.30.2
           sudo modprobe uinput && sudo chmod 666 /dev/uinput
       - name: All the other tests (matchmaker, friends, queue, stream setup, the player's logic, the Android core)
         run: |
           for t in test_tcp_signal test_stream_guest test_app_own test_android_stream test_two_devices test_desktop_queue \
-                   test_friends test_friends_java test_library test_portal test_portmap test_portmap_java test_autofind \
+                   test_friends test_friends_java test_library test_gameinfo test_titlecard test_portal test_portmap test_portmap_java test_autofind \
                    test_stream_host test_tls test_android_player_core; do
             echo "== $t"; /usr/bin/python3 desktop/tests/$t.py || exit 1
           done
@@ -151,13 +151,13 @@ jobs:
       - name: Build the app and put the player inside
         shell: pwsh
         run: |
-          python -m pip install --quiet pyinstaller==6.11.1 pygame==2.6.1
+          python -m pip install --quiet pyinstaller==6.11.1 pygame==2.6.1 pillow==11.0.0
           New-Item -ItemType Directory -Force notices | Out-Null
           Copy-Item LICENSE, NOTICE.md, PRIVACY.md, TERMS.md notices/
           python -m PyInstaller --noconfirm --clean --windowed --name Retro-Netplay `
-            --add-data "desktop/icon-256.png;." --add-data "notices;notices" `
+            --add-data "desktop/icon-256.png;." --add-data "desktop/sounds;sounds" --add-data "notices;notices" `
             --hidden-import server --hidden-import sessions --hidden-import stream_signal --hidden-import wizard `
-            --hidden-import social --hidden-import pygame `
+            --hidden-import social --hidden-import pygame --hidden-import titlecard --hidden-import gameinfo --hidden-import PIL.ImageTk `
             --exclude-module stream_host --exclude-module stream_guest --exclude-module portal_capture --exclude-module gi `
             desktop/app.py
           Copy-Item -Recurse player-out/Retro-Netplay-Player dist/Retro-Netplay/_internal/player

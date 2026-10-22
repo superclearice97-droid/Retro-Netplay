@@ -14,14 +14,14 @@ APY="${APP_PYTHON:-python3}"
 cd "$HERE"
 PLAYER_PYTHON="${PLAYER_PYTHON:-$(brew --prefix)/bin/python3}" sh "$HERE/packaging/build-player.sh" "$WORK/player"
 
-"$APY" -m pip install --quiet pyinstaller==6.11.1 pygame==2.6.1
+"$APY" -m pip install --quiet pyinstaller==6.11.1 pygame==2.6.1 pillow==11.0.0
 mkdir -p "$WORK/notices"
 cp "$ROOT/LICENSE" "$ROOT/NOTICE.md" "$ROOT/PRIVACY.md" "$ROOT/TERMS.md" "$WORK/notices/"
 "$APY" -m PyInstaller --noconfirm --clean --windowed --name Retro-Netplay --osx-bundle-identifier net.netplay.retro-netplay \
   --distpath "$WORK/dist" --workpath "$WORK/build" --specpath "$WORK" \
-  --add-data "$HERE/icon-256.png:." --add-data "$WORK/notices:notices" \
+  --add-data "$HERE/icon-256.png:." --add-data "$HERE/sounds:sounds" --add-data "$WORK/notices:notices" \
   --hidden-import server --hidden-import sessions --hidden-import stream_signal --hidden-import wizard --hidden-import social \
-  --hidden-import pygame \
+  --hidden-import pygame --hidden-import titlecard --hidden-import gameinfo --hidden-import PIL.ImageTk \
   --exclude-module stream_host --exclude-module stream_guest --exclude-module portal_capture --exclude-module gi \
   "$HERE/app.py"
 

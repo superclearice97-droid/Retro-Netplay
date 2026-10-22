@@ -600,6 +600,9 @@ def sdl_problem():
         import sdl2  # noqa: F401
         import sdl2.sdlttf  # noqa: F401
     except Exception as e:
+        if os.environ.get("NETPLAY_DEBUG"):
+            import traceback
+            traceback.print_exc()
         return f"PySDL2 is missing ({str(e)[:80]}). Install: python3 -m pip install pysdl2 pysdl2-dll"
     return ""
 

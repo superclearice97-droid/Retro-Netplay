@@ -44,8 +44,9 @@ jobs:
         with:
           python-version: "3.12"
       - name: Tools (and GStreamer + Python GObject for the player window, which carries its own copy)
+        timeout-minutes: 20      # (a stalled package install fails here, with its log, instead of hanging)
         run: |
-          sh .github/apt-install.sh xvfb imagemagick xdotool zip libfuse2 python3-gi python3-venv \
+          bash .github/apt-install.sh xvfb imagemagick xdotool zip libfuse2 python3-gi python3-venv \
             gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 gir1.2-gst-plugins-bad-1.0 gstreamer1.0-plugins-base \
             gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-nice gstreamer1.0-pulseaudio gstreamer1.0-alsa
       - name: Build zip and AppImage
@@ -53,10 +54,11 @@ jobs:
       - name: Open the app on a virtual screen and take screenshots
         run: sh desktop/packaging/smoke-test.sh dist/Retro-Netplay-x86_64.AppImage shots
       - name: The packaged player, end to end against the real host over TCP (also through a relay)
+        timeout-minutes: 20      # (a stalled package install fails here, with its log, instead of hanging)
         # CI has no graphics card, so only for this test the ready-made player borrows the system's software decoder
         # (the download itself carries none: see build-player.sh)
         run: |
-          sh .github/apt-install.sh gstreamer1.0-plugins-ugly gstreamer1.0-libav coturn
+          bash .github/apt-install.sh gstreamer1.0-plugins-ugly gstreamer1.0-libav coturn
           mkdir -p pk && (cd pk && unzip -q ../dist/Retro-Netplay-linux-x86_64.zip)
           P="$PWD/pk/Retro-Netplay/_internal"
           "$P/player/Retro-Netplay-Player" --check || true
@@ -83,8 +85,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: GStreamer, Python GObject, SDL
+        timeout-minutes: 20      # (a stalled package install fails here, with its log, instead of hanging)
         run: |
-          sh .github/apt-install.sh python3-gi gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 gir1.2-gst-plugins-bad-1.0 \
+          bash .github/apt-install.sh python3-gi gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 gir1.2-gst-plugins-bad-1.0 \
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly \
             gstreamer1.0-nice gstreamer1.0-libav coturn python3-tk python3-pil
           /usr/bin/python3 -m pip install --break-system-packages -q pysdl2==0.9.17 pysdl2-dll==2.30.2
@@ -113,8 +116,9 @@ jobs:
         with:
           gradle-version: 8.7
       - name: GStreamer for the stream host
+        timeout-minutes: 20      # (a stalled package install fails here, with its log, instead of hanging)
         run: |
-          sh .github/apt-install.sh python3-gi gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 gir1.2-gst-plugins-bad-1.0 \
+          bash .github/apt-install.sh python3-gi gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 gir1.2-gst-plugins-bad-1.0 \
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly \
             gstreamer1.0-nice gstreamer1.0-tools
       - name: Build the app and its player test

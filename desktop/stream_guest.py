@@ -572,6 +572,9 @@ def available_elements():
         Gst.init(None)
     except Exception as e:
         log(f"GStreamer can't be used here: {e}")
+        if os.environ.get("NETPLAY_DEBUG"):
+            import traceback
+            traceback.print_exc()
         return None
     names = {n for n, _ in NEEDED} | set(DECODERS)
     return {n for n in names if Gst.ElementFactory.find(n)}

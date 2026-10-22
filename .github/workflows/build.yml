@@ -216,7 +216,7 @@ jobs:
           A=pk/Retro-Netplay.app
           codesign --verify --deep --strict "$A"
           plutil -extract CFBundleURLTypes.0.CFBundleURLSchemes.0 raw "$A/Contents/Info.plist" | grep -qx netplay
-          out="$(NETPLAY_TRACE_AFTER=60 GST_DEBUG=2 "$A/Contents/Resources/player/Retro-Netplay-Player" --check 2>&1 || true)"; echo "$out"
+          out="$(NETPLAY_DEBUG=1 NETPLAY_TRACE_AFTER=60 GST_DEBUG=2 "$A/Contents/Resources/player/Retro-Netplay-Player" --check 2>&1 || true)"; echo "$out"
           for want in "\[OK\] webrtcbin" "\[OK\] window and controllers" "video decoder: vtdec"; do
             echo "$out" | grep -q "$want" || { echo "missing: $want"; exit 1; }
           done

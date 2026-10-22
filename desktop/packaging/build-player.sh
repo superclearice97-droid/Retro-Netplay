@@ -76,6 +76,7 @@ if find "$OUT/Retro-Netplay-Player" -name '*gstlibav*' -o -name '*openh264*' -o 
 fi
 # the licence of every bundled library, and which distribution package (and version) it came from, so anyone can get
 # the exact source code (LGPL): apt source <package>=<version>, or https://launchpad.net/ubuntu/+source/<package>
+echo "== the bundled libraries' licences"
 LIC="$OUT/Retro-Netplay-Player/licenses"
 mkdir -p "$LIC"
 cp "$HERE/fonts/DejaVu-LICENSE.txt" "$LIC/"
@@ -122,5 +123,9 @@ fi
 for f in "$("$PY" -c 'import sdl2dll, os; print(os.path.dirname(sdl2dll.__file__))' 2>/dev/null)"/../pysdl2_dll-*.dist-info/LICENSE*; do
   if [ -f "$f" ]; then cp "$f" "$LIC/pysdl2-dll-$(basename "$f")"; fi
 done
-"$OUT/Retro-Netplay-Player/Retro-Netplay-Player" --check || true    # (.exe on Windows)
+echo "== the player checks itself"
+limited() {      # (macOS: at most 2 minutes, with perl's alarm, as macOS has no timeout command)
+  if [ -n "$MAC" ]; then perl -e 'alarm shift; exec @ARGV' 120 "$@"; else "$@"; fi
+}
+limited "$OUT/Retro-Netplay-Player/Retro-Netplay-Player" --check || true    # (.exe on Windows)
 du -sh "$OUT/Retro-Netplay-Player"

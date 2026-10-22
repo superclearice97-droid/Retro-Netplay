@@ -24,6 +24,8 @@ import threading
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+if sys.platform == "darwin":
+    os.environ.setdefault("GST_REGISTRY_FORK", "no")    # (macOS: a forked plugin scan can hang; scan in this process)
 STATS_CSV = os.path.expanduser("~/.netplay-matchmaker/stream-stats.csv")
 FONT = os.path.join(HERE, "fonts", "DejaVuSansMono.ttf")
 

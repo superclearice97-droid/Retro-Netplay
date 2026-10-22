@@ -185,6 +185,7 @@ jobs:
     # the Mac download (Apple Silicon): the app, netplay:// links, and the player window with Homebrew's GStreamer
     # (video decoded by macOS's own VideoToolbox). Released as an early test build: not yet tried on a real Mac.
     runs-on: macos-14
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - name: GStreamer, PyGObject, SDL2 (Homebrew) for the player; coturn for the relay test

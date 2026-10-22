@@ -45,6 +45,7 @@ shot settings 12 HOME="$H2" NETPLAY_SHOW=settings
 shot controllers 12 HOME="$H2" NETPLAY_SHOW=controllers
 shot address 12 HOME="$H2" NETPLAY_SHOW=address
 shot card 12 HOME="$H2" NETPLAY_SHOW=card
+shot streamfail 12 HOME="$H2" NETPLAY_SHOW=streamfail
 
 # 2a) a game's title card, with art and details as Skraper writes them (pictures made here: no real game art)
 H3="$(mktemp -d)"

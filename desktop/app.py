@@ -931,6 +931,8 @@ class Engine:
         if log_f:
             log_f.close()
         why = guest_result(log_path)
+        if why and why != "you left":
+            self.emit("logs", why, str(log_path))
         self.stream_proc = None
         if self.state == "session":
             self.set("idle", (f"{why} " if why and why != "you left" else "") + "Press the button to play again.")
@@ -980,6 +982,7 @@ class Engine:
         if self.stream_proc.returncode not in (None, 0):
             why = last_problem(log_path) or f"the stream stopped (code {self.stream_proc.returncode})"
             tell(why)
+            self.emit("logs", why, str(log_path))
         if log_f:
             log_f.close()
         for p in (self.stream_proc, self.proc):
@@ -1654,6 +1657,33 @@ def run_gui():
                 pass
         win.bind("<Destroy>", lambda e: back() if e.widget is win else None)
 
+    def open_path(path):
+        """Show a file (in the text editor) or a folder (in the file manager), the way the computer opens them."""
+        path = str(path)
+        try:
+            if sys.platform == "win32":
+                os.startfile(path)
+            else:
+                subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", path],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except (OSError, AttributeError):
+            messagebox.showinfo("Stream log", f"It's here: {path}\n(a hidden folder: in the file manager, press Ctrl+H)")
+
+    def copy_stream_logs():
+        """This computer's last stream logs (hosting and joining) on the clipboard, ready to paste into a message."""
+        parts = []
+        for name, what in (("stream-host.log", "HOSTING (the last time you streamed to a friend)"),
+                           ("stream-guest.log", "JOINING (the last time you joined a friend's stream)")):
+            p = CONFIG_PATH.parent / name
+            try:
+                parts.append(f"=== {what}: {p}\n" + "\n".join(p.read_text(errors="replace").splitlines()[-300:]))
+            except OSError:
+                parts.append(f"=== {what}: no log yet ({p})")
+        text = "\n\n".join(parts)
+        root.clipboard_clear()
+        root.clipboard_append(text)
+        return text
+
     def show_stream_check():
         win = tk.Toplevel(root)
         win.title("Streaming check")
@@ -1701,6 +1731,14 @@ def run_gui():
                     msgs.put(("call", None, lambda m=str(e): show_line(f"Problem: {m}")))
             threading.Thread(target=work2, daemon=True).start()
         ttk.Button(body, text="Test screen sharing", command=test_share).pack(side="left")
+
+        def copy_logs():
+            text = copy_stream_logs()
+            txt.delete("1.0", "end")
+            txt.insert("end", "Copied to the clipboard: paste it into your message. (The logs have no video or names, "
+                              "but can include network addresses.)\n\n" + text)
+        ttk.Button(body, text="Copy stream logs", command=copy_logs).pack(side="left", padx=(6, 0))
+        ttk.Button(body, text="Open logs folder", command=lambda: open_path(CONFIG_PATH.parent)).pack(side="left", padx=(6, 0))
 
     def show_manual():
         win = tk.Toplevel(root)
@@ -2485,6 +2523,13 @@ def run_gui():
                 if state == "share":
                     toasts.show("Streaming to your friend", text, [("OK", lambda: None, False)], timeout=25, key="share")
                     continue
+                if state == "logs":       # a stream failed: the log, one click away
+                    toasts.show("The stream stopped", text[:1].upper() + text[1:].rstrip(".") + ".",
+                                [("Open log", lambda p=clip: open_path(p), True),
+                                 ("Copy log", lambda: (copy_stream_logs(), toasts.show(
+                                     "Log copied", "Paste it into your message.", [("OK", lambda: None, False)],
+                                     timeout=8, key="copied")), False)], timeout=90, key="logs")
+                    continue
                 if state == "link":
                     link_var.set(text)
                     if text:
@@ -2581,6 +2626,9 @@ def run_gui():
     show = os.environ.get("NETPLAY_SHOW", "")
     if show == "streamcheck":     # Streaming check opened from Settings (the smoke test clicks its Close button)
         root.after(1500, lambda: (open_settings(), root.after(800, show_stream_check)))
+    if show == "streamfail":      # what a failed stream looks like (screenshots of the packaged build)
+        root.after(1500, lambda: msgs.put(("logs", "stream error: target not found",
+                                           str(CONFIG_PATH.parent / "stream-host.log"))))
     if show in ("friends", "settings", "controllers", "address", "card", "titlecard"):
         root.after(1500, {"friends": lambda: open_friends(), "settings": lambda: open_settings(), "titlecard": lambda: open_card(),
                           "controllers": lambda: open_controllers(), "address": lambda: open_address(),

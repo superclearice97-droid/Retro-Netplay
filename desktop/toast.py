@@ -64,10 +64,10 @@ class Toasts:
                     on_timeout()
                 return
             entry["job"] = win.after(1000, lambda: tick(left - 1))
+        tick(timeout)                  # (before sizing the card, so the countdown line fits)
         self.open.append(entry)
         self.place()
         win.deiconify()
-        tick(timeout)
         try:
             self.root.bell()
         except tk.TclError:

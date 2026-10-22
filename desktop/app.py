@@ -30,7 +30,7 @@ import runtime
 import secretbox
 import social
 
-HERE = runtime.BASE      # bundled files (icon, web pages) whether run from source or the download
+HERE = runtime.BASE      # bundled files (icon, notices) whether run from source or the download
 CONFIG_PATH = Path.home() / ".netplay-matchmaker" / "config.json"
 IS_WIN = platform.system() == "Windows"
 LIB_EXT = ".dll" if IS_WIN else (".dylib" if sys.platform == "darwin" else ".so")
@@ -896,9 +896,8 @@ class Engine:
         """Open the player window on the friend's stream and wait until it closes. Never a web browser."""
         key = str(sess.get("key", ""))
         if sess.get("sig") != "tcp":
-            return self.set("idle", "The matchmaker you're using is an older version: it can only send your friend's game "
-                                    "as a web page, and this app plays it in its own window. Update Retro-Netplay on the "
-                                    "computer that runs the matchmaker, then press Join again.")
+            return self.set("idle", "The matchmaker you're using is an older version that can't set up streams with this "
+                                    "app. Update Retro-Netplay on the computer that runs the matchmaker, then press Join again.")
         if not re.fullmatch(r"[A-Za-z0-9_-]{8,64}", key):
             return self.set("idle", "The matchmaker sent a stream key that doesn't look right. Press Join again.")
         if "cmd" not in _guest_cache:
@@ -933,9 +932,11 @@ class Engine:
 
     async def play_own_stream(self, cfg, g, role, sess, friend="", peer=None):
         host, port = self.mm
-        web = f"{'https' if sess.get('web') == 'https' else 'http'}://{host}:{port + 1}"
         if role == "guest":
             return await self.play_as_guest(host, port, sess, friend, peer or {})
+        if sess.get("sig") != "tcp":
+            return self.set("idle", "The matchmaker you're using is an older version that can't set up streams with this "
+                                    "app. Update Retro-Netplay on the computer that runs the matchmaker, then try again.")
         s = SYSTEMS[g["system"]]
         if self.ingame_alive():
             self.proc, self.ingame = self.ingame["proc"], None     # the game is already on screen: stream it
@@ -948,11 +949,10 @@ class Engine:
             except OSError as e:
                 return self.set("idle", f"Couldn't start {EMUS[s['emu']][0]}: {e}")
             await asyncio.sleep(NATIVE_GUEST_DELAY)   # give the emulator a moment to open its window
-        tcp = sess.get("sig") == "tcp"     # else an older matchmaker: DEPRECATED web signaling
         # --key=...: a key may start with "-", which would otherwise be read as an option
-        cmd = [runtime.host_python(), str(runtime.host_script()), *(["--mm", f"{host}:{port}"] if tcp else ["--server", web]),
+        cmd = [runtime.host_python(), str(runtime.host_script()), "--mm", f"{host}:{port}",
                f"--key={sess.get('key', '')}", "--slot", "2"] + ([] if cfg.get("use_relay", True) else ["--no-relay"])
-        tell = lambda text: tell_guest(web, sess.get("key", ""), text, (host, port) if tcp else None)
+        tell = lambda text: tell_guest(host, port, sess.get("key", ""), text)
         log_path = CONFIG_PATH.parent / "stream-host.log"     # what the stream did, for "why didn't it work?"
         try:
             log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1015,22 +1015,11 @@ def last_problem(log_path):
     return lines[-1][:200] if lines else ""
 
 
-def tell_guest(web, key, text, mm=None):
-    """Tell the friend why the stream stopped, in the host program's own words (through the matchmaker, as the
-    host of that session). mm = (host, port): over the stream connection, which ends the friend's player with this
-    reason. Without it: the DEPRECATED web page way (older matchmakers), as a status line."""
-    if mm:
-        import stream_signal
-        return stream_signal.send_once(mm[0], mm[1], key, [{"type": "bye", "why": text[:300]}])
-    import urllib.request
-    from urllib.parse import quote
-    text = f"The stream stopped on your friend's computer: {text}"
-    try:
-        req = urllib.request.Request(f"{web}/sig?t={quote(key)}", data=json.dumps({"type": "status", "text": text[:300]}).encode(),
-                                     headers={"content-type": "application/json"}, method="POST")
-        urllib.request.urlopen(req, timeout=4).close()
-    except Exception:
-        pass
+def tell_guest(host, port, key, text):
+    """Tell the friend why the stream stopped, in the host program's own words: a goodbye over the stream connection
+    (as the host of that session), which ends the friend's player with this reason."""
+    import stream_signal
+    return stream_signal.send_once(host, port, key, [{"type": "bye", "why": text[:300]}])
 
 
 def open_app_link(url):

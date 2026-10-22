@@ -28,7 +28,7 @@ Your chosen name, your app label and game name, and for emulator netplay your IP
 ## Streaming
 - Video and sound travel directly between the two players, encrypted by WebRTC. The matchmaker only relays the setup messages (they contain network addresses, not video).
 - On a computer, the friend's game opens in the app's own player window; no web browser is used, and nothing is loaded from any other site. The setup messages go through your normal connection to the matchmaker. While the stream starts, the player tells the host's computer how its connection is going (for example "connection failed"), and the host tells the player what it is doing or why it stopped; each side keeps this in `stream-host.log` / `stream-guest.log`.
-- On Android, the stream plays in the app's own player in the same way: the setup messages go through the app's connection to the matchmaker, and the video comes from your friend's computer (directly, or through the relay below). No web page is loaded. The player sends your friend's computer only your button presses and playback numbers (delays, frame rate); it never uses the microphone or camera, and the app doesn't ask for them. If your friend's computer runs an older version without this, its stream page from the matchmaker opens inside the app instead (a built-in web view that only shows that page).
+- On Android, the stream plays in the app's own player in the same way: the setup messages go through the app's connection to the matchmaker, and the video comes from your friend's computer (directly, or through the relay below). No web page is loaded. The player sends your friend's computer only your button presses and playback numbers (delays, frame rate); it never uses the microphone or camera, and the app doesn't ask for them.
 - To connect through home routers, WebRTC asks a STUN server for your public address. By default this is Google's public STUN server (`stun.l.google.com`), which therefore sees your IP address. To avoid third parties, run the matchmaker with the environment variable `NETPLAY_ICE_JSON='[]'` (works on a local network only) or point it at your own STUN/TURN server (see PROTOCOL.md).
 - **Relay server.** If whoever runs your matchmaker also runs a TURN relay, and your two devices can't reach each other directly (strict routers), the stream goes through that relay instead. The matchmaker then gives your app a password for it that expires after 3 hours. The relay sees both IP addresses and how much data passes, but not the video, sound or button presses (they stay encrypted end to end). This is on by default so friends behind strict routers can play; switch it off in Settings ("Use the matchmaker's relay server...", on a computer and on Android). No relay is set up unless the matchmaker's operator adds one, and the apps never contain relay passwords.
 
@@ -59,9 +59,6 @@ Off by default. If you turn it on, the app sends your invite text and link to th
 
 ## Your rights
 The software keeps your data only on your device, so you control it: delete the settings folder to erase it. A matchmaker operator may see your IP address while you search; ask that operator about access or deletion. If you are in the EU/UK or California, a public matchmaker operator must tell you what it keeps and honour your rights.
-
-## Test mode
-`--demo` (for testing only) lets anyone who can reach the matchmaker create test streams. Never use it on a public matchmaker.
 
 ## Children
 This software is for people aged 13 and over and collects no personal information. Parents of younger children should not let them play with strangers. Playing with strangers means exchanging IP addresses; use friends or invite links with people you know, and turn on "Only match me with friends".

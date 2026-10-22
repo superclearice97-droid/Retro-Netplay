@@ -92,7 +92,6 @@ Running a public server makes you responsible for it.
 
 - Publish PRIVACY.md and TERMS.md (in this repo) at the matchmaker's address; log nothing but short-lived abuse protection (see section 6).
 - Provide an abuse contact and respond to reports. Remove abusive users' access quickly.
-- Never run `--demo` on a public server.
 - If you add accounts, chat or voice, redo sections 4 and 5 (moderation, age, data retention, reporting duties for illegal content).
 - A TURN relay carries other people's traffic; rate-limit it and restrict it to authenticated sessions so it can't be used for attacks or anonymous proxying.
 

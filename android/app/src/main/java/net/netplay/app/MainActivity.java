@@ -220,7 +220,6 @@ public class MainActivity extends Activity implements Hub.Ui {
         streamButton.onPress(() -> {
             String u = hub.lastStreamUrl;
             if (u.startsWith("player:")) PlayerActivity.open(this, u);
-            else if (u.startsWith("http")) StreamActivity.open(this, u);
             else if (!u.isEmpty()) hub.openUrl(u);
         });
         actions.addView(leaveButton, half(0));

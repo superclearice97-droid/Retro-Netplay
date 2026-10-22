@@ -5,9 +5,7 @@ the built-in streamer (info.stream.backend == "own"). Each side gets its OWN sec
 only works for its own role, so a guest can never post as the host. Messages are small JSON
 objects (offer / answer / ice / hello / bye) relayed through two in-memory queues.
 
-Each role reaches its queue one way only (`via`): "tcp" = a stream connection on the matchmaker's TCP
-port (server.py, the normal way), or "http" = long-poll on the web port. DEPRECATED: "http" exists only
-for the current Android app, whose player is a web page; remove it once the Android native player ships.
+Each role reaches its queue through a stream connection on the matchmaker's TCP port (server.py).
 """
 import asyncio
 import base64
@@ -32,9 +30,8 @@ by_key = {}     # key -> (Session, role)
 
 
 class Session:
-    def __init__(self, game, via=None):
+    def __init__(self, game):
         self.id = secrets.token_urlsafe(8)
-        self.via = {r: (via or {}).get(r, "http") for r in ROLES}   # how each role may signal: "tcp" or "http"
         self.conn = {r: None for r in ROLES}    # the open TCP stream connection of each role (a close function)
         self.game = game
         self.created = time.time()
@@ -63,24 +60,24 @@ def drop(s):
     for k in s.keys.values():
         by_key.pop(k, None)
     for e in s.ev.values():
-        e.set()     # wake any waiting long-poll so it can notice the session is over
+        e.set()     # wake a waiting stream connection so it can notice the session is over
 
 
-def create(game, via=None):
+def create(game):
     cleanup()
     if len(sessions) >= MAX_SESSIONS:
         return None
-    s = Session(game, via)
+    s = Session(game)
     sessions[s.id] = s
     for r, k in s.keys.items():
         by_key[k] = (s, r)
     return s
 
 
-def lookup(key, via="http"):
-    """(session, role) if this key may signal this way (via "http" or "tcp"), else None."""
+def lookup(key):
+    """(session, role) for this key, else None."""
     hit = by_key.get(key or "") if isinstance(key, str) else None
-    if not hit or hit[0].via[hit[1]] != via:
+    if not hit:
         return None
     s, role = hit
     expired = time.time() - s.created > SESSION_TTL

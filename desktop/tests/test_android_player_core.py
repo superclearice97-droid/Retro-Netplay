@@ -58,8 +58,8 @@ public class PJ {
       Map<String, Object> info = new LinkedHashMap<>(); info.put("native", new LinkedHashMap<String, Object>()); info.put("stream", Plan.streamInfo(false));
       p("INFO", Json.stringify(Plan.streamInfo(false)));
       MatchClient.Match m = new MatchClient().search("127.0.0.1", port, Games.key("ps2", "Urban Reign"), offer.lanes, info, offer.canHost, "android");
-      p("SIG", m.sig); p("PLAYURL", m.play);
-      Plan plan = Plan.make(ps2, m.lane, m.role, m.peer, Plan.playUrl("127.0.0.1", port, m.play), "tcp".equals(m.sig));
+      p("SIG", m.sig);
+      Plan plan = Plan.make(ps2, m.lane, m.role, m.peer, "tcp".equals(m.sig));
       p("PLAN", plan.kind);
       BlockingQueue<Map<String, Object>> got = new LinkedBlockingQueue<>(); BlockingQueue<String> end = new LinkedBlockingQueue<>();
       StreamSignal sig = new StreamSignal("127.0.0.1", port, m.sessionKey, new StreamSignal.Listener() {
@@ -156,7 +156,7 @@ try:
     A.send({"type": "bye", "why": "the game window was closed"}); A.flush(); time.sleep(0.5)
     t.join(30); kv = res.get("kv", {})
     check("the phone says it signals over TCP", json.loads(kv.get("INFO", "{}")).get("sig") == "tcp", kv.get("INFO"))
-    check("its match is a TCP session (no web page link)", kv.get("SIG") == "tcp" and kv.get("PLAYURL") == "", kv)
+    check("its match is a TCP session", kv.get("SIG") == "tcp", kv)
     check("the plan opens the native player", kv.get("PLAN") == "OPEN_PLAYER", kv.get("PLAN"))
     check("the stream connection gives it the guest role and ICE servers", kv.get("ROLE") == "guest" and kv.get("ICE", "").startswith("["), kv)
     check("phone -> host: hello", seen and seen[0] == {"type": "hello"}, seen)

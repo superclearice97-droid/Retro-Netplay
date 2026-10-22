@@ -2,8 +2,8 @@
 """Draws Retro-Netplay's icon set once and writes it for every platform.
 
 Each icon is a few strokes on a 24x24 grid, drawn with round caps at a constant width. A stroke is a
-list of points, so the same data animates as "draw on" in the Android app (Icons.java), the browser
-stream page (icons.json, pasted into guest.html) and the Linux app (icons.py). These shapes are our
+list of points, so the same data animates as "draw on" in the Android app (Icons.java) and the Linux
+app (icons.py); icons.json keeps the raw strokes. These shapes are our
 own drawings; no third-party icon files are used.
 
 Run:  python3 design/make_icons.py     (from the repo root)

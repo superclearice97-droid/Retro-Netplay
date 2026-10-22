@@ -1,11 +1,10 @@
 """Host side of the built-in streamer (Linux).
 
 Captures a window/screen + game audio, encodes it with the fastest encoder available, and sends it
-to ONE guest over WebRTC (the desktop app's player window, or the Android app's page). The guest's controller comes back over a data channel and is
+to ONE guest over WebRTC (the desktop app's player window, or the Android app's player). The guest's controller comes back over a data channel and is
 fed into a virtual gamepad. The matchmaker only relays the setup messages.
 
   python3 stream_host.py --mm HOST:PORT --key KEY                 (the app starts this for you)
-  python3 stream_host.py --server http://HOST:PORT --key KEY      (DEPRECATED web way, for older matchmakers)
   python3 stream_host.py --doctor                                  (checks this computer, no network)
 
 The orchestration (Session) and all packing/choosing logic are plain Python and unit-tested.
@@ -15,14 +14,11 @@ this was written in; run --doctor first and send back anything it flags.
 import argparse
 import json
 import os
-import queue
 import shutil
 import subprocess
 import sys
 import threading
 import time
-import urllib.error
-import urllib.request
 from urllib.parse import quote
 
 import uinput_pad
@@ -78,72 +74,6 @@ def ice_to_gst(servers):
                     cred = f"{quote(s['username'], safe='')}:{quote(s.get('credential', ''), safe='')}@"
                 turns.append(f"{scheme}://{cred}{rest.split('?')[0]}")
     return stun, turns
-
-
-# ===================================================================== signaling over HTTP (DEPRECATED)
-class Signaling:
-    """Long-polls the matchmaker's web port for messages and posts ours. Runs on its own threads.
-
-    DEPRECATED: only for a matchmaker too old to have the TCP stream connection (stream_signal.TcpSignaling,
-    which the app uses whenever the match says sig "tcp"). Remove with the web guest page."""
-
-    def __init__(self, base, key, on_msg, on_end):
-        self.base, self.key, self.on_msg, self.on_end = base.rstrip("/"), key, on_msg, on_end
-        self.out, self.stop_flag = queue.Queue(), threading.Event()
-
-    def _url(self, path):
-        return f"{self.base}{path}{'&' if '?' in path else '?'}t={quote(self.key)}"
-
-    def get_json(self, path, timeout=35):
-        with urllib.request.urlopen(self._url(path), timeout=timeout) as r:
-            return json.load(r)
-
-    def start(self):
-        threading.Thread(target=self._poll, daemon=True).start()
-        threading.Thread(target=self._send_loop, daemon=True).start()
-
-    def send(self, msg):
-        self.out.put(msg)
-
-    def stop(self):
-        self.stop_flag.set()
-        self.out.put(None)
-
-    def _poll(self):
-        fails = 0
-        while not self.stop_flag.is_set():
-            try:
-                res = self.get_json("/sig?wait=20")
-                fails = 0
-            except urllib.error.HTTPError as e:
-                if e.code == 404:
-                    return self.on_end("session ended")
-                fails += 1
-            except (urllib.error.URLError, OSError, ValueError):
-                fails += 1
-            else:
-                for m in res.get("msgs", []):
-                    self.on_msg(m)
-                if res.get("closed") and not res.get("msgs"):
-                    return self.on_end("session closed")
-                continue
-            if fails > 20:
-                return self.on_end("lost contact with the matchmaker")
-            time.sleep(min(0.3 * fails, 3))
-
-    def _send_loop(self):
-        while True:
-            msg = self.out.get()
-            if msg is None:
-                return
-            req = urllib.request.Request(self._url("/sig"), data=json.dumps(msg).encode(), method="POST",
-                                         headers={"Content-Type": "application/json"})
-            for attempt in range(3):
-                try:
-                    urllib.request.urlopen(req, timeout=10).read()
-                    break
-                except (urllib.error.URLError, OSError):
-                    time.sleep(0.3 * (attempt + 1))
 
 
 # ===================================================================== host-side timing
@@ -868,7 +798,6 @@ def test_share(session_type):
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Netplay Matchmaker stream host")
     ap.add_argument("--mm", help="matchmaker address for the stream connection, e.g. 1.2.3.4:7777")
-    ap.add_argument("--server", help="DEPRECATED: matchmaker web address (older matchmakers), e.g. http://1.2.3.4:7778")
     ap.add_argument("--key", help="session key from the match")
     ap.add_argument("--doctor", action="store_true", help="check this computer and exit")
     ap.add_argument("--test-share", action="store_true", help="open the 'share your screen' box once and say if it worked")
@@ -877,7 +806,7 @@ def main(argv=None):
     ap.add_argument("--encoder", default="auto", help="auto, nvh264enc, vah264lpenc, vah264enc, vaapih264enc, x264enc")
     ap.add_argument("--kbps", type=int, default=8000)
     ap.add_argument("--fps", type=int, default=60)
-    ap.add_argument("--profile", default="constrained-baseline", help="H.264 profile (constrained-baseline is safest for browsers)")
+    ap.add_argument("--profile", default="constrained-baseline", help="H.264 profile (constrained-baseline works with every decoder)")
     ap.add_argument("--slot", type=int, default=2, help="which player the guest controls")
     ap.add_argument("--slot-pick", action="store_true", help="let the guest choose Player 2, 3 or 4 (a friend's privilege)")
     ap.add_argument("--no-audio", action="store_true")
@@ -893,8 +822,8 @@ def main(argv=None):
         return 0 if not any(l.startswith("[X") for l in lines) else 1
     if a.test_share:
         return test_share(session_type)
-    if not (a.mm or a.server) or not a.key:
-        ap.error("--mm (or --server) and --key are required (or use --doctor)")
+    if not a.mm or not a.key:
+        ap.error("--mm and --key are required (or use --doctor)")
     if elements is None:
         print("\n".join(doctor_lines(None, session_type, "", False)))
         return 2
@@ -936,26 +865,17 @@ def main(argv=None):
     pad.open()
     on_msg = lambda m: GLib.idle_add(lambda: session.on_signal(m) and False)
     on_end = lambda why: GLib.idle_add(lambda: (session.end(why), False)[1])
-    if a.mm:
-        import stream_signal
-        host, port = stream_signal.parse_address(a.mm)
-        sig = stream_signal.TcpSignaling(host, port, a.key, on_msg=on_msg, on_end=on_end)
-        try:
-            ice = sig.connect().get("iceServers", [])
-            if a.no_relay:
-                ice = stream_signal.without_relay(ice)
-        except stream_signal.SignalError as e:
-            print(f"STREAM ERROR: can't reach the matchmaker: {e}", flush=True)
-            pad.close()
-            return 2
-    else:
-        sig = Signaling(a.server, a.key, on_msg=on_msg, on_end=on_end)
-        try:
-            ice = sig.get_json("/cfg").get("iceServers", [])
-        except (urllib.error.URLError, OSError, ValueError) as e:
-            print("Can't reach the matchmaker:", e)
-            pad.close()
-            return 2
+    import stream_signal
+    host, port = stream_signal.parse_address(a.mm)
+    sig = stream_signal.TcpSignaling(host, port, a.key, on_msg=on_msg, on_end=on_end)
+    try:
+        ice = sig.connect().get("iceServers", [])
+        if a.no_relay:
+            ice = stream_signal.without_relay(ice)
+    except stream_signal.SignalError as e:
+        print(f"STREAM ERROR: can't reach the matchmaker: {e}", flush=True)
+        pad.close()
+        return 2
     def new_pad(n):
         p = uinput_pad.UinputPad(f"Netplay Virtual Pad (Player {n})")
         p.open()

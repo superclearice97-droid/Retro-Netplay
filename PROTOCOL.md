@@ -24,7 +24,7 @@ Transport: TCP, UTF-8, one JSON object per line (`\n`). One connection = one sea
 
 ## Server -> client
 - `{"op":"matched","v":1,"lane":"native","role":"host"|"guest","via":"public"|"invite","peer":{...info, "ip":"1.2.3.4","client":"android"}}` then the server closes the connection. `ip` is only included on the native lane. The server passes on only `info.<lane>` entries with short keys (letters, digits, `_`) and short text, number or true/false values.
-- When both players asked for `backend:"own"` on the stream lane, the message also has `"session":{"key":"...","sig":"tcp"}`: this side's own secret key, to use on the stream connection (see Built-in streaming). A side whose app doesn't send `info.stream.sig:"tcp"` (Android app versions before its own player) gets the deprecated web page way instead: `"session":{"key":"...","play":"/play?t=..."}` (guest) or `{"key":"..."}` (host), plus `"web":"https"` if the server's web port uses https (`NETPLAY_TLS_CERT` and `NETPLAY_TLS_KEY` set).
+- When both players asked for `backend:"own"` on the stream lane, the message also has `"session":{"key":"...","sig":"tcp"}`: this side's own secret key, to use on the stream connection (see Built-in streaming).
 - `{"op":"ping"}` every 20 s while waiting. Ignore it.
 - A connection may first switch to TLS (see Encryption).
 - `{"op":"error","msg":"..."}` then the server closes the connection.
@@ -47,22 +47,16 @@ The desktop app can post the invite text to a Discord webhook or a Telegram chat
 ## Built-in streaming (stream lane, backend "own")
 The matchmaker also relays the WebRTC setup between the two matched players, over the same TCP port as everything else. The joining player never opens a web browser: the desktop app opens its own player window.
 
-**Capability.** A search on the stream lane sends `"info":{"stream":{"backend":"own","sig":"tcp"}}` when the app signals over TCP (every desktop app from this version on). Two such apps get a TCP session. When only ONE of the two has `sig:"tcp"`, that one must be the host (it can still serve an older guest's web page); if it can't host, the two are never paired (in a friend's room both get `{"op":"error","why":"no_common_lane"}` saying one app is too old). Apps without `sig` pair with each other exactly as before.
+**Capability.** A search on the stream lane with backend "own" MUST send `"info":{"stream":{"backend":"own","sig":"tcp"}}`. Older apps that don't (their players used a web page from the matchmaker, which is gone) lose the stream lane: if it was their only lane they get `{"op":"error","why":"old_app","msg":"..."}` telling the player to update; otherwise they are matched on their other lanes only. In a friend's room where the stream was the only shared lane, both get `{"op":"error","why":"no_common_lane"}` saying one app is too old.
 
 **Stream connection.** Each matched player opens ONE more TCP connection to the matchmaker and sends, as its first line, `{"v":1,"op":"stream","key":"<its session key>"}`.
 - Answer: `{"op":"stream","v":1,"role":"host"|"guest","game":"...","iceServers":[...],"relay":true|false}`. `iceServers` is a WebRTC list: STUN, plus the relay with a short-lived username and password when the matchmaker has one (`relay:true`; see TURN relay below).
 - Or: `{"op":"error","msg":"...","why":"bad_key"}` (wrong key, a key of the other kind, or the session is over) and the connection closes.
 - Then client -> server: `{"op":"sig","msg":{"type":"..."}}` (relayed to the OTHER role) and `{"op":"ping"}` at least every 60 s. Server -> client: `{"op":"sig","msg":{...}}` (from the other role, in order; messages sent before you connected wait for you), `{"op":"ping"}` every 20 s, `{"op":"error_soft","msg":"..."}` (that one message was refused) and `{"op":"error","msg":"...","why":"expired"|"rate"}` (then it closes).
 - `msg` types: `hello` (guest is ready), `offer` / `answer` (`sdp`), `ice` (`candidate`, `sdpMLineIndex`), `status` (`text`: what that side is doing, shown on the other screen while connecting) and `bye` (`why`: the reason in plain words, shown to the other player; empty when they simply left). After a `bye` is handed over, the session is over and its connections close.
-- Security: each side has its OWN key and a key only works for its own role and session. Keys of a TCP session never work on the web port, and keys of a web session never work here. Sessions end after 2 hours. One message is at most 16 KB, at most 200 wait unread per side, at most 300 per minute per connection, and opening stream connections counts toward the per-address limit for searches. A new connection with the same key replaces the old one (reconnecting after a network hiccup).
+- Security: each side has its OWN key and a key only works for its own role and session. Sessions end after 2 hours. One message is at most 16 KB, at most 200 wait unread per side, at most 300 per minute per connection, and opening stream connections counts toward the per-address limit for searches. A new connection with the same key replaces the old one (reconnecting after a network hiccup).
 
-**Web page way (DEPRECATED).** Only for older Android app versions, whose player was a web page in the app. Desktop apps and current Android apps never use it. It will be removed soon.
-- Guest: open `http://<host>:<N+1><play>` (the `play` path from the match). That page is served by the matchmaker (`desktop/web/guest.html`).
-- `GET /cfg?t=<key>` -> `{"iceServers":[...], "role":"host"|"guest", "game":"...", "v":1}`.
-- `GET /sig?t=<key>&wait=<seconds, max 25>` -> `{"msgs":[...], "closed":false}`: messages for this role (long-poll). `404` = session over (or not a web session key).
-- `POST /sig?t=<key>` with one `msg` object as above (max 16 KB): queued for the OTHER role. A web guest and a TCP host share one session: the matchmaker relays between the two ways.
-
-**Media and controller (both ways of signaling).**
+**Media and controller.**
 - The host creates the offer after `hello` and adds two data channels: `pad` (unordered, no retransmits) and `ctl` (reliable, JSON).
 - `pad` packet, 16 bytes little-endian: `ver u8 (=1), seq u8, buttons u32, lx ly rx ry i16, lt rt u8`. Button bit n = W3C standard-gamepad button n (12-15 = d-pad up/down/left/right). Sticks: -32767..32767, up = negative.
 - The guest's video uses a small jitter buffer; the host sends H.264 (constrained baseline) and Opus audio.

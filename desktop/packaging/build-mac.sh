@@ -19,7 +19,7 @@ mkdir -p "$WORK/notices"
 cp "$ROOT/LICENSE" "$ROOT/NOTICE.md" "$ROOT/PRIVACY.md" "$ROOT/TERMS.md" "$WORK/notices/"
 "$APY" -m PyInstaller --noconfirm --clean --windowed --name Retro-Netplay --osx-bundle-identifier net.netplay.retro-netplay \
   --distpath "$WORK/dist" --workpath "$WORK/build" --specpath "$WORK" \
-  --add-data "$HERE/web:web" --add-data "$HERE/icon-256.png:." --add-data "$WORK/notices:notices" \
+  --add-data "$HERE/icon-256.png:." --add-data "$WORK/notices:notices" \
   --hidden-import server --hidden-import sessions --hidden-import stream_signal --hidden-import wizard --hidden-import social \
   --hidden-import pygame \
   --exclude-module stream_host --exclude-module stream_guest --exclude-module portal_capture --exclude-module gi \

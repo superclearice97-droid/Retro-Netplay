@@ -135,7 +135,7 @@ public class TJ {{
     Map<String, Object> info = new HashMap<>(); info.put("stream", Plan.streamInfo(false));
     MatchClient.Match m = new MatchClient().search("127.0.0.1", {P}, "ps2:urban-reign", Arrays.asList("stream"), info, ch, "android",
         code[0], true, Friends.searchFields("{phone_secret}", "Odin", false));
-    System.out.println("match=" + m.lane + " " + m.role + " " + m.sig + " " + m.play.isEmpty());
+    System.out.println("match=" + m.lane + " " + m.role + " " + m.sig);
     p.stop();
   }}
 }}"""
@@ -171,7 +171,7 @@ r2 = dict(l.split("=", 1) for l in so.strip().splitlines() if "=" in l)
 check("phone sees the desktop is playing and can stream", "online playing" in r2.get("seen", "") and "stream=true" in r2.get("seen", ""), r2.get("seen"))
 check("after Accept both start", r2.get("start") == "start caller Desk", r2.get("start"))
 check("desktop hosts the stream", msg and msg.get("role") == "host" and msg.get("lane") == "stream", msg)
-check("phone gets a stream for its own player (TCP session, no web page)", r2.get("match") == "stream guest tcp true", r2.get("match"))
+check("phone gets a stream for its own player (TCP session, no web page)", r2.get("match") == "stream guest tcp", r2.get("match"))
 dp2.stop()
 
 # emulator netplay with the host on the matchmaker's own computer: the phone must get the PC's Wi-Fi address,

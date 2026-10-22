@@ -8,7 +8,7 @@ import java.util.regex.Pattern;
 
 /** Pure decisions: what to offer the matchmaker, and what to do when matched. No Android classes here. */
 public final class Plan {
-    public enum Kind { LAUNCH_RETROARCH, OPEN_PARSEC, OPEN_STREAM, OPEN_PLAYER, ERROR }
+    public enum Kind { LAUNCH_RETROARCH, OPEN_PARSEC, OPEN_PLAYER, ERROR }
 
     public final Kind kind;
     public final String message;
@@ -47,42 +47,20 @@ public final class Plan {
     }
 
     // Anything a matchmaker or opponent sends us is checked before we open it, copy it or pass it to an app.
-    static final Pattern PLAY_RE = Pattern.compile("^/play\\?t=[A-Za-z0-9_-]{8,64}$");
     static final Pattern PEER_ID_RE = Pattern.compile("^[A-Za-z0-9]{1,64}$");
     static final Pattern IP_RE = Pattern.compile("^([0-9]{1,3}(\\.[0-9]{1,3}){3}|[0-9A-Fa-f:.]{2,45})$");
 
-    /** Address of the guest page for a built-in stream match: the matchmaker's web port is its TCP port + 1. */
-    public static String playUrl(String host, int port, String play) {
-        return playUrl(host, port, play, false);
-    }
-
-    public static String playUrl(String host, int port, String play, boolean https) {
-        if (play == null || !PLAY_RE.matcher(play).matches()) return "";
-        return (https ? "https://" : "http://") + (host.contains(":") && !host.startsWith("[") ? "[" + host + "]" : host) + ":" + (port + 1) + play;
-    }
-
     public static Plan make(Games.Sys sys, String lane, String role, Map<String, Object> peer) {
-        return make(sys, lane, role, peer, "");
-    }
-
-    /** playUrl: the full guest-page address when the match is on the built-in stream, else "". */
-    public static Plan make(Games.Sys sys, String lane, String role, Map<String, Object> peer, String playUrl) {
-        return make(sys, lane, role, peer, playUrl, false);
+        return make(sys, lane, role, peer, false);
     }
 
     /** player: the match is a built-in stream whose key works on the stream connection (session sig "tcp"). */
-    public static Plan make(Games.Sys sys, String lane, String role, Map<String, Object> peer, String playUrl, boolean player) {
+    public static Plan make(Games.Sys sys, String lane, String role, Map<String, Object> peer, boolean player) {
         if ("stream".equals(lane) && player) {
             if (!"guest".equals(role)) {
                 return new Plan(Kind.ERROR, "This phone can't host a stream, so this match can't start. Please search again.", "", "");
             }
             return new Plan(Kind.OPEN_PLAYER, "Opening the stream. Your controller works in it, or use the on-screen buttons.", "", "");
-        }
-        if ("stream".equals(lane) && playUrl != null && !playUrl.isEmpty()) {
-            if (!"guest".equals(role)) {
-                return new Plan(Kind.ERROR, "This phone can't host a stream, so this match can't start. Please search again.", "", "");
-            }
-            return new Plan(Kind.OPEN_STREAM, "Opening the stream in your browser. Pair a Bluetooth controller first, or use the on-screen buttons.", playUrl, "");
         }
         String ip = peer.get("ip") == null ? "" : String.valueOf(peer.get("ip"));
         String pid = peer.get("peer_id") == null ? "" : String.valueOf(peer.get("peer_id"));

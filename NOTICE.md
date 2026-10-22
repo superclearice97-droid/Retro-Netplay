@@ -21,7 +21,7 @@ This project contains no games, BIOS files or console firmware. You must own the
 | PySDL2, SDL2, SDL2_ttf (with FreeType and HarfBuzz) | the player window: picture, keyboard and controllers; **included** (pysdl2-dll binaries) | PySDL2 public domain / zlib; SDL2 and SDL2_ttf zlib; FreeType FTL; HarfBuzz MIT |
 | stream-webrtc-android 1.2.2 (a build of Google's WebRTC), with BoringSSL, libvpx, libaom, dav1d, Opus, libsrtp, libyuv, Protocol Buffers, libevent, Abseil inside it; Kotlin standard library, AndroidX annotation | the Android app's stream player; **included** in the Android app | Apache 2.0 (stream-webrtc-android, Abseil, Kotlin, AndroidX); WebRTC BSD 3-clause with Google's patent grant; BoringSSL OpenSSL/SSLeay/ISC; libvpx BSD with the WebM patent grant; libaom BSD 2-clause with the AOM Patent License 1.0; dav1d BSD 2-clause; Opus, libsrtp, libyuv, Protocol Buffers, libevent BSD 3-clause. Full texts ship inside the app: `assets/THIRD-PARTY-NOTICES.txt` (android/app/src/main/assets/) |
 | Android SDK, Gradle, Android Gradle Plugin | build the Android app (GitHub Actions or your machine) | Apache 2.0 (SDK components have their own terms) |
-| Chromium, Playwright, coturn | used only by the automated tests in `desktop/tests/` | BSD-style / Apache 2.0 / BSD |
+| coturn | used only by the automated tests in `desktop/tests/` | BSD |
 | coturn (TURN relay) | optional, run by whoever runs a matchmaker (not included) | BSD 3-clause |
 | RetroArch and libretro cores | started by the app | GPLv3 and per-core licenses |
 | Dolphin, PCSX2, RPCS3 | started by the app | GPLv2+ / GPLv3 |

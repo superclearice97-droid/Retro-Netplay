@@ -799,11 +799,10 @@ final class Hub {
         if (who.isEmpty()) who = "an opponent";
         boolean friend = "true".equals(m.peerString("friend"));
         playingWith = who;
-        String playUrl = Plan.playUrl(host, port, m.play, m.secureWeb);
         Map<String, Object> peer = new LinkedHashMap<>(m.peer);
         // the host is on the matchmaker's own network: reach it at the matchmaker's address
         if ("true".equals(m.peerString("at_matchmaker")) && !net.netplay.core.Lan.isLoopback(host)) peer.put("ip", host);
-        Plan plan = Plan.make(s, m.lane, m.role, peer, playUrl, "tcp".equals(m.sig));
+        Plan plan = Plan.make(s, m.lane, m.role, peer, "tcp".equals(m.sig));
         buzz(400);
         if (plan.kind == Plan.Kind.ERROR) {
             playingWith = "";
@@ -822,13 +821,13 @@ final class Hub {
             say(hello + " Opening the stream.", false);
             return;
         }
-        if (plan.kind == Plan.Kind.OPEN_STREAM || plan.kind == Plan.Kind.OPEN_PARSEC) {
+        if (plan.kind == Plan.Kind.OPEN_PARSEC) {
             playingKey = key(g);
             sendStatus();
-            String url = plan.kind == Plan.Kind.OPEN_STREAM ? plan.clipboard : "parsec://peer_id=" + plan.clipboard;
+            String url = "parsec://peer_id=" + plan.clipboard;
             lastStreamUrl = url;
             Notify.matched(app, hello, "Tap to open the stream.", url);
-            if (plan.kind == Plan.Kind.OPEN_STREAM) StreamActivity.open(app, url); else openUrl(url);
+            openUrl(url);
             say(hello + " Opening the stream.", false);
             return;
         }

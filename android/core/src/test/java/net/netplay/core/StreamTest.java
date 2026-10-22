@@ -18,7 +18,7 @@ public class StreamTest {
         }
         try {
             MatchClient.Match m = mc.search("127.0.0.1", port, Games.key("ps2", "Urban Reign"), offer.lanes, info, offer.canHost, "android");
-            Plan plan = Plan.make(ps2, m.lane, m.role, m.peer, Plan.playUrl("127.0.0.1", port, m.play), "tcp".equals(m.sig));
+            Plan plan = Plan.make(ps2, m.lane, m.role, m.peer, "tcp".equals(m.sig));
             System.out.println("LANE=" + m.lane);
             System.out.println("ROLE=" + m.role);
             System.out.println("KEYLEN=" + m.sessionKey.length());
@@ -29,8 +29,6 @@ public class StreamTest {
         } catch (MatchClient.Cancelled c) {
             System.out.println("NOMATCH");
         }
-        System.out.println("playUrl ipv6=" + Plan.playUrl("::1", 7777, "/play?t=abcdEFGH12"));
-        System.out.println("playUrl empty=[" + Plan.playUrl("h", 1, "") + "]");
         System.out.println("DONE");
     }
 }

@@ -83,9 +83,6 @@ final class Notify {
             PendingIntent tap = openApp(c);
             if (url.startsWith("player:")) {          // a friend's stream in the app's own player
                 tap = PendingIntent.getActivity(c, 7, PlayerActivity.intent(c, url), flags());
-            } else if (url.startsWith("http")) {      // (older computers: their stream page, inside the app)
-                Intent v = new Intent(c, StreamActivity.class).setData(Uri.parse(url));
-                tap = PendingIntent.getActivity(c, 7, v, flags());
             } else if (!url.isEmpty()) {
                 Intent v = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
                 tap = PendingIntent.getActivity(c, 7, v, flags());

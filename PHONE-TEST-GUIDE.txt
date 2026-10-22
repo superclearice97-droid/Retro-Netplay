@@ -1,6 +1,7 @@
 WHAT YOU CAN TEST WITHOUT YOUR HOME COMPUTER
 =============================================
-Everything below works on a phone with Termux + Chrome. Nothing needs a second person.
+Everything below works on a phone with Termux + Chrome. Nothing needs a second person. (Seeing a real
+stream needs a computer that hosts it: the pretend opponent below can be matched, but sends no picture.)
 
 PART 0 - Unpack (once)
   In Termux:   pkg install python unzip
@@ -8,37 +9,21 @@ PART 0 - Unpack (once)
                cd ~ && unzip -o ~/storage/downloads/NetplayMatchmaker.zip
                cd nm
 
-PART 1 - The stream page, no app needed (5 minutes)
-  Termux:      sh phone-test.sh
-  Chrome:      open  http://127.0.0.1:7778/demo
-  You should see: the top half is the GUEST (the page your friends get) showing a moving square
-  and a frame counter; the bottom half is the pretend HOST.
-  Try:
-   a) Tap the on-screen buttons. The matching chip lights up in the bottom half AND the text
-      "Player 2: A" appears inside the video (the press went to the host and came back as video).
-   b) Connect a Bluetooth controller to the phone, press a button on it first (browsers ignore
-      controllers until a press), then press buttons / move sticks. Same result.
-   c) Tap the little status pill (top right of the guest) to show the latency numbers.
-   d) Rotate the phone. Do the buttons stay usable and not cover the whole picture?
-  Tell me: does the video appear? do controller presses show? what do the numbers say?
-  If it never connects: in Chrome open  chrome://flags/#enable-webrtc-hide-local-ips-with-mdns ,
-  set it to Disabled, relaunch Chrome, try again. (Two peers in one browser can trip over this.)
-
-PART 2 - Invite page (1 minute)
+PART 1 - Invite page (1 minute)
   Chrome:  http://127.0.0.1:7778/join?g=gba:test-game&c=ABCD2345
   You should see "You're invited to play Test Game" and an Open button.
 
-PART 3 - The Android app (needs the APK; see PART 5)
+PART 2 - The Android app (needs the APK; see PART 4)
   Install the APK. Open it > Settings: Matchmaker address 127.0.0.1, port 7777. Save.
   Tap Add: system PlayStation 2, name  Urban Reign , leave the file path empty.
   Termux is already running  sh phone-test.sh  (leave it open; swipe between apps).
   Tap the game in "Your games" (it starts and you join the queue).
-   - Within a second the app should say it found an opponent and open Chrome on a stream page
-     (it will say "connecting" - the host half isn't there yet).
-   - Termux prints a link ending  /demo?k=...  . Open it in a NEW Chrome tab. Go back to the stream
-     tab: it should connect, and your taps/controller show up in the host tab.
+   - Within a second the app should say it found an opponent and open its own stream player. It
+     says "Waiting for your friend's computer..." and, after about 20 seconds, that your friend's
+     computer didn't answer (the pretend opponent has no picture to send). The on-screen buttons,
+     Stats and Leave work; Back twice leaves.
    - Also check: an invite link appeared in the app; "Share invite link" opens the share sheet;
-     "Join with a link" accepts the link from PART 2 (and says clearly if it's wrong).
+     "Join with a link" accepts the link from PART 1 (and says clearly if it's wrong).
    - Leaving works: tap a game, then tap "Leave queue"; it says "You left the queue".
   Native lane (optional, needs RetroArch + mGBA core + a GBA file): stop Termux, run
      sh phone-test.sh native
@@ -46,11 +31,12 @@ PART 3 - The Android app (needs the APK; see PART 5)
   with the game and tell you to connect to 127.0.0.1 (copied). (There's no real host to join; this
   only checks the launch.)
 
-PART 4 - What can NOT be tested away from home
-  The real host: screen capture, hardware encoding, game sound, the virtual controller.
+PART 3 - What can NOT be tested away from home
+  A real stream (it needs a computer hosting it), and the real host: screen capture, hardware
+  encoding, game sound, the virtual controller.
   When you're home: on the Linux PC run  python3 desktop/stream_host.py --doctor  and send me the output.
 
-PART 5 - Getting the Android app built while you're out
+PART 4 - Getting the Android app built while you're out
   Fastest route (Termux):
     pkg install git gh
     gh auth login          (choose GitHub.com > HTTPS > login with a web browser or paste a token)
@@ -62,6 +48,6 @@ PART 5 - Getting the Android app built while you're out
   app-debug.apk. If the build fails, open the run, copy the red error lines, and send them to me.
 
 SEND ME (any of these helps)
-  - Screenshots of the stream test page and the app's main window.
+  - Screenshots of the app's main window and its stream player.
   - What happened at each "Try" above.
   - Any red error text from Termux or GitHub Actions.

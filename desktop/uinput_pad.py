@@ -1,6 +1,6 @@
 """A virtual game controller for the host (Linux uinput), driven by the guest's input packets.
 
-The guest page sends 16-byte packets (see web/guest.html). We turn them into evdev events on a
+The guest's player sends 16-byte packets (see PROTOCOL.md, Media and controller). We turn them into evdev events on a
 virtual pad that identifies itself as an Xbox 360 controller, so SDL, RetroArch, Dolphin and PCSX2
 all recognise it with their normal built-in mappings. Pure packing code is testable anywhere;
 only UinputPad.open() needs /dev/uinput.

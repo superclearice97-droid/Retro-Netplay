@@ -131,6 +131,11 @@ class Waiter:
         self.game = req["game"]
         self.lanes = [l for l in req["lanes"] if l in LANES]
         self.info = clean_info(req.get("info"))
+        # an app that offers the built-in stream but only knows the old web page way (Android app versions before
+        # its own player, desktop apps before the player window) can't stream any more: it still plays netplay
+        self.outdated = "stream" in self.lanes and wants_own_stream(self) and not tcp_sig(self)
+        if self.outdated:
+            self.lanes.remove("stream")
         ch = req.get("can_host") if isinstance(req.get("can_host"), dict) else {}
         self.can_host = {l: bool(ch.get(l, True)) for l in LANES}   # old clients: assume yes
         self.client = re.sub(r"[^A-Za-z0-9 ._-]", "", str(req.get("client", "unknown")))[:40] or "unknown"
@@ -300,21 +305,14 @@ def rank(a, b, key, now):
 
 def tcp_sig(w):
     """Does this player's app signal over the TCP stream connection (info.stream.sig == "tcp")? Apps without it
-    (the current Android app, older desktop apps) only know the web page way."""
+    are older versions that only knew the (removed) web page way."""
     st = w.info.get("stream")
     return isinstance(st, dict) and st.get("sig") == "tcp"
 
 
 def roles(w, other, lane, key=""):
-    """(host, guest) or None. See _roles. On the built-in stream, an app that only knows TCP signaling can't join an
-    app that only knows the web page way, so when exactly one of them speaks TCP, that one must host (a new host
-    still serves an old web guest); if it can't host, they aren't paired at all."""
-    hg = _roles(w, other, lane, key)
-    if hg and lane == "stream" and wants_own_stream(w) and wants_own_stream(other) and tcp_sig(w) != tcp_sig(other):
-        new = w if tcp_sig(w) else other
-        old = other if new is w else w
-        return (new, old) if new.can_host[lane] else None
-    return hg
+    """(host, guest) or None. See _roles."""
+    return _roles(w, other, lane, key)
 
 
 def _roles(w, other, lane, key=""):
@@ -365,20 +363,11 @@ def do_match(w, key, lane, hg):
     to_host = {"op": "matched", "v": 1, "lane": lane, "role": "host", "via": via, "peer": peer_view(guest, lane, host)}
     to_guest = {"op": "matched", "v": 1, "lane": lane, "role": "guest", "via": via, "peer": peer_view(host, lane, guest)}
     if lane == "stream" and wants_own_stream(host) and wants_own_stream(guest):
-        # each side signals over the TCP stream connection if its app can; roles() made sure a TCP-only guest
-        # never gets a host that only knows the web page way
-        sig = {"host": "tcp" if tcp_sig(host) else "http", "guest": "tcp" if tcp_sig(guest) else "http"}
-        sess = sessions.create(w.game, sig)
+        # both sides signal over the TCP stream connection (apps that can't lost the stream lane in Waiter)
+        sess = sessions.create(w.game)
         if sess:    # else: server is full, fall through to the plain match
             for role, msg in (("host", to_host), ("guest", to_guest)):
-                msg["session"] = {"key": sess.keys[role]}
-                if sig[role] == "tcp":
-                    msg["session"]["sig"] = "tcp"
-                else:   # DEPRECATED web page way (current Android app only)
-                    if role == "guest":
-                        msg["session"]["play"] = f"/play?t={sess.keys['guest']}"
-                    if TLS:
-                        msg["session"]["web"] = "https"
+                msg["session"] = {"key": sess.keys[role], "sig": "tcp"}
     for x, msg in ((host, to_host), (guest, to_guest)):
         try:
             send(x, msg)
@@ -397,8 +386,7 @@ def dead_end(w):
             common = [l for l in LANES if l in w.lanes and l in o.lanes]
             if any(compatible(o, w, l) and roles(w, o, l, key) for l in common):
                 continue
-            own = "stream" in common and wants_own_stream(w) and wants_own_stream(o)
-            if own and tcp_sig(w) != tcp_sig(o) and "native" not in common:
+            if (w.outdated or o.outdated) and "native" not in common:
                 why = ("Your apps can't stream to each other: one of you has an older Retro-Netplay. "
                        "Update the app on both devices, then try again.")
             elif not common:
@@ -503,6 +491,11 @@ async def handle(reader, writer):
         w = Waiter(writer, req)
         open_by_ip[ip] = open_by_ip.get(ip, 0) + 1
         counted = True
+        if not w.lanes:     # it only offered the built-in stream, which its version can't do any more
+            send(w, {"op": "error", "why": "old_app", "msg": "This version of Retro-Netplay can't join or host streams "
+                     "any more. Update the app (the stream now plays in its own player), then try again."})
+            await writer.drain()
+            return
         m = find_match(w)
         if m:
             do_match(w, *m)
@@ -586,7 +579,7 @@ async def stream_pump(s, role, writer):
 
 async def stream_conn(reader, writer, req, ip):
     problem = admit(ip, asyncio.get_running_loop().time())
-    hit = None if problem else sessions.lookup(req.get("key"), "tcp")
+    hit = None if problem else sessions.lookup(req.get("key"))
     if not problem and not hit:
         problem = "This stream has ended, or its key is wrong."
     if problem:
@@ -1027,17 +1020,6 @@ def tls_context():
 
 
 TLS = tls_context()
-DEMO = bool(os.environ.get("NETPLAY_DEMO"))   # --demo: lets /demo make test streams with no second player
-DEMO_CSP = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; "
-            "frame-src 'self'; media-src 'self' blob:; img-src 'self' data:")
-WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
-
-
-def read_web(name):
-    with open(os.path.join(WEB_DIR, name), "rb") as f:
-        return f.read()
-
-
 def page(body):
     return ("<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
             "<title>Netplay Matchmaker</title><style>body{font-family:sans-serif;max-width:32rem;margin:2rem auto;padding:0 1rem;line-height:1.5}"
@@ -1046,8 +1028,6 @@ def page(body):
 
 
 PAGE_CSP = "default-src 'none'; style-src 'unsafe-inline'"
-PLAY_CSP = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
-            "connect-src 'self'; media-src 'self' blob:; img-src 'self' data:")
 
 
 def respond(status, body, ctype="text/html; charset=utf-8", csp=PAGE_CSP):
@@ -1057,53 +1037,6 @@ def respond(status, body, ctype="text/html; charset=utf-8", csp=PAGE_CSP):
             f"X-Frame-Options: SAMEORIGIN\r\n"
             f"Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\n"
             f"Content-Security-Policy: {csp}\r\nConnection: close\r\n\r\n").encode() + data
-
-
-def json_response(status, obj):
-    return respond(status, json.dumps(obj), "application/json", "default-src 'none'")
-
-
-async def stream_routes(method, u, q, body):
-    """/play (guest page), /cfg, /sig (signaling). Returns raw HTTP bytes, or None if not ours.
-
-    DEPRECATED: the web page way to join a stream, kept ONLY for the current Android app (its player is this page
-    in a web view). Desktop apps signal over the TCP stream connection (stream_conn) and never use these; keys of a
-    role that signals over TCP don't work here. Remove /play, /cfg and /sig once the Android native player ships."""
-    first = lambda k: (q.get(k) or [""])[0][:200]
-    if DEMO and method == "GET" and u.path == "/demo":
-        return respond("200 OK", read_web("demo.html"), csp=DEMO_CSP)
-    if DEMO and method == "GET" and u.path == "/demo/new":
-        sess = sessions.create("demo:test")
-        if not sess:
-            return json_response("503 Service Unavailable", {"error": "server is full"})
-        return json_response("200 OK", {"host": sess.keys["host"], "guest": sess.keys["guest"]})
-    if u.path == "/play" and method == "GET":
-        hit = sessions.lookup(first("t"))
-        if not hit or hit[1] != "guest":
-            return respond("404 Not Found", page("<h1>This stream link has ended</h1>"
-                           "<p>Ask your friend to start a new session and send you the new link.</p>"))
-        return respond("200 OK", read_web("guest.html"), csp=PLAY_CSP)
-    if u.path in ("/cfg", "/sig"):
-        hit = sessions.lookup(first("t"))
-        if not hit:
-            return json_response("404 Not Found", {"error": "session ended"})
-        sess, role = hit
-        if u.path == "/cfg" and method == "GET":
-            return json_response("200 OK", {"iceServers": sessions.ice_servers(role), "role": role,
-                                            "game": sess.game, "v": 1})
-        if u.path == "/sig" and method == "GET":
-            wait = first("wait")
-            msgs = await sessions.poll(sess, role, float(wait) if wait.replace(".", "", 1).isdigit() else 0)
-            return json_response("200 OK", {"msgs": msgs, "closed": sess.closed})
-        if u.path == "/sig" and method == "POST":
-            try:
-                msg = json.loads(body.decode("utf-8"))
-            except ValueError:
-                return json_response("400 Bad Request", {"error": "body must be JSON"})
-            err = sessions.push(sess, role, msg)
-            return json_response("400 Bad Request", {"error": err}) if err else json_response("200 OK", {"ok": True})
-        return json_response("405 Method Not Allowed", {"error": "not allowed"})
-    return None
 
 
 async def http_handle(reader, writer, tcp_port=7777):
@@ -1118,29 +1051,19 @@ async def http_handle(reader, writer, tcp_port=7777):
         headers = {h.split(":", 1)[0].strip().lower(): h.split(":", 1)[1].strip() for h in head[1:] if ":" in h}
         u = urlsplit(target)
         q = parse_qs(u.query)
-        body, out = b"", None
-        if method == "POST":
-            n = headers.get("content-length", "")
-            if not n.isdigit() or int(n) > sessions.MAX_BODY:
-                out = json_response("413 Payload Too Large", {"error": "body too large"})
-            elif int(n):
-                body = await asyncio.wait_for(reader.readexactly(int(n)), 5)
-        if out is None:
-            out = await stream_routes(method, u, q, body)
-        if out is None:
-            first = lambda k: (q.get(k) or [""])[0][:200]
-            if method != "GET":
-                out = respond("405 Method Not Allowed", page("<p>Not allowed.</p>"))
-            elif u.path == "/join":
-                port = first("p")
-                out = respond("200 OK", page(landing_page(headers.get("host", ""),
-                              int(port) if port.isdigit() and 0 < int(port) < 65536 else tcp_port,
-                              first("g"), first("c"))))
-            elif u.path == "/friend":
-                out = respond("200 OK", page(friend_page(headers.get("host", ""), tcp_port, first("i"), first("n"), first("c"))))
-            else:
-                out = respond("200 OK", page("<h1>Netplay Matchmaker</h1><p>The matchmaker is running.</p>"))
-    except (ValueError, asyncio.TimeoutError, asyncio.IncompleteReadError):
+        first = lambda k: (q.get(k) or [""])[0][:200]
+        if method != "GET":
+            out = respond("405 Method Not Allowed", page("<p>Not allowed.</p>"))
+        elif u.path == "/join":
+            port = first("p")
+            out = respond("200 OK", page(landing_page(headers.get("host", ""),
+                          int(port) if port.isdigit() and 0 < int(port) < 65536 else tcp_port,
+                          first("g"), first("c"))))
+        elif u.path == "/friend":
+            out = respond("200 OK", page(friend_page(headers.get("host", ""), tcp_port, first("i"), first("n"), first("c"))))
+        else:
+            out = respond("200 OK", page("<h1>Netplay Matchmaker</h1><p>The matchmaker is running.</p>"))
+    except ValueError:
         out = respond("400 Bad Request", page("<p>Bad request.</p>"))
     try:
         writer.write(out)
@@ -1222,8 +1145,5 @@ async def main(port, http_port=None, discovery=True, ready=None):
 
 
 if __name__ == "__main__":
-    args = [x for x in sys.argv[1:] if x != "--demo"]
-    if "--demo" in sys.argv:
-        DEMO = True
-        print("demo mode: open /demo on the web port to test streaming with no second player", flush=True)
+    args = sys.argv[1:]
     asyncio.run(main(int(args[0]) if args else 7777, int(args[1]) if len(args) > 1 else None))

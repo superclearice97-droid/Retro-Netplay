@@ -31,7 +31,7 @@ def rd(c):
 try:
     h = host_search("own"); time.sleep(0.3)
     j = subprocess.run(["java", "-cp", out, "net.netplay.core.StreamTest", str(port), "own"], capture_output=True, text=True, timeout=30)
-    kv = dict(l.split("=", 1) for l in j.stdout.splitlines() if "=" in l and not l.startswith("playUrl"))
+    kv = dict(l.split("=", 1) for l in j.stdout.splitlines() if "=" in l)
     hm = rd(h)
     check("Android core matched the desktop host on the stream lane as guest", kv.get("LANE") == "stream" and kv.get("ROLE") == "guest", j.stdout + j.stderr)
     check("Java parsed the session key", kv.get("KEYLEN") == str(len(hm["session"]["key"])), kv.get("KEYLEN"))
@@ -39,13 +39,14 @@ try:
     check("the phone's session is a TCP session with no page link", kv.get("SIG") == "tcp" and kv.get("URL", "") == "", kv)
     check("desktop host got the host-role key", "play" not in hm["session"] and hm["peer"]["client"] == "android")
     h.close()
-    # an older desktop host (no TCP signaling) can't serve the phone's player: never paired
-    h3 = host_search("own", sig=None); time.sleep(0.3)
+    # an older desktop host (no TCP signaling) can't stream any more: it is told so, and never paired with the phone
+    h3 = host_search("own", sig=None)
+    old = rd(h3)
+    check("an older desktop host that only streams is told to update", old.get("op") == "error" and old.get("why") == "old_app"
+          and "Update" in old.get("msg", ""), old)
     j3 = subprocess.run(["java", "-cp", out, "net.netplay.core.StreamTest", str(port), "own", "nomatch"], capture_output=True, text=True, timeout=30)
-    check("an older desktop host and the phone are never paired", "NOMATCH" in j3.stdout, j3.stdout + j3.stderr)
+    check("...and the phone is never paired with it", "NOMATCH" in j3.stdout, j3.stdout + j3.stderr)
     h3.close()
-    check("IPv6 host is bracketed", "playUrl ipv6=http://[::1]:7778/play?t=abcdEFGH12" in j.stdout, j.stdout)
-    check("empty play path -> empty url", "playUrl empty=[]" in j.stdout)
     # Parsec-mode phone must not pair with a built-in host
     h2 = host_search("own"); time.sleep(0.3)
     j2 = subprocess.run(["java", "-cp", out, "net.netplay.core.StreamTest", str(port), "parsec"], capture_output=True, text=True, timeout=30)

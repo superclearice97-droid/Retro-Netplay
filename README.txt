@@ -56,7 +56,7 @@ BUILT-IN STREAMING (new, the default for PS2 / PS3)
   - The Android app plays streams in its own player too (no browser, no web page): the phone's video
     chip decodes the picture. A controller paired with the phone works in it; without one, on-screen
     buttons appear (the Buttons switch at the top hides them). Stats shows the numbers; Leave, or Back
-    twice, ends it. Older computers that don't have the new streaming still open their web page in the app.
+    twice, ends it. (Both computers need this version or newer: the app says so if the other one is older.)
   - HOST SETUP (Linux): run  python3 desktop/stream_host.py --doctor  . It lists exactly what is
     missing (GStreamer pieces, a hardware encoder, permission for the virtual controller) with the
     install commands. Hosting is Linux only for now. Joining: the Linux download has the player window
@@ -134,9 +134,9 @@ LEGAL AND PRIVACY
   Retro-Netplay is licensed under GPL-3.0 (see LICENSE).
 
 TESTING WITHOUT A SECOND PERSON OR YOUR HOME PC
-  Read PHONE-TEST-GUIDE.txt. `sh phone-test.sh` starts the matchmaker in test mode (python3 desktop/server.py --demo)
-  and a pretend opponent (desktop/fake_opponent.py). Open http://127.0.0.1:7778/demo to try the stream page.
-  Never use --demo on a public matchmaker: it lets anyone create test sessions.
+  Read PHONE-TEST-GUIDE.txt. `sh phone-test.sh` starts a matchmaker and a pretend opponent
+  (desktop/fake_opponent.py) to check matching, invites and the app's screens. A real stream needs a
+  computer hosting it.
 
 INVITE LINKS
   Starting a search makes an invite link on either app. Friends who open it join you in a private
@@ -146,7 +146,7 @@ INVITE LINKS
   the open window. The desktop app can also post
   the link to Discord or Telegram for you if you connect them (off until you turn it on). The
   Android app uses the share sheet, so every social app you have works and no login is stored.
-  The matchmaker serves a small web page for the Android app's links on port 7778 (TCP port + 1), so
+  The matchmaker serves a small invite page for the Android app's links on port 7778 (TCP port + 1), so
   allow that port as well as 7777 if you host it.
 
 ANDROID APP: BUILD AND INSTALL
@@ -182,9 +182,8 @@ WHAT WAS AND WASN'T TESTED
   The phone app's own player in an Android emulator against the REAL host: the video is decoded by
   Android's own decoder, the test's button presses arrive at the host as Player 2, leaving tells the
   host, and a wrong key is explained.
-  Also: the Android app's web page in a real Chromium against the real host, access control, the
-  host's session logic and the virtual-controller event translation, and the app's Join > Allow flow
-  opening the player window by itself.
+  Also: access control, the host's session logic and the virtual-controller event translation, and
+  the app's Join > Allow flow opening the player window by itself.
   Tested for queue and friends: friends-first matching, priority, friends-only, mutual adds, the
   online list and calls (server, Android core and desktop app against the real matchmaker), the
   desktop Play/hotkey flow with a pretend RetroArch, and the RetroArch commands against a

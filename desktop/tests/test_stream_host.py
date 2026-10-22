@@ -1,6 +1,6 @@
 """Host-side logic: packet parsing, virtual pad events, encoder choice, ICE conversion, doctor text, and the
 Session orchestration driven through the REAL matchmaker server with a fake media backend."""
-import json, os, socket, struct, subprocess, sys, tempfile, threading, time, urllib.request
+import json, os, socket, struct, subprocess, sys, tempfile, threading, time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import uinput_pad as U
 import stream_host as S
@@ -15,7 +15,7 @@ def pkt(seq=1, buttons=0, ax=(0, 0, 0, 0), lt=0, rt=0, ver=1):
     return struct.pack("<BBI4h2B", ver, seq, buttons, *ax, lt, rt)
 
 # ---------------------------------------------------------------- packets and pad events
-check("packet is 16 bytes (matches guest.html)", U.PACKET.size == 16)
+check("packet is 16 bytes (matches PROTOCOL.md)", U.PACKET.size == 16)
 p = U.parse_packet(pkt(5, 0b1, (100, -200, 300, -400), 7, 9))
 check("parse packet", p == {"seq": 5, "buttons": 1, "ax": (100, -200, 300, -400), "lt": 7, "rt": 9}, str(p))
 check("reject wrong length / version / type", U.parse_packet(b"x" * 15) is None and U.parse_packet(pkt(ver=2)) is None and U.parse_packet("hi") is None)
@@ -122,28 +122,36 @@ class FakeBackend:
     def add_ice(self, i, c): self.log.append(("ice", i, c))
     def send_ctl(self, o): self.log.append(("ctl", o))
 
-def api(base, key, path="/sig?wait=0", body=None):
-    req = urllib.request.Request(f"{base}{path}{'&' if '?' in path else '?'}t={key}", data=None if body is None else json.dumps(body).encode(),
-                                 method="POST" if body is not None else "GET")
-    with urllib.request.urlopen(req, timeout=10) as r:
-        return json.load(r)
+import stream_signal
 
-def poll_until(base, key, want, timeout=5, also=()):
-    got, end = [], time.time() + timeout
-    while time.time() < end and not all(any(m["type"] == w for m in got) for w in (want, *also)):
-        got += api(base, key, "/sig?wait=1")["msgs"]
-    return got
+class Guest:
+    """The guest's side of a session, over the matchmaker's stream connection (what the player apps use)."""
+    def __init__(self, key):
+        self.got = []
+        self.s = stream_signal.TcpSignaling("127.0.0.1", port, key, on_msg=self.got.append)
+        self.s.connect(); self.s.start()
+    def send(self, m): self.s.send(m)
+    def until(self, want, timeout=5, also=()):
+        end = time.time() + timeout
+        while time.time() < end and not all(any(m["type"] == w for m in self.got) for w in (want, *also)):
+            time.sleep(0.05)
+        return list(self.got)
+    def stop(self): self.s.stop()
+
+def host_sig(key, on_msg, on_end):
+    sig = stream_signal.TcpSignaling("127.0.0.1", port, key, on_msg=on_msg, on_end=on_end)
+    sig.connect()
+    return sig
 
 port, hport = free_port(), free_port()
 srv = subprocess.Popen([sys.executable, "-u", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "server.py"), str(port), str(hport)],
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 time.sleep(1.0)
-base = f"http://127.0.0.1:{hport}"
 def match():
     def s(client, ch):
         c = socket.create_connection(("127.0.0.1", port))
         c.sendall((json.dumps({"v": 1, "op": "search", "game": "ps2:urban-reign", "lanes": ["stream"], "client": client,
-                               "can_host": {"stream": ch}, "info": {"stream": {"backend": "own"}}}) + "\n").encode())
+                               "can_host": {"stream": ch}, "info": {"stream": {"backend": "own", "sig": "tcp"}}}) + "\n").encode())
         return c
     a = s("h", True); time.sleep(0.2); b = s("g", False)
     def rd(c):
@@ -156,22 +164,23 @@ try:
     csv = tempfile.mktemp(suffix=".csv")
     pad, clock = FakePad(), [100.0]
     done = threading.Event()
-    sig = S.Signaling(base, hk, on_msg=lambda m: sess.on_signal(m), on_end=lambda why: (sess.end(why), done.set()))
+    sig = host_sig(hk, on_msg=lambda m: sess.on_signal(m), on_end=lambda why: (sess.end(why), done.set()))
     sess = S.Session(sig, lambda s: FakeBackend(s), pad, slot=2, stats_path=csv, clock=lambda: clock[0])
     sig.start()
-    api(base, gk, body={"type": "hello"})
-    got = poll_until(base, gk, "offer", also=("ice",))
+    guest = Guest(gk)
+    guest.send({"type": "hello"})
+    got = guest.until("offer", also=("ice",))
     types = [m["type"] for m in got]
     check("hello -> host starts backend and sends offer + ice", "offer" in types and "ice" in types, str(types))
     check("offer text relayed intact", [m for m in got if m["type"] == "offer"][0]["sdp"] == "v=0 OFFER")
     be = FakeBackend.instances[-1]
-    api(base, gk, body={"type": "answer", "sdp": "v=0 ANSWER"})
-    api(base, gk, body={"type": "ice", "candidate": "candidate:9 1 udp 1 9.9.9.9 9 typ host", "sdpMLineIndex": 0})
+    guest.send({"type": "answer", "sdp": "v=0 ANSWER"})
+    guest.send({"type": "ice", "candidate": "candidate:9 1 udp 1 9.9.9.9 9 typ host", "sdpMLineIndex": 0})
     time.sleep(1.0)
     check("answer reaches backend", ("answer", "v=0 ANSWER") in be.log, str(be.log))
     check("ice reaches backend", any(isinstance(x, tuple) and x[0] == "ice" and "9.9.9.9" in x[2] for x in be.log))
-    api(base, gk, body={"type": "ice", "candidate": 5})
-    api(base, gk, body={"type": "answer"})
+    guest.send({"type": "ice", "candidate": 5})
+    guest.send({"type": "answer"})
     time.sleep(0.5)
     check("malformed signaling ignored without crashing", not sess.ended.is_set())
 
@@ -228,30 +237,32 @@ try:
     check("CSV row includes host timing once known", len(rows) == 3 and ",2.3,,,7.8" in rows[2], rows[2])
 
     # re-hello (guest refreshed the page) restarts cleanly
-    n_before = len(FakeBackend.instances); api(base, gk, body={"type": "hello"}); time.sleep(1.2)
+    n_before = len(FakeBackend.instances); guest.send({"type": "hello"}); time.sleep(1.2)
     check("second hello restarts the backend", len(FakeBackend.instances) == n_before + 1 and "stop" in be.log)
 
     # ending
     sess.on_state("failed")
-    got = poll_until(base, gk, "bye", 4)
+    got = guest.until("bye", 4)
     check("host tells guest 'bye' when it ends", any(m["type"] == "bye" for m in got))
     check("session ended flag set and pad released", sess.ended.is_set() and pad.state["buttons"] == 0)
-    sig.stop()
+    sig.stop(); guest.stop()
 
     # guest leaving ends the host session
     hk2, gk2, socks2 = match()
     pad2 = FakePad(); done2 = threading.Event()
-    sig2 = S.Signaling(base, hk2, on_msg=lambda m: sess2.on_signal(m), on_end=lambda why: sess2.end(why))
+    sig2 = host_sig(hk2, on_msg=lambda m: sess2.on_signal(m), on_end=lambda why: sess2.end(why))
     sess2 = S.Session(sig2, lambda s: FakeBackend(s), pad2, stats_path=csv); sig2.start()
-    api(base, gk2, body={"type": "bye"}); time.sleep(1.5)
+    guest2 = Guest(gk2)
+    guest2.send({"type": "bye"}); time.sleep(1.5)
     check("guest 'bye' ends host session", sess2.ended.is_set())
-    sig2.stop()
+    sig2.stop(); guest2.stop()
 
-    # the host's long-poll notices a dropped session (404)
-    hk3, gk3, _ = match()
-    ended3 = threading.Event(); sig3 = S.Signaling(base, "not-a-key", on_msg=lambda m: None, on_end=lambda why: ended3.set()); sig3.start()
-    check("bad key -> signaling reports the session is over", ended3.wait(4))
-    sig3.stop()
+    # a key the matchmaker doesn't know: the host is told the session is over
+    try:
+        host_sig("not-a-key-not-a-key", on_msg=lambda m: None, on_end=lambda why: None); e = None
+    except stream_signal.SignalError as x:
+        e = x
+    check("bad key -> signaling reports the session is over", e is not None and e.why == "bad_key", e)
 finally:
     srv.terminate()
 # the friend's screen is told why the stream stopped (not just "ended")

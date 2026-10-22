@@ -15,18 +15,12 @@ public final class MatchClient {
     public static final class Match {
         public final String lane, role, via;
         public final Map<String, Object> peer;
-        /** Built-in stream only: this side's session key, and (guest) the page path to open. Both "" otherwise. */
-        public final String sessionKey, play;
-        /** True when the matchmaker's web port uses https (the server operator set up a certificate). */
-        public final boolean secureWeb;
-        /** "tcp": this side's key works on the stream connection, and the player window plays it (PROTOCOL.md). */
+        /** Built-in stream only: this side's session key ("" otherwise). */
+        public final String sessionKey;
+        /** "tcp": this side's key works on the stream connection, and the player plays it (PROTOCOL.md). */
         public String sig = "";
-        Match(String lane, String role, String via, Map<String, Object> peer, String sessionKey, String play) {
-            this(lane, role, via, peer, sessionKey, play, false);
-        }
-        Match(String lane, String role, String via, Map<String, Object> peer, String sessionKey, String play, boolean secureWeb) {
-            this.lane = lane; this.role = role; this.via = via; this.peer = peer; this.sessionKey = sessionKey; this.play = play;
-            this.secureWeb = secureWeb;
+        Match(String lane, String role, String via, Map<String, Object> peer, String sessionKey) {
+            this.lane = lane; this.role = role; this.via = via; this.peer = peer; this.sessionKey = sessionKey;
         }
         public String peerString(String key) {
             Object v = peer.get(key);
@@ -100,16 +94,13 @@ public final class MatchClient {
                 if ("matched".equals(op)) {
                     @SuppressWarnings("unchecked")
                     Map<String, Object> peer = m.get("peer") instanceof Map ? (Map<String, Object>) m.get("peer") : new LinkedHashMap<String, Object>();
-                    String key = "", play = "", sig = "";
-                    boolean https = false;
+                    String key = "", sig = "";
                     if (m.get("session") instanceof Map) {
                         Map<?, ?> sess = (Map<?, ?>) m.get("session");
                         key = sess.get("key") == null ? "" : String.valueOf(sess.get("key"));
-                        play = sess.get("play") == null ? "" : String.valueOf(sess.get("play"));
-                        https = "https".equals(sess.get("web"));
                         sig = "tcp".equals(sess.get("sig")) ? "tcp" : "";
                     }
-                    Match match = new Match(String.valueOf(m.get("lane")), String.valueOf(m.get("role")), m.get("via") == null ? "public" : String.valueOf(m.get("via")), peer, key, play, https);
+                    Match match = new Match(String.valueOf(m.get("lane")), String.valueOf(m.get("role")), m.get("via") == null ? "public" : String.valueOf(m.get("via")), peer, key);
                     match.sig = sig;
                     return match;
                 }

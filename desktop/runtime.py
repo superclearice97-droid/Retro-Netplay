@@ -7,7 +7,7 @@ from pathlib import Path
 
 FROZEN = bool(getattr(sys, "frozen", False))
 SRC = Path(__file__).resolve().parent
-# bundled data (icons, web pages, the stream host scripts) lives next to the modules in a packaged build
+# bundled data (icons, the stream host scripts) lives next to the modules in a packaged build
 BASE = Path(getattr(sys, "_MEIPASS", SRC))
 APP_ID = "retro-netplay"
 

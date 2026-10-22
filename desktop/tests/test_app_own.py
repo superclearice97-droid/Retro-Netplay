@@ -3,7 +3,7 @@ host's key; the guest engine opens the PLAYER WINDOW (never a web browser) with 
 over the TCP stream connection; when the host's stream program fails, the friend's player is told its real error;
 an older matchmaker gets a plain message; invites are netplay:// links with a code a friend can type; incompatible
 backends never pair."""
-import asyncio, json, os, sys, tempfile, threading, time, urllib.request, urllib.error
+import asyncio, json, os, sys, tempfile, threading, time
 from pathlib import Path
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 home = tempfile.mkdtemp(); os.environ["HOME"] = home
@@ -83,12 +83,6 @@ check("host started the emulator for the stream", any(str(fake) in a[0] and a[1:
 check("host started its stream program with the matchmaker address + key + slot",
       len(sh) == 1 and "--mm" in sh[0] and f"127.0.0.1:{PORT}" in sh[0] and any(x.startswith("--key=") for x in sh[0])
       and "--server" not in sh[0], str(sh))
-gkey = pargs.split("--key=")[1].split()[0] if "--key=" in pargs else ""
-try:
-    urllib.request.urlopen(f"http://127.0.0.1:{PORT + 1}/cfg?t={gkey}", timeout=5); web = True
-except urllib.error.HTTPError:
-    web = False
-check("the guest's key does not work on the web page way", not web)
 glog = (d / ".netplay-matchmaker" / "stream-guest.log").read_text() if (d / ".netplay-matchmaker" / "stream-guest.log").exists() else ""
 check("the player had the guest role over TCP", "role guest" in glog, glog)
 check("the friend's player was told the host's real error",
@@ -116,7 +110,7 @@ time.sleep(1.5); ef.stop(); ec.stop(); time.sleep(0.3)
 # an older matchmaker (no TCP sessions): plain message, nothing opened
 spawned.clear()
 c, l, e = mk()
-asyncio.run_coroutine_threadsafe(e.play_as_guest("127.0.0.1", PORT, {"key": "abcdefgh12", "play": "/play?t=abcdefgh12"}, "", {}), e.loop).result(5)
+asyncio.run_coroutine_threadsafe(e.play_as_guest("127.0.0.1", PORT, {"key": "abcdefgh12"}, "", {}), e.loop).result(5)
 check("an older matchmaker: the guest is told to update it, and nothing opens",
       l[-1][0] == "idle" and "older version" in l[-1][1] and not spawned, l[-1:])
 

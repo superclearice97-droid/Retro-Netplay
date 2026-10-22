@@ -1,11 +1,10 @@
 """A pretend opponent for testing the apps with no second person (works in Termux on a phone too).
 
-  python3 server.py --demo            # terminal 1: the matchmaker, with test pages on
+  python3 server.py                   # terminal 1: the matchmaker
   python3 fake_opponent.py            # terminal 2: waits for YOUR app to search, then matches it
 
-It plays the HOST: you (the app under test) become the guest. On the built-in stream it prints a
-link to open in a second browser tab; that tab plays the host's part, so you see the whole path:
-your app -> matchmaker -> browser stream -> your controller or touch buttons coming back.
+It plays the HOST: you (the app under test) become the guest. It checks matching only: on the built-in
+stream your app's player opens, but no picture comes (that needs a real computer hosting the stream).
 """
 import argparse
 import json
@@ -27,7 +26,7 @@ def main():
     host, port = host or "127.0.0.1", int(port)
     while True:
         req = {"v": 1, "op": "search", "game": a.game, "lanes": [a.lane], "client": a.client,
-               "can_host": {a.lane: True}, "info": {a.lane: {"backend": a.backend, "peer_id": "FAKEPEERID"} if a.lane == "stream" else {}}}
+               "can_host": {a.lane: True}, "info": {a.lane: {"backend": a.backend, "sig": "tcp", "peer_id": "FAKEPEERID"} if a.lane == "stream" else {}}}
         if a.invite:
             req["invite"] = a.invite
         s = socket.create_connection((host, port))
@@ -42,8 +41,7 @@ def main():
                 print(f"\nMATCHED. You are the {'guest' if m['role'] == 'host' else 'host'}; I'm the {m['role']}.", flush=True)
                 print(f"  your app's label: {m['peer'].get('client')}   peer ip: {m['peer'].get('ip')}", flush=True)
                 if m.get("session"):
-                    print("\nOpen THIS link in another browser tab to play the host's part:")
-                    print(f"  http://{host}:{port + 1}/demo?k={m['session']['key']}\n", flush=True)
+                    print("  (your app's player opens; a pretend opponent sends no picture)\n", flush=True)
                 break
         s.close()
         if not a.loop:

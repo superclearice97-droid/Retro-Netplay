@@ -16,7 +16,14 @@ python3 -m pip install --quiet --target "$WORK/sdlpy" pysdl2==0.9.17 pysdl2-dll=
 find "$WORK/sdlpy/sdl2dll/dll" -type f ! -name 'libSDL2-2.0*' ! -name 'libSDL2_ttf*' -delete   # only SDL2 and its text
 
 mkdir -p "$WORK/notices"
-cp "$ROOT/LICENSE" "$ROOT/NOTICE.md" "$ROOT/PRIVACY.md" "$ROOT/TERMS.md" "$WORK/notices/"
+cp "$ROOT/LICENSE" "$ROOT/NOTICE.md" "$ROOT/PRIVACY.md" "$ROOT/TERMS.md" "$ROOT/design/THIRD-PARTY-DESIGN.txt" "$WORK/notices/"
+python3 - "$WORK/notices" <<'PY'    # Pillow's licence (it covers the image libraries inside its wheel too)
+import importlib.metadata as m, shutil, sys
+d = m.distribution("pillow")
+for f in d.files or []:
+    if "licen" in str(f).lower() and not str(f).endswith("/"):
+        shutil.copy(d.locate_file(f), sys.argv[1] + "/Pillow-LICENSE.txt")
+PY
 
 python3 -m PyInstaller --noconfirm --clean --windowed --name Retro-Netplay \
   --distpath "$WORK/dist" --workpath "$WORK/build" --specpath "$WORK" \

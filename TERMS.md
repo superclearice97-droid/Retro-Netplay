@@ -1,6 +1,6 @@
 # Terms of use
 
-Effective 10 October 2026. By using Retro-Netplay you agree to these terms. If you run a matchmaker for other people, you must publish your own terms for it.
+Effective 22 October 2026. By using Retro-Netplay you agree to these terms. If you run a matchmaker for other people, you must publish your own terms for it.
 
 ## What it is
 Retro-Netplay helps you find opponents and start online play using emulators and tools you install yourself. It contains no games, BIOS or firmware.
@@ -11,6 +11,9 @@ Retro-Netplay helps you find opponents and start online play using emulators and
 - Only stream your screen to people you trust. A stream shows whatever is in the shared window or screen; close private windows first.
 - Be respectful. Don't harass, threaten or cheat other players. Don't attack or overload any server.
 - Be at least 13 years old (or older if your country requires it).
+
+## Game art
+Box art, screenshots, clips and descriptions shown on title cards belong to their owners (usually the game's publisher). The app doesn't include any; it shows what you already have on your device, or what you download yourself from ScreenScraper with your own account. Keep downloaded art for your own game library, don't redistribute it, and follow ScreenScraper's rules (screenscraper.fr).
 
 ## Playing with others
 You connect with other people's devices and may share your IP address with them (see PRIVACY.md). We can't check who they are and aren't responsible for their conduct. Use friends or invite links with people you know, and leave and report anyone who misbehaves.

@@ -129,6 +129,26 @@ FIRST-TIME SETUP (both apps)
   4. Controllers (PC).
   Run it again any time: Settings > Run setup again.
 
+TITLE CARDS AND GAME ART
+  Double-click a game (on a phone: tap it) to see its title card: a moving background in the game's
+  colours, its box art, year, developer, players, genre and rating, a description, and a gameplay
+  window (the screenshots slowly panning on an old-TV screen; on a phone the gameplay clip plays).
+  Play is on the card, and the card stays open while the app looks for an opponent.
+  The art comes from files you already have. Easiest way to get them, for all your games at once:
+    1. Install Skraper (skraper.net, free) on your computer and sign in with a free ScreenScraper
+       account (screenscraper.fr).
+    2. Point it at your game folders and let it scrape (a profile such as EmulationStation or
+       RetroPie; ask for box art, screenshots, title screens, wheel logos and videos).
+    3. It writes gamelist.xml and a media folder next to your games. Open a title card: the art is
+       there. On a phone, copy those folders along with your games, then Game folders > rescan.
+  Also used: ES-DE's downloaded_media folder, Batocera/Recalbox gamelists, and the thumbnails
+  RetroArch downloads (Main Menu > Online Updater > Thumbnails Updater), on the computer.
+  Built-in download (desktop, optional): Settings > Game art can download art from ScreenScraper with
+  your own account, once this version carries the app's ScreenScraper developer ID (it asks you first,
+  and says exactly what it sends; see PRIVACY.md). Until then it says it isn't available.
+  Sounds: the app makes small sounds on the card and when a match is found; Settings > Interface
+  sounds turns them off.
+
 LEGAL AND PRIVACY
   PRIVACY.md says exactly what leaves your device. NOTICE.md lists third-party licenses, the
   Retro-Netplay is licensed under GPL-3.0 (see LICENSE).
@@ -184,6 +204,10 @@ WHAT WAS AND WASN'T TESTED
   host, and a wrong key is explained.
   Also: access control, the host's session logic and the virtual-controller event translation, and
   the app's Join > Allow flow opening the player window by itself.
+  Tested for title cards: reading Skraper / EmulationStation / ES-DE / Batocera / RetroArch art
+  (the phone and the computer give the same answers), the card in the packaged Linux app on a
+  virtual screen, and the phone's card in an Android emulator with a playing clip, all with made-up
+  pictures. The ScreenScraper download was tested against a pretend ScreenScraper only.
   Tested for queue and friends: friends-first matching, priority, friends-only, mutual adds, the
   online list and calls (server, Android core and desktop app against the real matchmaker), the
   desktop Play/hotkey flow with a pretend RetroArch, and the RetroArch commands against a

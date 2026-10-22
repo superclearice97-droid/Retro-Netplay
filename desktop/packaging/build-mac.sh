@@ -16,7 +16,14 @@ PLAYER_PYTHON="${PLAYER_PYTHON:-$(brew --prefix)/bin/python3}" sh "$HERE/packagi
 
 "$APY" -m pip install --quiet pyinstaller==6.11.1 pygame==2.6.1 pillow==11.0.0
 mkdir -p "$WORK/notices"
-cp "$ROOT/LICENSE" "$ROOT/NOTICE.md" "$ROOT/PRIVACY.md" "$ROOT/TERMS.md" "$WORK/notices/"
+cp "$ROOT/LICENSE" "$ROOT/NOTICE.md" "$ROOT/PRIVACY.md" "$ROOT/TERMS.md" "$ROOT/design/THIRD-PARTY-DESIGN.txt" "$WORK/notices/"
+"$APY" - "$WORK/notices" <<'PY'    # Pillow's licence (it covers the image libraries inside its wheel too)
+import importlib.metadata as m, shutil, sys
+d = m.distribution("pillow")
+for f in d.files or []:
+    if "licen" in str(f).lower() and not str(f).endswith("/"):
+        shutil.copy(d.locate_file(f), sys.argv[1] + "/Pillow-LICENSE.txt")
+PY
 "$APY" -m PyInstaller --noconfirm --clean --windowed --name Retro-Netplay --osx-bundle-identifier net.netplay.retro-netplay \
   --distpath "$WORK/dist" --workpath "$WORK/build" --specpath "$WORK" \
   --add-data "$HERE/icon-256.png:." --add-data "$HERE/sounds:sounds" --add-data "$WORK/notices:notices" \

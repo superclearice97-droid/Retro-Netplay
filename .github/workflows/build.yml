@@ -195,6 +195,19 @@ jobs:
           python-version: "3.12"
       - name: Build the app with the player inside
         run: APP_PYTHON=python3 PLAYER_PYTHON="$(brew --prefix)/bin/python3" sh desktop/packaging/build-mac.sh
+      - name: (diagnosis) where the packaged player stops when it loads SDL
+        run: |
+          P="$PWD/pk/Retro-Netplay.app/Contents/Resources/player"
+          mkdir -p pk && ditto -x -k dist/Retro-Netplay-mac-arm64.zip pk
+          echo "== Homebrew's own Python loading the same SDL (outside the bundle)"
+          perl -e 'alarm 30; exec @ARGV' "$(brew --prefix)/bin/python3" -c "import os; os.environ['PYSDL2_DLL_PATH']='$(brew --prefix)/lib'; import sdl2, sdl2.sdlttf; print('loaded', sdl2.SDL_GetRevision())" || echo "(failed or hung: $?)"
+          echo "== the bundled player"
+          DYLD_PRINT_LIBRARIES=1 "$P/Retro-Netplay-Player" --check > diag.log 2>&1 &
+          pid=$!; sleep 25
+          if kill -0 $pid 2>/dev/null; then sample $pid 3 -file sample.txt >/dev/null 2>&1; kill -9 $pid; echo "(it hung)"; fi
+          tail -40 diag.log
+          echo "== native stack of the main thread"
+          [ -f sample.txt ] && sed -n '/Call graph:/,/Total number in stack/p' sample.txt | head -80 || true
       - name: The packaged player starts, links are registered, licences are inside
         run: |
           mkdir -p pk && ditto -x -k dist/Retro-Netplay-mac-arm64.zip pk
@@ -202,8 +215,9 @@ jobs:
           codesign --verify --deep --strict "$A"
           plutil -extract CFBundleURLTypes.0.CFBundleURLSchemes.0 raw "$A/Contents/Info.plist" | grep -qx netplay
           out="$(NETPLAY_TRACE_AFTER=60 GST_DEBUG=2 "$A/Contents/Resources/player/Retro-Netplay-Player" --check 2>&1 || true)"; echo "$out"
-          echo "$out" | grep -q "\[OK\] webrtcbin" && echo "$out" | grep -q "\[OK\] window and controllers" \
-            && echo "$out" | grep -q "video decoder: vtdec"
+          for want in "\[OK\] webrtcbin" "\[OK\] window and controllers" "video decoder: vtdec"; do
+            echo "$out" | grep -q "$want" || { echo "missing: $want"; exit 1; }
+          done
           n="$(ls "$A/Contents/Resources/player/licenses" | wc -l)"; echo "licence files in the player: $n"; [ "$n" -ge 10 ]
       - name: The packaged player, end to end against the real host (this Mac's Homebrew GStreamer hosts)
         run: NETPLAY_PLAYER="$PWD/pk/Retro-Netplay.app/Contents/Resources/player/Retro-Netplay-Player" "$(brew --prefix)/bin/python3" desktop/tests/test_native_guest.py

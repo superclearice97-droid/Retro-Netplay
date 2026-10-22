@@ -295,6 +295,62 @@ def checklist(cfg, g, ncontrollers=None):
 _own_cache = {}
 
 
+MEMORY_REPORT = CONFIG_PATH.parent / "memory-report.txt"
+
+
+def log_memory(text):
+    """Add to memory-report.txt: what was stopped for using too much memory (for the player to send us)."""
+    try:
+        MEMORY_REPORT.parent.mkdir(parents=True, exist_ok=True)
+        with open(MEMORY_REPORT, "a", encoding="utf-8") as f:
+            f.write(f"=== {time.strftime('%Y-%m-%d %H:%M:%S')}\n{text}\n\n")
+    except OSError:
+        pass
+
+
+def check_stopped(what, cmd, output):
+    """A check went over runtime.CHECK_MEMORY_MB and was stopped: note it, and say so in the setup check."""
+    log_memory(f"{what} used more than {runtime.CHECK_MEMORY_MB} MB of memory and was stopped.\n"
+               f"Command: {' '.join(map(str, cmd))}\nIts last output:\n{output[-3000:]}")
+    return (f"[X ] {what} used more than {runtime.CHECK_MEMORY_MB // 1024} GB of memory, so it was stopped "
+            f"(details in {MEMORY_REPORT}).")
+
+
+def watch_memory(limit_mb=3072):
+    """If this app ever uses more than limit_mb (it normally needs about 100 MB), write where each part of it was to
+    memory-report.txt and quit, before the computer runs out of memory. The next start offers the report. (Linux)"""
+    if not os.path.isdir("/proc"):
+        return
+
+    def run():
+        while True:
+            time.sleep(1)
+            mb = runtime.rss_mb(os.getpid())
+            if mb > limit_mb:
+                break
+        import collections, faulthandler, gc
+        try:
+            MEMORY_REPORT.parent.mkdir(parents=True, exist_ok=True)
+            with open(MEMORY_REPORT, "a", encoding="utf-8") as f:
+                f.write(f"=== {time.strftime('%Y-%m-%d %H:%M:%S')}\nRetro-Netplay used {mb} MB of memory and stopped itself.\n")
+                for q in runtime.family(os.getpid())[1:]:
+                    try:
+                        with open(f"/proc/{q}/cmdline", "rb") as c:
+                            line = c.read().replace(b"\0", b" ").decode(errors="replace").strip()
+                    except OSError:
+                        line = "?"
+                    f.write(f"Program it started: {runtime.rss_mb(q)} MB  {line[:300]}\n")
+                f.write("Where each part of the app was:\n")
+                f.flush()
+                faulthandler.dump_traceback(f, all_threads=True)
+                kinds = collections.Counter(type(o).__name__ for o in gc.get_objects())
+                f.write("Most common Python objects: " + ", ".join(f"{k} {n}" for k, n in kinds.most_common(15)) + "\n\n")
+        except OSError:
+            pass
+        os._exit(3)
+    threading.Thread(target=run, daemon=True).start()
+
+
 def stream_doctor():
     """-> (ok, full report text). Asks the computer's own Python (which has GStreamer) to check streaming."""
     if platform.system() != "Linux":
@@ -302,9 +358,12 @@ def stream_doctor():
     py = runtime.host_python()
     if not py:
         return False, "Hosting a stream needs Python 3 and GStreamer on this computer. You can still join a friend's stream."
+    cmd = [py, str(runtime.host_script()), "--doctor"]
     try:
-        r = subprocess.run([py, str(runtime.host_script()), "--doctor"], capture_output=True, text=True, timeout=25)
-        return r.returncode == 0, (r.stdout or r.stderr or "").strip()
+        rc, out, err = runtime.run_capped(cmd, 25)
+        if rc is None:
+            return False, check_stopped("The streaming check", cmd, out + err)
+        return rc == 0, (out or err or "").strip()
     except (OSError, subprocess.SubprocessError) as e:
         return False, f"Couldn't check streaming tools ({e})"
 
@@ -336,8 +395,10 @@ def guest_ready(refresh=False):
         _guest_cache["cmd"] = cmds[0] if cmds else []
         for cmd in cmds:
             try:
-                r = subprocess.run(cmd + ["--check"], capture_output=True, text=True, timeout=30)
-                ok, report = r.returncode == 0, (r.stdout or r.stderr or "").strip()
+                rc, out, err = runtime.run_capped(cmd + ["--check"], 30)
+                ok, report = rc == 0, (out or err or "").strip()
+                if rc is None:
+                    report = check_stopped("The player window's check", cmd + ["--check"], out + err)
             except (OSError, subprocess.SubprocessError) as e:
                 ok, report = False, f"Couldn't check the player ({e})"
             if ok:
@@ -1165,6 +1226,7 @@ def run_gui():
     if instance.hand_over(sys.argv[1:]):
         return            # the app is already open: it got the link (or just came to the front)
     runtime.restore_child_env()
+    watch_memory()
     import tkinter as tk
     from tkinter import filedialog, messagebox, simpledialog, ttk
 
@@ -2622,6 +2684,23 @@ def run_gui():
     else:
         menu_entry()
         start_background()
+    try:
+        seen = MEMORY_REPORT.stat().st_mtime
+    except OSError:
+        seen = 0
+    if seen > cfg.get("memory_report_seen", 0):      # something was stopped for using too much memory: offer the report
+        cfg["memory_report_seen"] = seen
+        save_cfg(cfg)
+
+        def copy_report():
+            root.clipboard_clear()
+            root.clipboard_append(MEMORY_REPORT.read_text(encoding="utf-8", errors="replace")[-20000:])
+            toasts.show("Report copied", "Paste it into your message.", [("OK", lambda: None, False)], timeout=8, key="copied")
+        root.after(1200, lambda: toasts.show(
+            "Stopped for using too much memory", "Retro-Netplay or one of its checks used too much memory, so it was "
+            "stopped before your computer ran out. Send us the report so we can fix it.",
+            [("Open report", lambda: open_path(MEMORY_REPORT), True), ("Copy report", copy_report, False)],
+            timeout=90, key="memory"))
     # for automatic screenshots of the packaged build: NETPLAY_SHOW=friends|settings|controllers
     show = os.environ.get("NETPLAY_SHOW", "")
     if show == "streamcheck":     # Streaming check opened from Settings (the smoke test clicks its Close button)

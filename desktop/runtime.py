@@ -2,7 +2,10 @@
 optionally inside an AppImage). Keeps every path and child process right in both cases."""
 import os
 import shutil
+import signal
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 FROZEN = bool(getattr(sys, "frozen", False))
@@ -69,6 +72,66 @@ def guest_commands():
         if py and script.exists():
             out.append([py, str(script)])
     return out
+
+
+CHECK_MEMORY_MB = 2048     # more than any of the app's checks needs (they use well under 100 MB)
+
+
+def rss_mb(pid):
+    """Memory a process uses right now, in MB (Linux; 0 elsewhere or when it's gone)."""
+    try:
+        with open(f"/proc/{pid}/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) // 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return 0
+
+
+def family(pid):
+    """pid and every process it started (Linux)."""
+    kids = {}
+    for d in os.listdir("/proc"):
+        if d.isdigit():
+            try:
+                with open(f"/proc/{d}/stat") as f:
+                    ppid = int(f.read().rsplit(")", 1)[1].split()[1])
+            except (OSError, ValueError, IndexError):
+                continue
+            kids.setdefault(ppid, []).append(int(d))
+    out, todo = [], [pid]
+    while todo:
+        p = todo.pop()
+        out.append(p)
+        todo += kids.get(p, [])
+    return out
+
+
+def run_capped(cmd, timeout, limit_mb=None):
+    """Run one of the app's checks like subprocess.run(capture_output=True, text=True, timeout=...), but stop it if
+    it (with what it started) uses more than limit_mb of memory: a check gone wrong must not use up the computer's
+    memory (CHECK_MEMORY_MB unless limit_mb is given). -> (returncode, stdout, stderr); returncode is None when it was
+    stopped for memory."""
+    limit_mb = limit_mb or CHECK_MEMORY_MB
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+    end = time.monotonic() + timeout
+    while True:
+        try:
+            out, err = p.communicate(timeout=0.25)
+            return p.returncode, out, err
+        except subprocess.TimeoutExpired:
+            pass
+        over = os.path.isdir("/proc") and sum(rss_mb(q) for q in family(p.pid)) > limit_mb
+        if over or time.monotonic() > end:
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except (OSError, AttributeError):        # (Windows: no process groups)
+                p.kill()
+            out, err = p.communicate()
+            if not over:
+                raise subprocess.TimeoutExpired(cmd, timeout, out, err)
+            return None, out, err
 
 
 def icon_file():

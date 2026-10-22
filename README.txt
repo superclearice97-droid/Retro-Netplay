@@ -176,6 +176,9 @@ WHAT WAS AND WASN'T TESTED
   slot choice, wrong keys are refused, the host's real error is shown, old and new apps never pair, and
   the stream also works through a real TURN relay (coturn) with the matchmaker's short-lived password.
   The same test runs against the PACKAGED player from the Linux download (both ways it can start).
+  It also runs against the player inside the Mac download on GitHub's Apple Silicon Mac (a virtual
+  machine): video decoded by macOS's VideoToolbox, controller, slots, relay and errors all work there;
+  it managed about 40 frames a second while also running the host, so real-Mac speed is unknown.
   The phone app's own player in an Android emulator against the REAL host: the video is decoded by
   Android's own decoder, the test's button presses arrive at the host as Player 2, leaving tells the
   host, and a wrong key is explained.

@@ -303,8 +303,12 @@ class Card:
             box = load(info["box"]) if info.get("box") else None
             if box is not None:
                 stops = palette_from(box, THEMES.get(game.get("system"), THEMES["ps2"]))
-            self._build_images(box, stops)
-        else:
+            try:
+                self._build_images(box, stops)
+            except Exception:       # pictures can't be shown here: the details on a plain background instead
+                self.photo, self.has_box = None, False
+                self.c.delete("bg")
+        if self.photo is None:
             self.c.configure(bg="#%02x%02x%02x" % stops[1])
         self._build_items(system_label)
         self.sound("open")
@@ -406,7 +410,7 @@ class Card:
         if not getattr(self, "has_box", False):
             Icon(self.c, "image", 125 * s, 240 * s, 60 * s, SOFT, 2.0 * s)
             self._text(155, 316, "No box art yet", 10, SOFT, anchor="n")
-        if PICTURES and not self.slides.imgs:
+        if self.photo is not None and not self.slides.imgs:
             Icon(self.c, "film", 580 * s, 220 * s, 60 * s, SOFT, 2.0 * s)
             self._text(610, 296, "No screenshots yet. Run Skraper on your game folders, or let RetroArch download "
                                  "thumbnails, and the game's art and details appear here.", 10, SOFT, anchor="n", width=440)

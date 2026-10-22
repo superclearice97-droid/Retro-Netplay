@@ -1,5 +1,7 @@
 package net.netplay.app;
 
+import android.animation.Animator;
+import android.animation.AnimatorListenerAdapter;
 import android.animation.ValueAnimator;
 import android.content.Context;
 import android.graphics.Canvas;
@@ -13,6 +15,7 @@ import android.view.animation.LinearInterpolator;
 /**
  * Draws one of the Icons as strokes and can draw it on, so a tap or a state change is something you watch happen.
  * play(): draw on once. loop(true): draw on, then wipe off, again and again (use for work in progress).
+ * move(): the icon's own motion (Lucide icons, ported from lucide-animated), or draw on when it has none.
  */
 final class IconView extends View {
     private float[][] icon;
@@ -23,6 +26,8 @@ final class IconView extends View {
     private float progress = 1f, erase = 0f;
     private ValueAnimator anim;
     private float strokeUnits = 1.75f;
+    private float[] motion;
+    private float motionT = -1f;
 
     IconView(Context c, float[][] icon, int color) {
         super(c);
@@ -63,7 +68,51 @@ final class IconView extends View {
 
     @Override protected void onSizeChanged(int w, int h, int ow, int oh) { rebuild(); }
 
-    private void stop() { if (anim != null) { anim.cancel(); anim = null; } }
+    private void stop() { if (anim != null) { anim.cancel(); anim = null; } motionT = -1f; }
+
+    /** Play the icon's motion once (see Icons: seconds, parts, strokes, origin, keyframes). */
+    void move() {
+        float[] m = Icons.motion(icon);
+        if (m == null) { play(); return; }
+        stop();
+        motion = m;
+        progress = 1f; erase = 0f;
+        anim = ValueAnimator.ofFloat(0f, 1f);
+        anim.setDuration((long) (m[0] * 1000));
+        anim.setInterpolator(new LinearInterpolator());
+        anim.addUpdateListener(a -> { motionT = (float) a.getAnimatedValue(); invalidate(); });
+        anim.addListener(new AnimatorListenerAdapter() {
+            @Override public void onAnimationEnd(Animator a) { motionT = -1f; invalidate(); }
+        });
+        anim.start();
+    }
+
+    /** -> per stroke {dx, dy, rotate, opacity, originX, originY} at time u (0-1), or null when it doesn't move. */
+    private float[][] pose(float u) {
+        float[][] out = new float[paths.length][];
+        int i = 2;
+        int parts = (int) motion[1];
+        for (int p = 0; p < parts; p++) {
+            int n = (int) motion[i++];
+            int[] strokes = new int[n];
+            for (int k = 0; k < n; k++) strokes[k] = (int) motion[i++];
+            float ox = motion[i++], oy = motion[i++];
+            int keys = (int) motion[i++];
+            float[] v = {motion[i + 1], motion[i + 2], motion[i + 3], motion[i + 4]};
+            for (int k = 0; k + 1 < keys; k++) {
+                int a = i + k * 5, b = a + 5;
+                if (u <= motion[b] || k + 2 == keys) {
+                    float f = motion[b] == motion[a] ? 0f : Math.max(0f, Math.min(1f, (u - motion[a]) / (motion[b] - motion[a])));
+                    f = f * f * (3 - 2 * f);
+                    for (int c = 0; c < 4; c++) v[c] = motion[a + 1 + c] + (motion[b + 1 + c] - motion[a + 1 + c]) * f;
+                    break;
+                }
+            }
+            i += keys * 5;
+            for (int s : strokes) if (s < out.length) out[s] = new float[]{v[0], v[1], v[2], v[3], ox, oy};
+        }
+        return out;
+    }
 
     /** Draw the strokes on, one after another. */
     void play() {
@@ -98,6 +147,21 @@ final class IconView extends View {
         float s = Math.min(getWidth(), getHeight()) / 24f;
         paint.setStrokeWidth(strokeUnits * s);
         int n = paths.length;
+        if (motionT >= 0f && motion != null) {
+            float[][] pose = pose(motionT);
+            float ox = (getWidth() - 24f * s) / 2f, oy = (getHeight() - 24f * s) / 2f;
+            for (int i = 0; i < n; i++) {
+                float[] p = pose[i];
+                if (p == null) { c.drawPath(paths[i], paint); continue; }
+                if (p[3] < 0.5f) continue;
+                c.save();
+                c.translate(p[0] * s, p[1] * s);
+                c.rotate(p[2], ox + p[4] * s, oy + p[5] * s);
+                c.drawPath(paths[i], paint);
+                c.restore();
+            }
+            return;
+        }
         for (int i = 0; i < n; i++) {
             float start = n > 1 ? 0.5f * i / (n - 1) : 0f;
             float lp = Math.max(0f, Math.min(1f, (progress - start) / (n > 1 ? 0.5f : 1f)));

@@ -16,6 +16,7 @@ import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import net.netplay.core.GameInfo;
 import net.netplay.core.Games;
 import net.netplay.core.Json;
 import net.netplay.core.Library;
@@ -24,6 +25,7 @@ import net.netplay.core.PortMap;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -379,24 +381,58 @@ final class Setup {
         int count;
     }
 
+    /** Art in the folders (gamelist.xml files and media folders that Skraper or EmulationStation wrote). */
+    static final class ArtIndex {
+        final List<Map<String, String>> entries = new ArrayList<>();
+        final List<GameInfo.Media> media = new ArrayList<>();
+        final Map<String, String> uris = new HashMap<>();     // normalized file path -> content URI
+    }
+    private volatile ArtIndex lastArt;
+
     /** Walk every chosen folder through the storage-access framework. Runs off the main thread. */
     List<Map<String, Object>> scan(List<Question> questionsOut) {
         Map<String, Map<String, Object>> found = new LinkedHashMap<>();
         Map<String, Question> qs = new LinkedHashMap<>();
         Map<String, Object> ans = answers();
-        int[] budget = {20000};
+        ArtIndex art = new ArtIndex();
+        int[] budget = {60000};
         for (String s : folders()) {
             try {
                 Uri tree = Uri.parse(s);
-                walk(tree, DocumentsContract.getTreeDocumentId(tree), 0, found, qs, ans, budget);
+                walk(tree, DocumentsContract.getTreeDocumentId(tree), 0, found, qs, ans, budget, art);
             } catch (Throwable ignored) { } // one bad folder or file never stops the app
         }
+        for (Map<String, Object> g : found.values()) attachArt(g, art);
+        lastArt = art;
         questionsOut.addAll(qs.values());
         return new ArrayList<>(found.values());
     }
 
+    /** Give a game the art and details found for it (kept with the game; nothing is downloaded). */
+    static void attachArt(Map<String, Object> g, ArtIndex art) {
+        Object rom = g.get("rom");
+        Map<String, Object> info = GameInfo.collect(rom instanceof String ? (String) rom : "", (String) g.get("name"),
+                art.entries, art.media, p -> art.uris.get(GameInfo.norm(p)));
+        String desc = (String) info.get("desc");
+        if (desc.length() > 1500) info.put("desc", desc.substring(0, 1500) + "...");
+        boolean any = !((String) info.get("box")).isEmpty() || !((List<?>) info.get("screens")).isEmpty()
+                || !((String) info.get("video")).isEmpty() || !desc.isEmpty() || !((String) info.get("title")).isEmpty();
+        if (any) g.put("art", info); else g.remove("art");
+    }
+
+    private void readGamelist(Uri tree, String id, String folderDocId, ArtIndex art) {
+        try (InputStream in = act.getContentResolver().openInputStream(DocumentsContract.buildDocumentUriUsingTree(tree, id))) {
+            if (in == null) return;
+            java.io.ByteArrayOutputStream b = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[65536];
+            int n;
+            while ((n = in.read(buf)) > 0 && b.size() < 20 * 1024 * 1024) b.write(buf, 0, n);
+            art.entries.addAll(GameInfo.parseGamelist(b.toString("UTF-8"), Library.pathFromDocId(folderDocId)));
+        } catch (Exception ignored) { } // an unreadable gamelist only means no details
+    }
+
     private void walk(Uri tree, String docId, int depth, Map<String, Map<String, Object>> found, Map<String, Question> qs,
-                      Map<String, Object> ans, int[] budget) {
+                      Map<String, Object> ans, int[] budget, ArtIndex art) {
         if (depth > 6 || budget[0] <= 0) return;
         Uri kids = DocumentsContract.buildChildDocumentsUriUsingTree(tree, docId);
         List<String[]> entries = new ArrayList<>();
@@ -413,10 +449,18 @@ final class Setup {
             String id = e[0], name = e[1], mime = e[2];
             if (name == null || name.startsWith(".")) continue;
             if (DocumentsContract.Document.MIME_TYPE_DIR.equals(mime)) {
-                walk(tree, id, depth + 1, found, qs, ans, budget);
+                walk(tree, id, depth + 1, found, qs, ans, budget, art);
                 continue;
             }
             String ext = Library.ext(name);
+            if (name.equalsIgnoreCase("gamelist.xml")) { readGamelist(tree, id, docId, art); continue; }
+            if (GameInfo.IMAGE_EXTS.contains(ext) || GameInfo.VIDEO_EXTS.contains(ext)) {
+                String uri = DocumentsContract.buildDocumentUriUsingTree(tree, id).toString();
+                art.uris.put(GameInfo.norm(Library.pathFromDocId(id)), uri);
+                String[] k = GameInfo.mediaKind((folderNames.isEmpty() ? "" : folderNames.get(folderNames.size() - 1)) + "/" + name);
+                if (k != null) art.media.add(new GameInfo.Media(uri, k[0], k[1]));
+                continue;
+            }
             if (!Library.EXT_SYSTEMS.containsKey(ext)) continue;
             byte[] head = (ext.equals(".iso") || ext.equals(".bin")) ? readHead(DocumentsContract.buildDocumentUriUsingTree(tree, id)) : null;
             Library.Guess g = Library.classify(name, folderNames, head, siblings);
@@ -472,8 +516,10 @@ final class Setup {
         catch (RuntimeException ignored) { }
         List<Map<String, Object>> out = new ArrayList<>();
         Set<String> keys = new HashSet<>();
+        ArtIndex art = lastArt;
         for (Map<String, Object> g : games) {
             if (Boolean.TRUE.equals(g.get("auto"))) continue;
+            if (art != null) attachArt(g, art);      // games added by hand get art too (matched by name)
             out.add(g);
             keys.add(Games.key((String) g.get("system"), (String) g.get("name")));
         }

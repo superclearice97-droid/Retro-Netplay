@@ -108,7 +108,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq python3-gi gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 gir1.2-gst-plugins-bad-1.0 \
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly \
-            gstreamer1.0-nice >/dev/null
+            gstreamer1.0-nice gstreamer1.0-tools >/dev/null
       - name: Build the app and its player test
         run: gradle -p android assembleDebug assembleDebugAndroidTest --no-daemon
       - name: Let the emulator use the processor's virtualisation (KVM)
@@ -127,6 +127,13 @@ jobs:
             adb install -r -t android/app/build/outputs/apk/debug/app-debug.apk
             adb install -r -t android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
             /usr/bin/python3 desktop/tests/test_android_player.py
+            /usr/bin/python3 desktop/tests/test_android_card.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-card-screens
+          path: android-card/
+          if-no-files-found: ignore
 
   windows:
     # the Windows download: the app plus the player window with its own GStreamer (from MSYS2) and SDL.
@@ -157,7 +164,7 @@ jobs:
           python -m PyInstaller --noconfirm --clean --windowed --name Retro-Netplay `
             --add-data "desktop/icon-256.png;." --add-data "desktop/sounds;sounds" --add-data "notices;notices" `
             --hidden-import server --hidden-import sessions --hidden-import stream_signal --hidden-import wizard `
-            --hidden-import social --hidden-import pygame --hidden-import titlecard --hidden-import gameinfo --hidden-import PIL.ImageTk `
+            --hidden-import social --hidden-import pygame --hidden-import titlecard --hidden-import gameinfo --hidden-import PIL.ImageTk --hidden-import PIL._tkinter_finder `
             --exclude-module stream_host --exclude-module stream_guest --exclude-module portal_capture --exclude-module gi `
             desktop/app.py
           Copy-Item -Recurse player-out/Retro-Netplay-Player dist/Retro-Netplay/_internal/player

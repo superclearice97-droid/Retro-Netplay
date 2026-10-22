@@ -381,12 +381,13 @@ public class MainActivity extends Activity implements Hub.Ui {
         LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(dp(22), dp(22));
         ip.leftMargin = dp(8);
         row.addView(icon, ip);
-        row.setContentDescription(g.get("name") + ", " + s.label + ". Tap to play and join the queue. Press and hold for more.");
+        row.setContentDescription(g.get("name") + ", " + s.label + ". Tap for its title card and Play. Press and hold for more.");
         row.setOnClickListener(v -> {
             icon.play();
             status.setText("");
-            hub.play(this, g, prefs.getBoolean("auto_queue", true));
+            startActivity(GameActivity.open(this, g));
         });
+        row.setOnFocusChangeListener((v, has) -> { if (has && !v.isInTouchMode()) Sfx.play(this, "move"); });
         row.setOnLongClickListener(v -> { gameOptions(g); return true; });
         return row;
     }
@@ -438,7 +439,7 @@ public class MainActivity extends Activity implements Hub.Ui {
         st[3] = InkHero.READY;
         note[3] = parsec ? "Parsec" : "built in";
         checkHelp[3] = parsec ? "Parsec: you can join another player's stream. A phone can't host one."
-                : "PS2, PS3 and GameCube games stream from a friend's computer. When you match, the stream opens in your browser.";
+                : "PS2, PS3 and GameCube games stream from a friend's computer. When you match, the stream opens in the app's own player.";
         hero.setChecks(new String[]{"Server", "Games", "Emulator", "Stream"}, note, st);
     }
 
@@ -724,6 +725,8 @@ public class MainActivity extends Activity implements Hub.Ui {
         box.addView(canHost, fill(2));
         box.addView(useParsec, fill(2));
         box.addView(useRelay, fill(2));
+        final InkCheck sounds = new InkCheck(this, "Interface sounds (title card, match found)", prefs.getBoolean("sounds", true));
+        box.addView(sounds, fill(2));
         final Dialog[] me = new Dialog[1];
         InkButton again = new InkButton(this, Icons.CHECK, "Run setup again", false);
         again.onPress(() -> { if (me[0] != null) me[0].dismiss(); setup.start(); });
@@ -738,6 +741,7 @@ public class MainActivity extends Activity implements Hub.Ui {
                     .putBoolean("auto_queue", autoQueue.isOn())
                     .putBoolean("use_parsec", useParsec.isOn())
                     .putBoolean("use_relay", useRelay.isOn())
+                    .putBoolean("sounds", sounds.isOn())
                     .putBoolean("auto_ports", autoPorts.isOn()).apply();
             hub.setName(name.getText().toString());
             if (serverChanged) hub.restartPresence();

@@ -33,7 +33,7 @@ python3 -m PyInstaller --noconfirm --clean --windowed --name Retro-Netplay \
   --add-data "$WORK/sdlpy/sdl2dll:hostpy/sdl2dll" \
   --add-data "$WORK/notices:notices" \
   --hidden-import server --hidden-import sessions --hidden-import stream_signal --hidden-import wizard --hidden-import social \
-  --hidden-import pygame --hidden-import titlecard --hidden-import gameinfo --hidden-import PIL.ImageTk \
+  --hidden-import pygame --hidden-import titlecard --hidden-import gameinfo --hidden-import PIL.ImageTk --hidden-import PIL._tkinter_finder \
   --exclude-module stream_host --exclude-module stream_guest --exclude-module portal_capture --exclude-module gi \
   "$HERE/app.py"
 

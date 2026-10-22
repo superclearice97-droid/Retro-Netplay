@@ -201,6 +201,8 @@ jobs:
           mkdir -p pk && ditto -x -k dist/Retro-Netplay-mac-arm64.zip pk
           echo "== Homebrew's own Python loading the same SDL (outside the bundle)"
           perl -e 'alarm 30; exec @ARGV' "$(brew --prefix)/bin/python3" -c "import os; os.environ['PYSDL2_DLL_PATH']='$(brew --prefix)/lib'; import sdl2, sdl2.sdlttf; print('loaded', sdl2.SDL_GetRevision())" || echo "(failed or hung: $?)"
+          echo "== GObject type files in the bundle"
+          find "$P/_internal" -name '*.typelib' | sed 's|.*/||' | sort | tr '\n' ' '; echo
           echo "== the bundled player"
           DYLD_PRINT_LIBRARIES=1 "$P/Retro-Netplay-Player" --check > diag.log 2>&1 &
           pid=$!; sleep 25

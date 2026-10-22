@@ -570,7 +570,8 @@ def available_elements():
         gi.require_version("GstVideo", "1.0")
         from gi.repository import Gst
         Gst.init(None)
-    except Exception:
+    except Exception as e:
+        log(f"GStreamer can't be used here: {e}")
         return None
     names = {n for n, _ in NEEDED} | set(DECODERS)
     return {n for n in names if Gst.ElementFactory.find(n)}

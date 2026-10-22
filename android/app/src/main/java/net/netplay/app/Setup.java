@@ -402,10 +402,39 @@ final class Setup {
                 walk(tree, DocumentsContract.getTreeDocumentId(tree), 0, found, qs, ans, budget, art);
             } catch (Throwable ignored) { } // one bad folder or file never stops the app
         }
+        addDownloaded(ArtDownload.root(act), art);       // what was downloaded from ScreenScraper (ArtDownload)
         for (Map<String, Object> g : found.values()) attachArt(g, art);
         lastArt = art;
         questionsOut.addAll(qs.values());
         return new ArrayList<>(found.values());
+    }
+
+    /** The app's own art folder (root/<system>/gamelist.xml + media/<kind>/), read like any Skraper output. */
+    static void addDownloaded(java.io.File root, ArtIndex art) {
+        java.io.File[] systems = root.listFiles();
+        if (systems == null) return;
+        for (java.io.File sd : systems) {
+            if (!sd.isDirectory()) continue;
+            java.io.File gl = new java.io.File(sd, "gamelist.xml");
+            if (gl.isFile() && gl.length() < 20 * 1024 * 1024) {
+                try {
+                    art.entries.addAll(GameInfo.parseGamelist(new String(net.netplay.core.ScreenScraper.readFile(gl),
+                            java.nio.charset.StandardCharsets.UTF_8), sd.getAbsolutePath()));
+                } catch (Exception ignored) { } // an unreadable gamelist only means no details
+            }
+            java.io.File[] kinds = new java.io.File(sd, "media").listFiles();
+            if (kinds == null) continue;
+            for (java.io.File kd : kinds) {
+                java.io.File[] files = kd.listFiles();
+                if (files == null) continue;
+                for (java.io.File f : files) {
+                    String path = f.getAbsolutePath();
+                    art.uris.put(GameInfo.norm(path), path);
+                    String[] k = GameInfo.mediaKind(kd.getName() + "/" + f.getName());
+                    if (k != null) art.media.add(new GameInfo.Media(path, k[0], k[1]));
+                }
+            }
+        }
     }
 
     /** Give a game the art and details found for it (kept with the game; nothing is downloaded). */
@@ -493,6 +522,7 @@ final class Setup {
             game.put("name", clean);
             game.put("system", system);
             game.put("rom", path);
+            game.put("rom_uri", DocumentsContract.buildDocumentUriUsingTree(tree, id).toString());   // (for the art download)
             game.put("auto", true);
             found.put(key, game);
         }

@@ -82,7 +82,9 @@ public final class GameInfo {
             if (s.equals("..")) { if (!parts.isEmpty()) parts.remove(parts.size() - 1); continue; }
             parts.add(s);
         }
-        return (p.startsWith("/") ? "/" : "") + String.join("/", parts).toLowerCase(Locale.ROOT);
+        StringBuilder b = new StringBuilder(p.startsWith("/") ? "/" : "");     // (String.join needs Android 8)
+        for (int i = 0; i < parts.size(); i++) b.append(i > 0 ? "/" : "").append(parts.get(i));
+        return b.toString().toLowerCase(Locale.ROOT);
     }
 
     public static String stem(String path) {

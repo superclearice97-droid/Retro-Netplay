@@ -727,6 +727,9 @@ public class MainActivity extends Activity implements Hub.Ui {
         box.addView(useRelay, fill(2));
         final InkCheck sounds = new InkCheck(this, "Interface sounds (title card, match found)", prefs.getBoolean("sounds", true));
         box.addView(sounds, fill(2));
+        InkButton art = new InkButton(this, Icons.DOWNLOAD, "Game art (ScreenScraper)", false);
+        art.onPress(() -> ArtDownload.open(this, hub.games(), this::hubChanged));
+        box.addView(art, fill(12));
         final Dialog[] me = new Dialog[1];
         InkButton again = new InkButton(this, Icons.CHECK, "Run setup again", false);
         again.onPress(() -> { if (me[0] != null) me[0].dismiss(); setup.start(); });

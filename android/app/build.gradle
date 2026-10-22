@@ -11,6 +11,18 @@ android {
         versionName "1.0"
         // (automatic tests: plays a real stream in an emulator, see androidTest/PlayerCheck.java)
         testInstrumentationRunner "net.netplay.app.PlayerCheck"
+        // the app's ScreenScraper developer ID for the optional art download, from the project's CI secrets
+        // (SS_DEVID, SS_DEVPASSWORD); empty in other builds, and then the app says the download isn't available
+        def q = { String v -> '"' + (v ?: '').replace('\\', '\\\\').replace('"', '\\"') + '"' }
+        buildConfigField "String", "SS_DEVID", q(System.getenv('SS_DEVID'))
+        buildConfigField "String", "SS_DEVPASSWORD", q(System.getenv('SS_DEVPASSWORD'))
+    }
+    buildFeatures { buildConfig true }
+    // CI runs lintDebug for one thing only: calls that need a newer Android than minSdk (they'd crash on older phones)
+    lint {
+        checkOnly 'NewApi'
+        checkDependencies true
+        abortOnError true
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17

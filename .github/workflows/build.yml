@@ -17,7 +17,10 @@ jobs:
         with:
           gradle-version: 8.7
       - name: Build debug APK
-        run: gradle -p android assembleDebug --no-daemon
+        env:   # the app's ScreenScraper developer ID for the art download, only if this project has one
+          SS_DEVID: ${{ secrets.SS_DEVID }}
+          SS_DEVPASSWORD: ${{ secrets.SS_DEVPASSWORD }}
+        run: gradle -p android assembleDebug lintDebug --no-daemon
       - run: cp android/app/build/outputs/apk/debug/app-debug.apk Retro-Netplay.apk
       - uses: actions/upload-artifact@v4
         with:
@@ -118,6 +121,9 @@ jobs:
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly \
             gstreamer1.0-nice gstreamer1.0-tools >/dev/null
       - name: Build the app and its player test
+        env:   # the app's ScreenScraper developer ID for the art download, only if this project has one
+          SS_DEVID: ${{ secrets.SS_DEVID }}
+          SS_DEVPASSWORD: ${{ secrets.SS_DEVPASSWORD }}
         run: gradle -p android assembleDebug assembleDebugAndroidTest --no-daemon
       - name: Let the emulator use the processor's virtualisation (KVM)
         run: |

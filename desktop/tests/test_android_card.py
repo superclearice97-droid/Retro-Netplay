@@ -63,4 +63,19 @@ print("card with a clip:", json.dumps(res), flush=True)
 check("the gameplay clip plays (looping, muted)", res.get("video") is True, raw)
 check("the card with a clip still shows the box art", res.get("box") is True, res)
 
+# 3) the ScreenScraper download on the phone, from a pretend ScreenScraper: saved in the app's own folder, given to
+#    the game the way the app does it, and shown on its card
+r = subprocess.run(["adb", "shell", "am", "instrument", "-w", "-e", "mode", "art", "net.netplay.matchmaker.test/net.netplay.app.PlayerCheck"],
+                   capture_output=True, text=True, timeout=200)
+m = re.search(r"result=(\{.*\})", r.stdout)
+res = json.loads(m.group(1)) if m else {}
+print("download:", json.dumps(res), flush=True)
+art = res.get("art") or {}
+check("download: box art and screenshot saved", sorted(res.get("saved") or []) == ["box", "screen"], r.stdout[-2000:])
+check("download: saved in the app's own private folder", f"/{APP}/files/art/gba/media/box2dfront/" in str(art.get("box", "")), art)
+check("download: the details reach the game", art.get("name") == "Downloaded Test Game" and art.get("year") == "2001"
+      and art.get("desc") == "Made up for the test.", art)
+check("download: the card shows the downloaded box art and screenshot", (res.get("card") or {}).get("box") is True
+      and (res.get("card") or {}).get("slides") == 1, res.get("card"))
+
 print("ALL PASSED" if ok else "SOME FAILED"); sys.exit(0 if ok else 1)

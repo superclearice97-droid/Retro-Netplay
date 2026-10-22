@@ -117,5 +117,73 @@ for g, user, why in [({"name": "x", "system": "gba", "rom": ""}, "quota", "quota
     except S.ScrapeError as e:
         check(f"error {why} in plain words, without the password", e.why == why and "pw" not in str(e) and "dev-secret" not in str(e), e)
 
+# ---- the phone's core (ScreenScraper.java) must agree with this, for the same answers
+import shutil, subprocess
+ROOT = os.path.join(os.path.dirname(os.path.dirname(HERE)), "android", "core", "src", "main", "java")
+jd = tempfile.mkdtemp()
+answers = {"https://neoclone.screenscraper.fr/box-us": "png", "https://neoclone.screenscraper.fr/ss-us": "png",
+           "https://neoclone.screenscraper.fr/wheel": "html", "https://neoclone.screenscraper.fr/vid": "mp4"}
+json.dump({"jeu": JEU, "answers": answers}, open(os.path.join(jd, "in.json"), "w"))
+URLS = ["https://neoclone.screenscraper.fr/x", "https://screenscraper.fr/x", "http://neoclone.screenscraper.fr/x",
+        "https://screenscraper.fr.evil.com/x", "https://evil.com/screenscraper.fr", "https://screenscraper.fr@evil.com/x", "nonsense"]
+CODES = [404, 401, 423, 403, 426, 429, 430, 431, 500]
+java = r"""
+import net.netplay.core.*;
+import java.util.*;
+public class SsCheck {
+  @SuppressWarnings("unchecked")
+  public static void main(String[] a) throws Exception {
+    System.setOut(new java.io.PrintStream(System.out, true, "UTF-8"));
+    Map<String, Object> in = Json.parseObject(new String(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(a[0])), "UTF-8"));
+    Map<String, Object> jeu = (Map<String, Object>) in.get("jeu");
+    Map<String, Object> ans = (Map<String, Object>) in.get("answers");
+    System.out.println(Json.stringify(ScreenScraper.fields(jeu)));
+    List<Object> media = new ArrayList<>();
+    for (String[] m : ScreenScraper.media(jeu)) media.add(Arrays.asList((Object[]) m));
+    System.out.println(Json.stringify(media));
+    System.out.println(ScreenScraper.query("dev-id", "dev-secret", "gba", "Sonic Battle", "Sonic Battle (USA).gba", 3000, a[1], "sam", "pw"));
+    System.out.println(ScreenScraper.query("dev-id", "dev-secret", "ps2", "Urban Reign", "", 0, "", "sam", "pw"));
+    for (String u : new String[]{@URLS@}) System.out.println(ScreenScraper.ours(u));
+    for (int c : new int[]{@CODES@}) System.out.println(ScreenScraper.why(c, "").why);
+    ScreenScraper.Http http = (url, limit) -> {
+      if (url.contains("jeuInfos.php") || url.contains("jeuRecherche.php")) return Json.stringify(Collections.singletonMap("response", Collections.singletonMap("jeu", jeu))).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+      String k = (String) ans.get(url);
+      if (k == null) throw ScreenScraper.why(404, "");
+      if (k.equals("png")) { byte[] b = new byte[108]; b[0] = (byte) 0x89; b[1] = 'P'; b[2] = 'N'; b[3] = 'G'; b[4] = 13; b[5] = 10; b[6] = 26; b[7] = 10; return b; }
+      if (k.equals("mp4")) return "\0\0\0\u0018ftypmp42".getBytes(java.nio.charset.StandardCharsets.ISO_8859_1);
+      return "<html>not a picture</html>".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    };
+    String url = ScreenScraper.query("dev-id", "dev-secret", "gba", "Sonic Battle", "Sonic Battle (USA).gba", 3000, "", "sam", "pw");
+    System.out.println(Json.stringify(ScreenScraper.scrape(url, "gba", a[2], "Sonic Battle", new java.io.File(a[3]), http, true, 0)));
+    System.out.println(Json.stringify(ScreenScraper.scrape(ScreenScraper.query("dev-id", "dev-secret", "gba", "Urban Reign", "", 0, "", "sam", "pw"),
+        "gba", "", "Urban Reign", new java.io.File(a[3]), http, false, 0)));
+    try { ScreenScraper.lookup(url, (u, l) -> { throw ScreenScraper.why(430, ""); }); } catch (ScreenScraper.ScrapeException e) { System.out.println(e.why); }
+  }
+}
+""".replace("@URLS@", ",".join(json.dumps(u) for u in URLS)).replace("@CODES@", ",".join(map(str, CODES)))
+open(os.path.join(jd, "SsCheck.java"), "w", encoding="utf-8").write(java)
+subprocess.run(["javac", "-encoding", "UTF-8", "-d", jd, "-sourcepath", ROOT, os.path.join(jd, "SsCheck.java")], check=True)
+jroot = os.path.join(jd, "art")
+got = subprocess.run(["java", "-cp", jd, "SsCheck", os.path.join(jd, "in.json"), crc, rom, jroot], capture_output=True, text=True,
+                     encoding="utf-8", check=True).stdout.splitlines()
+pf, pm = S.details(JEU)
+check("Java: the same details", json.loads(got[0]) == pf, (got[0], pf))
+check("Java: the same media, in the same order", json.loads(got[1]) == [list(m) for m in pm], (got[1], pm))
+check("Java: the same file lookup URL", got[2] == url, (got[2], url))
+check("Java: the same name lookup URL", got[3] == S.query({"name": "Urban Reign", "system": "ps2", "rom": ""}, "sam", "pw"), got[3])
+check("Java: the same rule for which addresses get the login", got[4:4 + len(URLS)] == [str(S._ours(u)).lower() for u in URLS], (got[4:11], URLS))
+w = 4 + len(URLS)
+check("Java: the same plain-words errors", got[w:w + len(CODES)] == [S._why(c, "")[0] for c in CODES], got[w:w + len(CODES)])
+check("Java: box, screenshot and clip saved, the page that isn't a picture left out", sorted(json.loads(got[w + len(CODES)])) == ["box", "screen", "video"], got)
+check("Java: a quota answer comes back as quota", got[-1] == "quota", got[-1])
+jf = gameinfo.Finder(art=jroot)
+ji, pi = jf.find(game), gameinfo.Finder().find(game)
+same = {k: ji[k] for k in ("name", "desc", "year", "developer", "publisher", "genre", "players", "rating")} == \
+       {k: pi[k] for k in ("name", "desc", "year", "developer", "publisher", "genre", "players", "rating")}
+check("Java's saved gamelist reads back the same as Python's", same, (ji, pi))
+check("Java's saved files read back: box, screenshot, clip", ji["box"].startswith(jroot) and ji["screens"] and ji["video"].startswith(jroot), ji)
+ju = gameinfo.Finder(art=jroot).find({"name": "Urban Reign", "system": "gba", "rom": ""})
+check("Java: a game with no file reads back by name, both games kept", ju["box"].endswith("urban-reign.png") and jf.find(game)["box"], ju)
+
 print("ALL PASSED" if not fails else f"{len(fails)} FAILED")
 sys.exit(1 if fails else 0)

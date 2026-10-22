@@ -1,4 +1,7 @@
-plugins { id 'java-library' }
+plugins {
+    id 'java-library'
+    id 'com.android.lint'      // so the app's lint also checks this code against the app's minSdk
+}
 java {
     sourceCompatibility = JavaVersion.VERSION_17
     targetCompatibility = JavaVersion.VERSION_17

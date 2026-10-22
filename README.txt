@@ -143,9 +143,10 @@ TITLE CARDS AND GAME ART
        there. On a phone, copy those folders along with your games, then Game folders > rescan.
   Also used: ES-DE's downloaded_media folder, Batocera/Recalbox gamelists, and the thumbnails
   RetroArch downloads (Main Menu > Online Updater > Thumbnails Updater), on the computer.
-  Built-in download (desktop, optional): Settings > Game art can download art from ScreenScraper with
-  your own account, once this version carries the app's ScreenScraper developer ID (it asks you first,
-  and says exactly what it sends; see PRIVACY.md). Until then it says it isn't available.
+  Built-in download (optional, computer and phone): Settings > Game art (or "Game art..." on a card
+  without art) downloads art from ScreenScraper with your own account, once this version carries the
+  app's ScreenScraper developer ID (it asks you first, and says exactly what it sends; see PRIVACY.md).
+  Until then it says it isn't available.
   Sounds: the app makes small sounds on the card and when a match is found; Settings > Interface
   sounds turns them off.
 
@@ -207,7 +208,8 @@ WHAT WAS AND WASN'T TESTED
   Tested for title cards: reading Skraper / EmulationStation / ES-DE / Batocera / RetroArch art
   (the phone and the computer give the same answers), the card in the packaged Linux app on a
   virtual screen, and the phone's card in an Android emulator with a playing clip, all with made-up
-  pictures. The ScreenScraper download was tested against a pretend ScreenScraper only.
+  pictures. The ScreenScraper download (computer and phone, which follow the same rules and were
+  checked to agree) was tested against a pretend ScreenScraper only, the phone's in the emulator too.
   Tested for queue and friends: friends-first matching, priority, friends-only, mutual adds, the
   online list and calls (server, Android core and desktop app against the real matchmaker), the
   desktop Play/hotkey flow with a pretend RetroArch, and the RetroArch commands against a

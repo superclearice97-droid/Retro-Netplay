@@ -168,7 +168,9 @@ def details(jeu):
     out["developer"], out["publisher"] = _text(jeu.get("developpeur")), _text(jeu.get("editeur"))
     out["players"] = _text(jeu.get("joueurs"))
     try:
-        out["rating"] = "%.2f" % (max(0.0, min(20.0, float(_text(jeu.get("note"))))) / 20)
+        r = float(_text(jeu.get("note")))
+        if r == r:
+            out["rating"] = "%.2f" % (max(0.0, min(20.0, r)) / 20)
     except ValueError:
         pass
     for g in jeu.get("genres") or []:

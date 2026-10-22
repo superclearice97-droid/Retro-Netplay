@@ -172,6 +172,13 @@ public class GameActivity extends Activity implements Hub.Ui {
             ph.setBackground(round(0x33000000, 0x66FFFFFF));
             ph.addView(new IconView(this, Icons.IMAGE, SOFT), new LinearLayout.LayoutParams(dp(34), dp(34)));
             ph.addView(Ink.text(this, "No box art", 11, false, SOFT));
+            TextView more = Ink.text(this, "GAME ART...", 11.5f, true, ACCENT);
+            more.setPadding(dp(8), dp(10), dp(8), dp(4));
+            more.setFocusable(true);
+            more.setClickable(true);
+            more.setContentDescription("Game art: where it comes from, and downloading it");
+            more.setOnClickListener(v -> ArtDownload.open(this, java.util.Collections.singletonList(game), this::reload));
+            ph.addView(more);
             ph.setMinimumHeight(dp(150));
             boxView = ph;
         }
@@ -258,6 +265,21 @@ public class GameActivity extends Activity implements Hub.Ui {
     private final Runnable keepReporting = new Runnable() {     // (for the automatic test: frames drawn so far)
         @Override public void run() { if (!isFinishing()) { report(); root.postDelayed(this, 500); } }
     };
+
+    /** After a download: open the card again with the game's new art. */
+    @SuppressWarnings("unchecked")
+    private void reload() {
+        try {
+            for (Object o : (List<Object>) Json.parse(getSharedPreferences("nm", MODE_PRIVATE).getString("games", "[]"))) {
+                if (o instanceof Map && key.equals(Hub.key((Map<String, Object>) o)) && ((Map<String, Object>) o).get("art") instanceof Map) {
+                    startActivity(open(this, (Map<String, Object>) o));
+                    overridePendingTransition(0, 0);
+                    finish();
+                    return;
+                }
+            }
+        } catch (RuntimeException ignored) { } // the card just stays as it is
+    }
 
     private GradientDrawable round(int fill, int stroke) {
         GradientDrawable g = new GradientDrawable();

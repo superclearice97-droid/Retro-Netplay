@@ -45,6 +45,9 @@ elif "$MAC":  # pysdl2-dll's SDL2 and SDL2_ttf frameworks, as they are (signed; 
     d = os.path.join(os.path.dirname(sdl2dll.__file__), "dll")
     sdl = []
     sdl_data = [(os.path.join(d, n), f"sdl2dll/dll/{n}") for n in ("SDL2.framework", "SDL2_ttf.framework")]
+    # GLib 2.86+ moved its Unix-only parts to GLibUnix / GioUnix, which PyGObject loads but PyInstaller doesn't collect
+    sdl_data += [(f, "gi_typelibs") for n in ("GLibUnix-2.0", "GioUnix-2.0")
+                 for f in glob.glob(os.path.join("$MAC", "lib", "girepository-*", n + ".typelib"))[:1]]
 else:
     sdl = [b for b in collect_dynamic_libs("sdl2dll") if "SDL2-2.0" in b[0] or "SDL2_ttf" in b[0]]
     sdl_data = collect_data_files("sdl2dll")

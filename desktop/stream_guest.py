@@ -1182,6 +1182,9 @@ class Player:
 
 
 def main(argv=None):
+    if os.environ.get("NETPLAY_TRACE_AFTER"):      # (diagnosing a hang: print where every thread is, then stop)
+        import faulthandler
+        faulthandler.dump_traceback_later(float(os.environ["NETPLAY_TRACE_AFTER"]), exit=True)
     ap = argparse.ArgumentParser(description="Retro-Netplay player (joins a friend's built-in stream)")
     ap.add_argument("--mm", help="matchmaker address, e.g. 1.2.3.4:7777")
     ap.add_argument("--key", help="this player's session key from the match")

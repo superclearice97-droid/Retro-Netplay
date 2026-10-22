@@ -201,7 +201,7 @@ jobs:
           A=pk/Retro-Netplay.app
           codesign --verify --deep --strict "$A"
           plutil -extract CFBundleURLTypes.0.CFBundleURLSchemes.0 raw "$A/Contents/Info.plist" | grep -qx netplay
-          out="$("$A/Contents/Resources/player/Retro-Netplay-Player" --check 2>&1 || true)"; echo "$out"
+          out="$(NETPLAY_TRACE_AFTER=60 GST_DEBUG=2 "$A/Contents/Resources/player/Retro-Netplay-Player" --check 2>&1 || true)"; echo "$out"
           echo "$out" | grep -q "\[OK\] webrtcbin" && echo "$out" | grep -q "\[OK\] window and controllers" \
             && echo "$out" | grep -q "video decoder: vtdec"
           n="$(ls "$A/Contents/Resources/player/licenses" | wc -l)"; echo "licence files in the player: $n"; [ "$n" -ge 10 ]

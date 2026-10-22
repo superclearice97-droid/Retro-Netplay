@@ -195,21 +195,6 @@ jobs:
           python-version: "3.12"
       - name: Build the app with the player inside
         run: APP_PYTHON=python3 PLAYER_PYTHON="$(brew --prefix)/bin/python3" sh desktop/packaging/build-mac.sh
-      - name: (diagnosis) where the packaged player stops when it loads SDL
-        run: |
-          P="$PWD/pk/Retro-Netplay.app/Contents/Resources/player"
-          mkdir -p pk && ditto -x -k dist/Retro-Netplay-mac-arm64.zip pk
-          echo "== Homebrew's own Python loading the same SDL (outside the bundle)"
-          perl -e 'alarm 30; exec @ARGV' "$(brew --prefix)/bin/python3" -c "import os; os.environ['PYSDL2_DLL_PATH']='$(brew --prefix)/lib'; import sdl2, sdl2.sdlttf; print('loaded', sdl2.SDL_GetRevision())" || echo "(failed or hung: $?)"
-          echo "== GObject type files in the bundle"
-          find "$P/_internal" -name '*.typelib' | sed 's|.*/||' | sort | tr '\n' ' '; echo
-          echo "== the bundled player"
-          DYLD_PRINT_LIBRARIES=1 "$P/Retro-Netplay-Player" --check > diag.log 2>&1 &
-          pid=$!; sleep 25
-          if kill -0 $pid 2>/dev/null; then sample $pid 3 -file sample.txt >/dev/null 2>&1; kill -9 $pid; echo "(it hung)"; fi
-          tail -40 diag.log
-          echo "== native stack of the main thread"
-          [ -f sample.txt ] && sed -n '/Call graph:/,/Total number in stack/p' sample.txt | head -80 || true
       - name: The packaged player starts, links are registered, licences are inside
         run: |
           mkdir -p pk && ditto -x -k dist/Retro-Netplay-mac-arm64.zip pk
@@ -222,7 +207,8 @@ jobs:
           done
           n="$(ls "$A/Contents/Resources/player/licenses" | wc -l)"; echo "licence files in the player: $n"; [ "$n" -ge 10 ]
       - name: The packaged player, end to end against the real host (this Mac's Homebrew GStreamer hosts)
-        run: NETPLAY_PLAYER="$PWD/pk/Retro-Netplay.app/Contents/Resources/player/Retro-Netplay-Player" "$(brew --prefix)/bin/python3" desktop/tests/test_native_guest.py
+        # (frame rate: this small virtual Mac also runs the host, its software encoder and the relay, so expect 30, not 60)
+        run: NETPLAY_MIN_FPS=30 NETPLAY_PLAYER="$PWD/pk/Retro-Netplay.app/Contents/Resources/player/Retro-Netplay-Player" "$(brew --prefix)/bin/python3" desktop/tests/test_native_guest.py
       - uses: actions/upload-artifact@v4
         with:
           name: mac

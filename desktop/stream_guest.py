@@ -563,6 +563,12 @@ class Media:
 def available_elements():
     try:
         import gi
+        if getattr(sys, "frozen", False) and sys.platform == "darwin":
+            # Newer PyGObject adds GLib's Unix-only extras (GLibUnix) when it finds them, and then expects GLib's own
+            # type data to match, which the packaged copy doesn't, so GLib fails to load. The player needs none of
+            # them, so the Mac player loads GLib without them (the same on every Mac, with or without Homebrew).
+            import gi.module
+            gi.module.get_platform_specific_module = lambda namespace: None
         gi.require_version("Gst", "1.0")
         gi.require_version("GstWebRTC", "1.0")
         gi.require_version("GstSdp", "1.0")

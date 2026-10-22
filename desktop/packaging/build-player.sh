@@ -55,7 +55,7 @@ nss = [(f, ".") for d in ("/usr/lib/x86_64-linux-gnu/nss", "/usr/lib64/nss", "/u
 a = Analysis([r"$SRC/stream_guest.py"], pathex=[r"$SRC"],
              binaries=sdl + nss,
              datas=[(r"$SRC/fonts", "fonts")] + sdl_data,
-             hiddenimports=["stream_signal", "stream_host", "uinput_pad", "sdl2", "sdl2.sdlttf"] + ([] if "$WIN$MAC" else ["sdl2dll"]),
+             hiddenimports=["stream_signal", "stream_host", "uinput_pad", "sdl2", "sdl2.dll", "sdl2.sdlttf"] + ([] if "$WIN$MAC" else ["sdl2dll"]),
              hooksconfig={"gstreamer": {"include_plugins": PLUGINS},
                           "gi": {"icons": [], "themes": [], "languages": ["en_US"]}},
              excludes=["tkinter", "pygame", "cryptography"])

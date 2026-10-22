@@ -188,8 +188,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-      - name: GStreamer, PyGObject, SDL2 (Homebrew) for the player; coturn for the relay test
-        run: brew install gstreamer pygobject3 sdl2 sdl2_ttf coturn
+      - name: GStreamer with its WebRTC network plugin and PyGObject (Homebrew) for the player; coturn for the relay test
+        run: brew install gstreamer libnice-gstreamer pygobject3 coturn
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"

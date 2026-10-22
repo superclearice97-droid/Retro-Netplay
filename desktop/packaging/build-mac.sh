@@ -2,7 +2,7 @@
 # Builds the Mac download: dist/Retro-Netplay-mac-arm64.zip with Retro-Netplay.app (Apple Silicon Macs).
 # The app opens netplay:// links (its Info.plist says so) and carries the player window with its own GStreamer and
 # SDL from Homebrew; the player decodes the video with macOS's own decoder (VideoToolbox).
-# Needs: Homebrew with gstreamer, pygobject3, sdl2 and sdl2_ttf (the player); a Python with tkinter for the app
+# Needs: Homebrew with gstreamer, libnice-gstreamer and pygobject3 (the player); a Python with tkinter for the app
 # (python3, or the one in APP_PYTHON). Not signed with an Apple developer certificate: see README.txt for how to open it.
 set -eu
 HERE="$(cd "$(dirname "$0")/.." && pwd)"     # desktop/

@@ -582,8 +582,10 @@ CHIP = (228, 227, 223, 235)
 
 
 def sdl_problem():
-    if getattr(sys, "frozen", False) and sys.platform in ("win32", "darwin"):
-        os.environ.setdefault("PYSDL2_DLL_PATH", sys._MEIPASS)     # the Windows / Mac player carries SDL2 next to it
+    if getattr(sys, "frozen", False) and sys.platform == "win32":
+        os.environ.setdefault("PYSDL2_DLL_PATH", sys._MEIPASS)     # the Windows player carries SDL2.dll next to it
+    elif getattr(sys, "frozen", False) and sys.platform == "darwin":       # the Mac player carries SDL's frameworks
+        os.environ.setdefault("PYSDL2_DLL_PATH", os.path.join(sys._MEIPASS, "sdl2dll", "dll"))
     try:
         import sdl2  # noqa: F401
         import sdl2.sdlttf  # noqa: F401

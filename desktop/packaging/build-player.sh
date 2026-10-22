@@ -67,6 +67,10 @@ exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="Retro-Netplay-Player"
 coll = COLLECT(exe, a.binaries, a.datas, name="Retro-Netplay-Player")
 SPEC
 "$PY" -m PyInstaller --noconfirm --clean --distpath "$OUT" --workpath "$WORK/build" "$WORK/player.spec"
+if [ -n "$MAC" ]; then          # (diagnosis: what PyInstaller says about SDL's Python modules)
+  grep -i "sdl2" "$WORK"/build/player/warn-*.txt || echo "(no warnings about sdl2)"
+  "$PY" -c "import sys; sys.argv=['x','-l','-r','$OUT/Retro-Netplay-Player/Retro-Netplay-Player']; from PyInstaller.utils.cliutils.archive_viewer import run; run()" 2>/dev/null | grep -i "sdl2" | head -20 || true
+fi
 # only SDL2 and its text library are needed (the SDL package also carries image and sound libraries)
 find "$OUT/Retro-Netplay-Player" -path '*sdl2dll*' -type f -name 'lib*.so*' ! -name 'libSDL2-2.0*' ! -name 'libSDL2_ttf*' -delete
 for lib in libavif libdav1d libwebp libwebpdemux libtiff libxmp libgme libwavpack libopusfile; do   # (they were for those)

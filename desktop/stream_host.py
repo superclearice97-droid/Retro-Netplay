@@ -599,6 +599,9 @@ class GstBackend:
                 os.close(fd)
             except OSError:
                 pass
+        if self.keepalive:
+            import portal_capture
+            portal_capture.end_sessions()      # stop sharing the window on the desktop too
         self.keepalive = []
 
 
@@ -787,6 +790,16 @@ def test_share(session_type):
         restart_portal()
         out = attempt(timeout=60, plain=True)
     if "r" in out:
+        # the share has to last: the desktop ends it if this app's connection to it closes
+        loop = GLib.MainLoop()
+        GLib.timeout_add(3000, lambda: (loop.quit(), False)[1])
+        import gc
+        gc.collect()
+        loop.run()
+        if not portal_capture.still_sharing():
+            print("Problem: the desktop stopped sharing the window right after it was chosen.")
+            return 1
+        portal_capture.end_sessions()
         print("OK: screen sharing works. Next time it uses the same window without asking.")
         return 0
     print("Problem: " + out["e"])

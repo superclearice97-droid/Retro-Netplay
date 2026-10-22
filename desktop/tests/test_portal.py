@@ -30,7 +30,10 @@ def check(name, ok, info=""):
     print(("PASS " if ok else "FAIL ") + name + ("" if ok else f"  [{info}]"))
     fails += 0 if ok else 1
 check("sharing works through the portal (create, select, start, open)", out.count("OK: screen sharing works") == 2, out)
-check("the choice is remembered (restore token sent the second time)", "restore_token" in calls.splitlines()[5] if len(calls.splitlines()) > 5 else False, calls)
+sels = [l for l in calls.splitlines() if "SelectSources" in l]
+check("the choice is remembered (restore token sent the second time)", len(sels) >= 2 and "restore_token" in sels[1], calls)
+check("the share stays open after the window is chosen (the desktop ends it if the app's connection closes)",
+      "its app left the bus" not in calls and calls.count("session closed: the app closed it") == 2, calls)
 check("no portal: plain-words problem, not a hang", "no screen-sharing service" in out and out.strip().endswith("exit=1"), out)
 # an older desktop (version 3, no hidden pointer) and one that refuses the extra options: still works
 for name, env in (("older desktop", {"MOCK_VERSION": "3", "MOCK_CURSORS": "2"}), ("desktop refusing extras", {"MOCK_REFUSE_EXTRAS": "1"})):

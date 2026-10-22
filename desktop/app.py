@@ -1698,7 +1698,7 @@ def run_gui():
                             msgs.put(("call", None, lambda l=line.rstrip(): show_line(l)))
                     pr.wait()
                 except (OSError, TypeError) as e:
-                    msgs.put(("call", None, lambda: show_line(f"Problem: {e}")))
+                    msgs.put(("call", None, lambda m=str(e): show_line(f"Problem: {m}")))
             threading.Thread(target=work2, daemon=True).start()
         ttk.Button(body, text="Test screen sharing", command=test_share).pack(side="left")
 

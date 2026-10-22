@@ -44,6 +44,27 @@ def _prop(portal, name):
 
 
 PENDING = []   # the request and session waiting right now (withdraw_pending() closes them if we're stopped)
+ACTIVE = []    # (bus, portal, session) of shares in use: kept here until end_sessions(), see request_screencast
+
+
+def still_sharing():
+    """Is the last share still open? (The portal removes a session's object when the session ends.)"""
+    if not ACTIVE:
+        return False
+    bus, _portal, session = ACTIVE[-1]
+    try:
+        bus.call_sync("org.freedesktop.portal.Desktop", session, "org.freedesktop.DBus.Properties", "Get",
+                      GLib.Variant("(ss)", ("org.freedesktop.portal.Session", "version")), None, Gio.DBusCallFlags.NONE, 3000, None)
+        return True
+    except GLib.Error:
+        return False
+
+
+def end_sessions():
+    """Stop sharing: close the portal sessions and let go of their connection."""
+    for bus, _portal, session in ACTIVE:
+        _close(bus, session, "org.freedesktop.portal.Session")
+    ACTIVE.clear()
 
 
 def withdraw_pending():
@@ -179,4 +200,8 @@ def request_screencast(timeout=120, on_slow=None, slow_after=20, progress=None, 
         "OpenPipeWireRemote", GLib.Variant("(oa{sv})", (session, {})), Gio.DBusCallFlags.NONE, -1, fd_list, None)
     fd = fds.get(_out.unpack()[0])
     PENDING.clear()
+    # Keep the D-Bus connection (and so the share) open: GLib only keeps a weak reference to the session bus, so
+    # without this it closed as soon as this function returned, the desktop then ended the share, and the stream
+    # failed with "target not found". end_sessions() lets go of it when the stream stops.
+    ACTIVE.append((bus, portal, session))
     return fd, node_id

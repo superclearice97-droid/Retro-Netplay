@@ -19,7 +19,8 @@ def check(name, cond, extra=""):
 
 OUT = os.path.abspath("android-card")
 os.makedirs(OUT, exist_ok=True)
-FILES = "/sdcard/Android/data/net.netplay.matchmaker/files"
+APP = "net.netplay.matchmaker"
+FILES = f"/data/data/{APP}/files"         # the app's private folder (the debug app lets adb in with run-as)
 
 def card(video="", seconds=7, shot=None):
     subprocess.run(["adb", "logcat", "-c"], capture_output=True)
@@ -49,8 +50,14 @@ check("Play is offered", res.get("button") == "PLAY", res)
 clip = os.path.join(tempfile.mkdtemp(), "clip.mp4")
 subprocess.run(["gst-launch-1.0", "-q", "videotestsrc", "num-buffers=90", "pattern=ball", "!", "video/x-raw,width=480,height=320,framerate=30/1",
                 "!", "x264enc", "!", "video/x-h264,profile=baseline", "!", "mp4mux", "!", "filesink", f"location={clip}"], check=True)
-push = subprocess.run(["adb", "push", clip, FILES + "/clip.mp4"], capture_output=True, text=True)
-check("the clip reaches the app's own files folder", push.returncode == 0, push.stdout + push.stderr)
+push = subprocess.run(["adb", "push", clip, "/data/local/tmp/clip.mp4"], capture_output=True, text=True)
+cp = subprocess.run(["adb", "shell", f"run-as {APP} sh -c 'mkdir -p files && cp /data/local/tmp/clip.mp4 files/clip.mp4 && ls -l files/clip.mp4'"],
+                    capture_output=True, text=True)
+if "clip.mp4" not in cp.stdout:      # some versions can't read /data/local/tmp as the app: stream it in instead
+    with open(clip, "rb") as f:
+        cp = subprocess.run(["adb", "exec-in", f"run-as {APP} sh -c 'mkdir -p files && cat > files/clip.mp4'"], stdin=f, capture_output=True)
+    cp = subprocess.run(["adb", "shell", f"run-as {APP} ls -l files/clip.mp4"], capture_output=True, text=True)
+check("the clip reaches the app's own files folder", "clip.mp4" in cp.stdout, push.stdout + push.stderr + cp.stdout + cp.stderr)
 res, raw = card(video=FILES + "/clip.mp4", seconds=9, shot="card-video.png")
 print("card with a clip:", json.dumps(res), flush=True)
 check("the gameplay clip plays (looping, muted)", res.get("video") is True, raw)

@@ -252,7 +252,12 @@ public class GameActivity extends Activity implements Hub.Ui {
         hubChanged();
         go.requestFocus();
         report();
+        root.postDelayed(keepReporting, 500);
     }
+
+    private final Runnable keepReporting = new Runnable() {     // (for the automatic test: frames drawn so far)
+        @Override public void run() { if (!isFinishing()) { report(); root.postDelayed(this, 500); } }
+    };
 
     private GradientDrawable round(int fill, int stroke) {
         GradientDrawable g = new GradientDrawable();

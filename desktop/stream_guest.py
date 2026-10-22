@@ -213,7 +213,10 @@ def end_text(why, relay=False):
     return w
 
 
-DECODERS = ["nvh264dec", "vah264dec", "d3d11h264dec", "d3d12h264dec", "vtdec_hw", "vtdec", "vaapih264dec",
+# (macOS: vtdec before vtdec_hw. vtdec uses the Mac's video hardware by itself when there is some, and decodes in
+#  software otherwise; vtdec_hw refuses to start without the hardware, and a decoder that fails mid-stream stops the
+#  video from flowing, so the fallback to the next one doesn't help there)
+DECODERS = ["nvh264dec", "vah264dec", "d3d11h264dec", "d3d12h264dec", "vtdec", "vtdec_hw", "vaapih264dec",
             "avdec_h264", "openh264dec"]
 HARDWARE = {"nvh264dec", "vah264dec", "d3d11h264dec", "d3d12h264dec", "vtdec_hw", "vtdec", "vaapih264dec"}
 NEEDED = [("webrtcbin", "gstreamer1.0-plugins-bad"), ("nicesrc", "gstreamer1.0-nice"),

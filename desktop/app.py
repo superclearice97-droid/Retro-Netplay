@@ -121,6 +121,9 @@ def load_cfg():
         stored = cfg["social"].get(k, "")
         cfg["social"][k] = secretbox.reveal(k, stored)
         plain = plain or (stored and not stored.startswith((secretbox.DPAPI, secretbox.KEYCHAIN)))
+    ss = cfg.setdefault("ss", {})
+    if ss.get("password"):
+        ss["password"] = secretbox.reveal("ss_password", ss["password"])
     if plain:
         save_cfg(cfg)   # move secrets saved by older versions into the secure store
     return cfg
@@ -134,6 +137,8 @@ def save_cfg(cfg):
     for k in SECRET_KEYS:
         if k in out.get("social", {}):
             out["social"][k] = secretbox.protect(k, out["social"][k])
+    if out.get("ss", {}).get("password"):
+        out["ss"]["password"] = secretbox.protect("ss_password", out["ss"]["password"])
     try:
         CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         tmp = CONFIG_PATH.with_suffix(".tmp")
@@ -1377,10 +1382,103 @@ def run_gui():
         def play():
             engine.play_game()
         c = titlecard.Card(root, tk, fam, g, info, SYSTEMS[g["system"]]["label"], play, sound,
-                           on_close=lambda: card.__setitem__("c", None))
+                           on_close=lambda: card.__setitem__("c", None), on_download=lambda: open_art(g))
         c.set_state(engine.state, "")
         card["c"] = c
         return "break"
+
+    def reopen_card(games):
+        c = card["c"]
+        if c and c.alive and any(c.game is g for g in games):
+            c.on_close = None
+            c.close()
+            card["c"] = None
+            open_card()
+
+    def open_art(only=None):
+        """Game art: where it comes from, and the optional download from ScreenScraper with the player's own account."""
+        import screenscraper as ss
+        win = tk.Toplevel(root)
+        win.title("Game art")
+        win.transient(root)
+        body = ttk.Frame(win, padding=14)
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, text="Box art, screenshots, gameplay clips and details come from the files Skraper (or EmulationStation, "
+                             "ES-DE or RetroArch) saved with your games: run Skraper on your game folders and they appear on "
+                             "each game's title card. Retro-Netplay can also download them from ScreenScraper "
+                             "(screenscraper.fr, the database Skraper uses) with your own free ScreenScraper account.",
+                  wraplength=540, justify="left").pack(anchor="w")
+        if not ss.available():
+            ttk.Label(body, text="Downloading from ScreenScraper isn't available in this version yet (it needs the app's own "
+                                 "ScreenScraper developer ID). Skraper's files work already.",
+                      wraplength=540, justify="left", foreground=ink.SOFT).pack(anchor="w", pady=(10, 0))
+            ttk.Button(body, text="Close", command=win.destroy).pack(anchor="e", pady=(12, 0))
+            return
+        sscfg = cfg.setdefault("ss", {})
+        user_v, pw_v = tk.StringVar(value=sscfg.get("user", "")), tk.StringVar(value=sscfg.get("password", ""))
+        vid_v = tk.BooleanVar(value=sscfg.get("videos", True))
+        for label, var, show in (("ScreenScraper username", user_v, ""), ("Password", pw_v, "*")):
+            r = ttk.Frame(body)
+            r.pack(fill="x", pady=(8, 0))
+            ttk.Label(r, text=label, width=24).pack(side="left")
+            ttk.Entry(r, textvariable=var, show=show, width=30).pack(side="left", fill="x", expand=True)
+        ttk.Label(body, text="No account? Make one for free at screenscraper.fr. The password is kept in your computer's "
+                             "secure store where it has one.", wraplength=540, foreground=ink.SOFT).pack(anchor="w", pady=(4, 0))
+        ttk.Checkbutton(body, text="Download gameplay clips too (a few MB each)", variable=vid_v).pack(anchor="w", pady=(8, 0))
+        note = ttk.Label(body, text="", wraplength=540, justify="left")
+        note.pack(anchor="w", pady=(10, 0))
+        row = ttk.Frame(body)
+        row.pack(fill="x", pady=(10, 0))
+        buttons = []
+
+        def say(text):
+            if win.winfo_exists():
+                note.config(text=text)
+
+        def go(games):
+            sscfg.update(user=user_v.get().strip(), password=pw_v.get(), videos=vid_v.get())
+            save_cfg(cfg)
+            if not sscfg.get("consent"):
+                if not messagebox.askyesno("Send game details to ScreenScraper?", ss.CONSENT + "\n\nDownload now?", parent=win):
+                    return
+                sscfg["consent"] = True
+                save_cfg(cfg)
+            for b in buttons:
+                b.state(["disabled"])
+            user, pw, vids = sscfg["user"], sscfg["password"], sscfg["videos"]
+
+            def work():
+                got, missing, stop = 0, [], ""
+                for i, g in enumerate(games):
+                    msgs.put(("call", None, lambda i=i, g=g: say(f"{i + 1} of {len(games)}: {g['name']}...")))
+                    try:
+                        if ss.scrape(g, user, pw, videos=vids):
+                            got += 1
+                    except ss.ScrapeError as e:
+                        if e.why == "not_found":
+                            missing.append(g["name"])
+                            continue
+                        stop = str(e)
+                        break
+                text = (f"Art downloaded for {got} game{'s' if got != 1 else ''}." if got else "Nothing new was downloaded.")
+                if missing:
+                    text += f" ScreenScraper doesn't know {len(missing)}: " + ", ".join(missing[:5]) + ("..." if len(missing) > 5 else "") + "."
+                if stop:
+                    text += " Stopped: " + stop
+                def done():
+                    say(text)
+                    for b in buttons:
+                        if win.winfo_exists():
+                            b.state(["!disabled"])
+                    reopen_card(games)
+                msgs.put(("call", None, done))
+            threading.Thread(target=work, daemon=True).start()
+        if only is not None:
+            buttons.append(ttk.Button(row, text=f"Download for {only['name'][:30]}", command=lambda: go([only])))
+        buttons.append(ttk.Button(row, text="Download for all my games", command=lambda: go(list(cfg["games"]))))
+        for b in buttons:
+            b.pack(side="left", padx=(0, 6))
+        ttk.Button(row, text="Close", command=win.destroy).pack(side="right")
 
     def card_play():
         if engine.state == "idle":
@@ -1482,6 +1580,7 @@ def run_gui():
                         variable=relay_var).pack(anchor="w", pady=(0, 4))
         sounds_var = tk.BooleanVar(value=cfg.get("sounds", True))
         ttk.Checkbutton(body, text="Interface sounds (game list, title card, match found)", variable=sounds_var).pack(anchor="w", pady=(0, 4))
+        ttk.Button(body, text="Game art (ScreenScraper)...", command=lambda: open_art()).pack(anchor="w", pady=(0, 6))
         field("Your Parsec peer ID", "parsec_peer_id", cfg)
         ttk.Label(body, text="(Parsec ID is only used when Streaming is set to Parsec)", foreground="#666").pack(anchor="w")
         field("Matchmaker address", "server_host", cfg)

@@ -21,7 +21,7 @@ cp "$ROOT/LICENSE" "$ROOT/NOTICE.md" "$ROOT/PRIVACY.md" "$ROOT/TERMS.md" "$WORK/
   --distpath "$WORK/dist" --workpath "$WORK/build" --specpath "$WORK" \
   --add-data "$HERE/icon-256.png:." --add-data "$HERE/sounds:sounds" --add-data "$WORK/notices:notices" \
   --hidden-import server --hidden-import sessions --hidden-import stream_signal --hidden-import wizard --hidden-import social \
-  --hidden-import pygame --hidden-import titlecard --hidden-import gameinfo --hidden-import PIL.ImageTk --hidden-import PIL._tkinter_finder \
+  --hidden-import pygame --hidden-import titlecard --hidden-import gameinfo --hidden-import screenscraper --hidden-import PIL.ImageTk --hidden-import PIL._tkinter_finder \
   --exclude-module stream_host --exclude-module stream_guest --exclude-module portal_capture --exclude-module gi \
   "$HERE/app.py"
 

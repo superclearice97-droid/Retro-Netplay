@@ -255,9 +255,11 @@ def ra_name(s):
 class Finder:
     """Looks up and remembers game info on this computer. extra: more RetroArch folders (e.g. next to its program)."""
 
-    def __init__(self, extra_retroarch=()):
+    def __init__(self, extra_retroarch=(), art=None):
         self.cache, self.dirs = {}, {}
         self.ra = list(extra_retroarch) + retroarch_dirs()
+        # what the app downloaded from ScreenScraper (screenscraper.py), laid out like Skraper's output
+        self.art = art or os.path.join(os.path.expanduser("~"), ".netplay-matchmaker", "art")
 
     def find(self, game):
         key = (game.get("system"), game.get("name"), game.get("rom", ""))
@@ -304,6 +306,18 @@ class Finder:
                 if os.path.isdir(fd):
                     for rel, full in self._listing(fd, 1):
                         media.append((full, kind, stem(rel)))
+        sd = os.path.join(self.art, re.sub(r"[^a-z0-9]", "", system) or "other")
+        gl = os.path.join(sd, "gamelist.xml")
+        if os.path.isfile(gl):
+            try:
+                with open(gl, encoding="utf-8", errors="replace") as f:
+                    entries += parse_gamelist(f.read(), sd.replace("\\", "/"))
+            except OSError:
+                pass
+        for rel, full in self._listing(os.path.join(sd, "media"), 2):
+            k = media_kind("media/" + rel)
+            if k:
+                media.append((full, k[0], k[1]))
         label = stem(rom) if rom else name
         for base in self.ra:
             sd = os.path.join(base, "thumbnails", RETROARCH.get(system, ""))

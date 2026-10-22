@@ -29,7 +29,8 @@ def card(video="", seconds=7, shot=None):
             with open(os.path.join(OUT, shot), "wb") as f:
                 f.write(subprocess.run(["adb", "exec-out", "screencap", "-p"], capture_output=True).stdout)
         threading.Thread(target=take, daemon=True).start()
-    r = subprocess.run(["adb", "shell", "am", "instrument", "-w", "-e", "mode", "card", "-e", "video", video, "-e", "seconds", str(seconds),
+    extra = ["-e", "video", video] if video else []        # (adb drops an empty argument, which breaks the command)
+    r = subprocess.run(["adb", "shell", "am", "instrument", "-w", "-e", "mode", "card"] + extra + ["-e", "seconds", str(seconds),
                         "net.netplay.matchmaker.test/net.netplay.app.PlayerCheck"], capture_output=True, text=True, timeout=200)
     m = re.search(r"result=(\{.*\})", r.stdout)
     log = subprocess.run(["adb", "logcat", "-d", "-s", "AndroidRuntime:E", "MediaPlayer:E", "VideoView:E"], capture_output=True, text=True).stdout
@@ -48,7 +49,8 @@ check("Play is offered", res.get("button") == "PLAY", res)
 clip = os.path.join(tempfile.mkdtemp(), "clip.mp4")
 subprocess.run(["gst-launch-1.0", "-q", "videotestsrc", "num-buffers=90", "pattern=ball", "!", "video/x-raw,width=480,height=320,framerate=30/1",
                 "!", "x264enc", "!", "video/x-h264,profile=baseline", "!", "mp4mux", "!", "filesink", f"location={clip}"], check=True)
-subprocess.run(["adb", "push", clip, FILES + "/clip.mp4"], check=True, capture_output=True)
+push = subprocess.run(["adb", "push", clip, FILES + "/clip.mp4"], capture_output=True, text=True)
+check("the clip reaches the app's own files folder", push.returncode == 0, push.stdout + push.stderr)
 res, raw = card(video=FILES + "/clip.mp4", seconds=9, shot="card-video.png")
 print("card with a clip:", json.dumps(res), flush=True)
 check("the gameplay clip plays (looping, muted)", res.get("video") is True, raw)

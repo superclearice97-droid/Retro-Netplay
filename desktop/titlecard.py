@@ -278,9 +278,9 @@ class Card:
     """One title card window. on_play(): Play (or Leave queue while searching); sound(name): play a UI sound."""
 
     def __init__(self, root, tk, family, game, info, system_label, on_play, sound=lambda name: None, on_close=None,
-                 scale=None):
+                 scale=None, on_download=None):
         self.tk, self.fam, self.game, self.info, self.on_play, self.sound = tk, family, game, info, on_play, sound
-        self.on_close = on_close
+        self.on_close, self.on_download = on_close, on_download
         self.win = tk.Toplevel(root)
         self.win.title(info.get("name") or game.get("name", "Game"))
         self.win.configure(bg="#000000")
@@ -408,8 +408,17 @@ class Card:
                 pts = [v for px, py in ICONS["star"][0] for v in ((40 + i * 22) * s + px * 0.75 * s, 440 * s + py * 0.75 * s)]
                 self.c.create_polygon(*pts, fill=fill, outline=ACCENT, width=max(1, 1.2 * s))
         if not getattr(self, "has_box", False):
-            Icon(self.c, "image", 125 * s, 240 * s, 60 * s, SOFT, 2.0 * s)
-            self._text(155, 316, "No box art yet", 10, SOFT, anchor="n")
+            Icon(self.c, "image", 125 * s, 220 * s, 60 * s, SOFT, 2.0 * s)
+            self._text(155, 296, "No box art yet", 10, SOFT, anchor="n")
+            if self.on_download:
+                self.c.create_rectangle(70 * s, 330 * s, 240 * s, 362 * s, fill="#0b0d10", outline=ACCENT, width=max(1, 1.5 * s), tags="dl")
+                dl = Icon(self.c, "download", 80 * s, 337 * s, 18 * s, ACCENT, max(1.2, 1.8 * s))
+                for it in dl.items:
+                    self.c.addtag_withtag("dl", it)
+                self.c.tag_bind("dl", "<Enter>", lambda e: dl.play())
+                self.c.create_text(104 * s, 346 * s, anchor="w", text="Game art...", fill=ACCENT,
+                                   font=(self.fam, int(10 * s), "bold"), tags="dl")
+                self.c.tag_bind("dl", "<Button-1>", lambda e: self.on_download())
         if self.photo is not None and not self.slides.imgs:
             Icon(self.c, "film", 580 * s, 220 * s, 60 * s, SOFT, 2.0 * s)
             self._text(610, 296, "No screenshots yet. Run Skraper on your game folders, or let RetroArch download "

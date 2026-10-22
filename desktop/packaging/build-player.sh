@@ -39,9 +39,10 @@ if "$WIN":   # MSYS2's SDL2 and SDL2_ttf next to the player (PySDL2 is told to l
     sdl = [(f, ".") for n in ("SDL2.dll", "SDL2_ttf.dll") for f in [os.path.join(sys.base_prefix, "bin", n)]
            if os.path.exists(f)]
     sdl_data = []
-elif "$MAC":  # Homebrew's SDL2 and SDL2_ttf next to the player (PySDL2 is told to look there)
-    sdl = [(f, ".") for n in ("libSDL2-2.0.0.dylib", "libSDL2_ttf-2.0.0.dylib") for f in [os.path.join("$MAC", "lib", n)]
-           if os.path.exists(f)]
+elif "$MAC":  # Homebrew's SDL2 and SDL2_ttf next to the player (PySDL2 is told to look there). Homebrew's SDL2 is
+    # sdl2-compat, which loads SDL3 from its own folder when it starts (and without it shows an error box and waits)
+    sdl = [(f, ".") for n in ("libSDL2-2.0.0.dylib", "libSDL2_ttf-2.0.0.dylib", "libSDL3.0.dylib")
+           for f in [os.path.join("$MAC", "lib", n)] if os.path.exists(f)]
     sdl_data = []
 else:
     sdl = [b for b in collect_dynamic_libs("sdl2dll") if "SDL2-2.0" in b[0] or "SDL2_ttf" in b[0]]

@@ -40,11 +40,8 @@ if "$WIN":   # MSYS2's SDL2 and SDL2_ttf next to the player (PySDL2 is told to l
     sdl = [(f, ".") for n in ("SDL2.dll", "SDL2_ttf.dll") for f in [os.path.join(sys.base_prefix, "bin", n)]
            if os.path.exists(f)]
     sdl_data = []
-elif "$MAC":  # pysdl2-dll's SDL2 and SDL2_ttf frameworks, as they are (signed; PySDL2 is told to look there)
-    import sdl2dll
-    d = os.path.join(os.path.dirname(sdl2dll.__file__), "dll")
-    sdl = []
-    sdl_data = [(os.path.join(d, n), f"sdl2dll/dll/{n}") for n in ("SDL2.framework", "SDL2_ttf.framework")]
+elif "$MAC":  # pysdl2-dll's SDL2 frameworks are copied in after PyInstaller (see below)
+    sdl, sdl_data = [], []
 else:
     sdl = [b for b in collect_dynamic_libs("sdl2dll") if "SDL2-2.0" in b[0] or "SDL2_ttf" in b[0]]
     sdl_data = collect_data_files("sdl2dll")
@@ -67,9 +64,13 @@ exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="Retro-Netplay-Player"
 coll = COLLECT(exe, a.binaries, a.datas, name="Retro-Netplay-Player")
 SPEC
 "$PY" -m PyInstaller --noconfirm --clean --distpath "$OUT" --workpath "$WORK/build" "$WORK/player.spec"
-if [ -n "$MAC" ]; then          # (diagnosis: what PyInstaller says about SDL's Python modules)
-  grep -i "sdl2" "$WORK"/build/player/warn-*.txt || echo "(no warnings about sdl2)"
-  "$PY" -c "import sys; sys.argv=['x','-l','-r','$OUT/Retro-Netplay-Player/Retro-Netplay-Player']; from PyInstaller.utils.cliutils.archive_viewer import run; run()" 2>/dev/null | grep -i "sdl2" | head -20 || true
+if [ -n "$MAC" ]; then
+  # pysdl2-dll's SDL2 and SDL2_ttf frameworks, unchanged (signed by their makers; PySDL2 is told to look there).
+  # Not through PyInstaller: it would put a file called SDL2 next to the player, which on a Mac's case-insensitive
+  # disk hides the Python package sdl2 (then "No module named 'sdl2.dll'")
+  D="$("$PY" -c 'import sdl2dll, os; print(os.path.join(os.path.dirname(sdl2dll.__file__), "dll"))')"
+  mkdir -p "$OUT/Retro-Netplay-Player/_internal/sdl2dll/dll"
+  for n in SDL2 SDL2_ttf; do ditto "$D/$n.framework" "$OUT/Retro-Netplay-Player/_internal/sdl2dll/dll/$n.framework"; done
 fi
 # only SDL2 and its text library are needed (the SDL package also carries image and sound libraries)
 find "$OUT/Retro-Netplay-Player" -path '*sdl2dll*' -type f -name 'lib*.so*' ! -name 'libSDL2-2.0*' ! -name 'libSDL2_ttf*' -delete

@@ -95,7 +95,7 @@ DEFAULT_CFG = {
     "hotkey": [6, 7], "hold": 3.0, "hold_v2": True,
     "slots": controls.default_slots(), "controller_check_done": False,
     "setup_done": False, "game_folders": [], "folder_answers": {}, "auto_ports": True, "port_status": {},
-    "secret": "", "my_name": "", "friends": [], "auto_queue": True, "sounds": True,
+    "secret": "", "my_name": "", "friends": [], "auto_queue": True, "ra_stdin_cmds": False, "sounds": True,
 }
 invites.fill_defaults(DEFAULT_CFG)
 
@@ -434,9 +434,23 @@ def readiness(cfg, g):
 RA_CMD_PORT = 55355
 
 
-def ra_cmd(cmd, port=None):
-    """Send one RetroArch network command (this computer only). Used to start hosting and show messages."""
+def ra_stdin_on(cfg):
+    """EXPERIMENTAL, off by default: command RetroArch through its stdin instead of a network port, so nothing on the
+    local network can reach it. Not available on Windows; not yet tried against a real RetroArch."""
+    return bool(cfg.get("ra_stdin_cmds")) and sys.platform != "win32"
+
+
+def ra_cmd(cmd, port=None, proc=None, loop=None):
+    """Send one RetroArch command. Used to start hosting and show messages.
+    With proc (started with a stdin pipe) it goes through stdin; otherwise by UDP to this computer only."""
     import socket as _s
+    if proc is not None and proc.stdin is not None:
+        data = (cmd.replace("\n", " ") + "\n").encode()
+        try:
+            loop.call_soon_threadsafe(proc.stdin.write, data) if loop else proc.stdin.write(data)
+        except (OSError, RuntimeError):
+            pass
+        return
     try:
         with _s.socket(_s.AF_INET, _s.SOCK_DGRAM) as u:
             u.sendto(cmd.replace("\n", " ").encode(), ("127.0.0.1", port or RA_CMD_PORT))
@@ -449,8 +463,9 @@ def write_ra_config(cfg):
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         # network commands let the app start hosting in a game that's already running, and show messages in it
-        path.write_text(controls.retroarch_config(cfg["slots"])
-                        + f'network_cmd_enable = "true"\nnetwork_cmd_port = "{RA_CMD_PORT}"\n')
+        cmds = ('stdin_cmd_enable = "true"\n' if ra_stdin_on(cfg)
+                else f'network_cmd_enable = "true"\nnetwork_cmd_port = "{RA_CMD_PORT}"\n')
+        path.write_text(controls.retroarch_config(cfg["slots"]) + cmds)
         return str(path)
     except OSError:
         return ""
@@ -694,7 +709,8 @@ class Engine:
         if self.on_boot:
             self.on_boot(cfg)                             # e.g. start this PC's own matchmaker
         try:
-            proc = await asyncio.create_subprocess_exec(*solo_cmd(cfg, g))
+            proc = await asyncio.create_subprocess_exec(
+                *solo_cmd(cfg, g), stdin=asyncio.subprocess.PIPE if ra_stdin_on(cfg) and s["emu"] == "retroarch" else None)
         except OSError as e:
             return self.set("idle", f"Couldn't start {EMUS[s['emu']][0]}: {e}")
         self.ingame, self.matched = {"key": game_key(g), "game": g, "proc": proc}, False
@@ -905,13 +921,14 @@ class Engine:
         if lane == "native" and s["emu"] == "retroarch" and self.ingame_alive():
             if role == "host":
                 # the game is already running: just start hosting in it
-                ra_cmd("NETPLAY_HOST_TOGGLE")
-                ra_cmd(f"SHOW_MSG Retro-Netplay: matched with {name}! You're hosting; they're joining you.")
+                gp = self.ingame["proc"]
+                ra_cmd("NETPLAY_HOST_TOGGLE", proc=gp, loop=self.loop)
+                ra_cmd(f"SHOW_MSG Retro-Netplay: matched with {name}! You're hosting; they're joining you.", proc=gp, loop=self.loop)
                 self.set("session", f"{friend}You're hosting {g['name']}; {name} is joining you.")
                 await self.ingame["proc"].wait()
                 return
             # guest: restart the game connected to the host
-            ra_cmd(f"SHOW_MSG Retro-Netplay: matched with {name}! Reconnecting to their game...")
+            ra_cmd(f"SHOW_MSG Retro-Netplay: matched with {name}! Reconnecting to their game...", proc=self.ingame["proc"], loop=self.loop)
             proc, self.ingame = self.ingame["proc"], None
             try:
                 proc.terminate()
@@ -2329,7 +2346,8 @@ def run_gui():
                             [("Allow", lambda: answer(True), True), ("Deny", lambda: answer(False), False)],
                             timeout=55, key="call:" + d["call"], on_timeout=lambda: answer(False))
                 if engine.ingame and SYSTEMS[engine.ingame["game"]["system"]]["emu"] == "retroarch":
-                    ra_cmd(f"SHOW_MSG Retro-Netplay: {d['name']} wants to join. Hold Start + Select to allow.")
+                    ra_cmd(f"SHOW_MSG Retro-Netplay: {d['name']} wants to join. Hold Start + Select to allow.",
+                           proc=engine.ingame["proc"], loop=engine.loop)
         elif ev == "cancelled":
             toasts.close("call:" + str(d))
         elif ev == "start":

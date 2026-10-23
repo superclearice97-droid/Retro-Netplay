@@ -96,11 +96,20 @@ jobs:
         run: |
           for t in test_tcp_signal test_stream_guest test_app_own test_android_stream test_two_devices test_desktop_queue \
                    test_friends test_friends_java test_library test_memguard test_gameinfo test_titlecard test_screenscraper test_portal test_portmap test_portmap_java test_autofind \
-                   test_stream_host test_tls test_android_player_core; do
+                   test_stream_host test_tls test_android_player_core test_ra_stdin; do
             echo "== $t"; /usr/bin/python3 desktop/tests/$t.py || exit 1
           done
       - name: Native player window (headless) against the real stream host over TCP, also through a relay
         run: /usr/bin/python3 desktop/tests/test_native_guest.py
+      - name: Test coverage report (information only for now; counts this process, not programs the tests start)
+        continue-on-error: true      # no minimum yet: set one (coverage report --fail-under=N) once the numbers are known
+        run: |
+          /usr/bin/python3 -m pip install --break-system-packages -q coverage==7.6.4
+          for t in test_tcp_signal test_app_own test_friends test_library test_memguard test_gameinfo test_portmap test_tls test_ra_stdin; do
+            /usr/bin/python3 -m coverage run -p --source=desktop desktop/tests/$t.py > /dev/null || echo "($t failed under coverage)"
+          done
+          /usr/bin/python3 -m coverage combine
+          /usr/bin/python3 -m coverage report --omit='desktop/tests/*' | tee coverage.txt
 
   android-player:
     # the phone app's own player (libwebrtc + Android's video decoder) in an Android emulator, against the real

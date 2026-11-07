@@ -170,9 +170,12 @@ try:
     else:
         tport, secret = free_port(), "test-relay-secret-0123456789"
         turnlog = tempfile.mktemp(suffix=".log")
+        # (newer coturn versions dropped --no-dtls: pass it only to versions that still have it)
+        helptext = subprocess.run(["turnserver", "--help"], capture_output=True, text=True)
+        no_dtls = ["--no-dtls"] if "--no-dtls" in helptext.stdout + helptext.stderr else []
         procs.append(subprocess.Popen(["turnserver", "-n", "-v", "--listening-ip=127.0.0.1", f"--listening-port={tport}",
                                        "--relay-ip=127.0.0.1", "--use-auth-secret", f"--static-auth-secret={secret}",
-                                       "--realm=netplay.test", "--no-tls", "--no-dtls", "--no-cli", "--allow-loopback-peers",
+                                       "--realm=netplay.test", "--no-tls"] + no_dtls + ["--no-cli", "--allow-loopback-peers",
                                        "--log-file=stdout", "--min-port=51000", "--max-port=51200"],
                                       stdout=open(turnlog, "w"), stderr=subprocess.STDOUT))
         time.sleep(1.0)

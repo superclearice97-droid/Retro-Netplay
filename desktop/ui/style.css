@@ -112,6 +112,38 @@ label.field { display: block; font-weight: 600; } label.field > span { display: 
 .game .txt small { color: var(--dim); }
 .game .warn { position: absolute; top: 8px; left: 8px; right: 8px; background: #000b; color: var(--amber); border-radius: 8px; font-size: .75rem; padding: 4px 8px; }
 
+/* ---------- the game page (title card): moving console-coloured background, box art, details, a small TV */
+.gamecard { position: relative; border-radius: 22px; overflow: hidden; min-height: 520px; color: #fff; background: #0b0d10; isolation: isolate; }
+.gamecard .mesh { position: absolute; inset: -20%; z-index: -1; filter: blur(40px) saturate(1.2); opacity: .9;
+  background: radial-gradient(40% 50% at 20% 25%, color-mix(in srgb, var(--sys) 85%, #fff 15%), transparent 70%),
+              radial-gradient(45% 55% at 80% 30%, color-mix(in srgb, var(--sys) 60%, #000 40%), transparent 70%),
+              radial-gradient(50% 50% at 60% 85%, color-mix(in srgb, var(--sys) 70%, var(--lime) 30%), transparent 70%),
+              radial-gradient(40% 40% at 15% 85%, color-mix(in srgb, var(--sys) 50%, #000 50%), transparent 70%), #07080a;
+  animation: drift 26s ease-in-out infinite alternate; }
+.gamecard::after { content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;      /* CRT scanlines and vignette */
+  background: repeating-linear-gradient(to bottom, #0000 0 2px, #0003 2px 3px), radial-gradient(120% 90% at 50% 50%, #0000 55%, #000a); }
+@keyframes drift { 0% { transform: translate(0, 0) rotate(0); } 50% { transform: translate(4%, -3%) rotate(8deg); } 100% { transform: translate(-3%, 4%) rotate(-6deg); } }
+.gamecard { container-type: inline-size; }
+.gc-body { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 28px; padding: 28px; align-items: start; }
+.gc-body .tv { grid-column: 2; max-width: 560px; }
+@container (min-width: 1050px) { .gc-body { grid-template-columns: 220px minmax(0, 1fr) minmax(300px, 400px); } .gc-body .tv { grid-column: 3; grid-row: 1; } }
+@container (max-width: 560px) { .gc-body { grid-template-columns: 1fr; padding: 18px; } .gc-body .tv { grid-column: 1; } .gc-box { max-width: 180px; } .gc-info h1 { font-size: 1.8rem; } }
+.gc-box img, .gc-box .fallback { width: 100%; border-radius: 10px; box-shadow: 0 24px 60px #000a; display: block; }
+.gc-box .fallback { aspect-ratio: 3/4; background: var(--sys); display: grid; place-items: center; text-align: center; padding: 16px; font-size: 1.3rem; font-weight: 300; }
+.gc-info .back { color: #fff; margin: -6px 0 12px -12px; }
+.gc-info h1 { font-size: 2.4rem; text-shadow: 0 2px 20px #0008; }
+.gc-logo { max-width: 100%; max-height: 120px; object-fit: contain; filter: drop-shadow(0 4px 16px #000a); }
+.gc-info .pill { background: #0006; border-color: #fff3; color: #fff; }
+.gc-info .pill svg { width: 15px; height: 15px; }
+.gc-desc { max-width: 60ch; line-height: 1.6; text-shadow: 0 1px 8px #000a; display: -webkit-box; -webkit-line-clamp: 7; -webkit-box-orient: vertical; overflow: hidden; }
+.tv { background: #111; border-radius: 18px; padding: 14px; box-shadow: 0 24px 70px #000b, inset 0 0 0 2px #2a2a2a; }
+.tv-screen { position: relative; aspect-ratio: 4/3; border-radius: 12px; overflow: hidden; background: #000; }
+.tv-screen::after { content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: repeating-linear-gradient(to bottom, #0000 0 2px, #0005 2px 3px), radial-gradient(110% 100% at 50% 50%, #0000 60%, #000c); }
+.tv-screen img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; image-rendering: pixelated; }
+.tv-screen img { opacity: 0; transform: scale(1.1) translate(-2%, -1%); transition: opacity 1.2s ease, transform 7s linear; }
+.tv-screen img.on { opacity: 1; transform: scale(1) translate(1%, 1%); }      /* crossfade, and a slow pan (Ken Burns) */
+
 /* ---------- room */
 .players { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
 .player { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; min-height: 120px; display: flex; flex-direction: column; gap: 6px; position: relative; }

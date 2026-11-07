@@ -184,11 +184,11 @@ class Engine:
     def library(self):
         out = []
         for i, g in enumerate(self.cfg.get("games", [])):
-            info = self.art_cache.get(g["rom"])
-            out.append({"i": i, "name": g["name"], "system": g["system"], "key": core.game_key(g),
-                        "problem": core.boot_problem(self.cfg, g),
-                        "box": info.get("box", "") if info else "", "screen": (info.get("screens") or [""])[0] if info else "",
-                        "year": info.get("year", "") if info else "", "desc": info.get("desc", "") if info else ""})
+            info = self.art_cache.get(g["rom"]) or {}
+            out.append({"i": i, "name": info.get("name") or g["name"], "system": g["system"], "key": core.game_key(g),
+                        "problem": core.boot_problem(self.cfg, g), "screens": list(info.get("screens") or []),
+                        **{k: info.get(k, "") for k in ("box", "title", "logo", "fanart", "year", "desc", "developer",
+                                                         "publisher", "genre", "players", "rating")}})
         return out
 
     def changed(self):
@@ -486,7 +486,7 @@ class Engine:
                 continue
             with self.lock:
                 self.art_cache[g["rom"]] = info
-                for p in [info.get("box")] + list(info.get("screens") or []):
+                for p in [info.get(k) for k in ("box", "title", "logo", "fanart")] + list(info.get("screens") or []):
                     if p:
                         self.art.add(str(p))
         self.changed()

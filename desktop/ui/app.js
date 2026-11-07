@@ -128,9 +128,9 @@ function arcade() {
   </div>`;
 }
 
-function gameCard(g, picked) {
+function gameCard(g, picked, open = false) {
   const bad = g.problem;
-  return `<button class="game sys-${esc(g.system)} ${picked ? "on" : ""}" data-pick="${g.i}" aria-pressed="${picked}">
+  return `<button class="game sys-${esc(g.system)} ${picked ? "on" : ""}" ${open ? `data-game="${g.i}"` : `data-pick="${g.i}" aria-pressed="${picked}"`}>
     <div class="art">${g.box ? `<img src="${art(g.box)}" alt="" loading="lazy">` : `<div class="fallback">${esc(g.name)}</div>`}
       ${bad ? `<div class="warn">${icon("triangle-alert")} Needs setup</div>` : ""}</div>
     <div class="txt"><b>${esc(g.name)}</b><small>${esc(sysLabel(g.system))}${g.year ? " &middot; " + esc(g.year) : ""}</small></div>
@@ -204,11 +204,41 @@ function room() {
   </div>`;
 }
 
+function gamePage() {
+  const g = S.library.find(x => x.i === ui.game);
+  if (!g) { ui.page = "library"; return library(); }
+  const shots = g.screens.length ? g.screens : [g.title].filter(Boolean);
+  const n = shots.length;
+  const facts = [["calendar", g.year], ["building", g.developer || g.publisher], ["tag", g.genre],
+                 ["users", g.players && `${g.players} player${g.players === "1" ? "" : "s"}`], ["star", g.rating && `${Math.round(+g.rating * 10)}/10`]]
+    .filter(([, v]) => v).map(([ic, v]) => `<span class="pill">${icon(ic)} ${esc(v)}</span>`).join("");
+  return `<div class="page"><div class="gamecard sys-${esc(g.system)}">
+    <div class="mesh"></div>
+    <div class="gc-body">
+      <div class="gc-box">${g.box ? `<img src="${art(g.box)}" alt="">` : `<div class="fallback">${esc(g.name)}</div>`}</div>
+      <div class="gc-info">
+        <button class="btn ghost back" data-go="library">${icon("arrow-left")} My games</button>
+        <div class="eyebrow">${esc(sysLabel(g.system))}</div>
+        ${g.logo ? `<img class="gc-logo" src="${art(g.logo)}" alt="${esc(g.name)}">` : `<h1>${esc(g.name)}</h1>`}
+        <div class="row" style="margin:12px 0">${facts}</div>
+        ${g.desc ? `<p class="gc-desc">${esc(g.desc)}</p>` : ""}
+        ${g.problem ? `<div class="warnbox">${icon("triangle-alert")} ${esc(g.problem)}</div>` : ""}
+        <div class="row" style="margin-top:16px">
+          <button class="btn primary big" data-hostgame="${g.i}" ${g.problem ? "disabled" : ""}>${icon("users")} Host this game</button>
+          <button class="btn big" data-solo="${g.i}" ${g.problem ? "disabled" : ""}>${icon("play")} Play alone</button></div>
+      </div>
+      ${n ? `<div class="tv" aria-hidden="true"><div class="tv-screen">${shots.map((p, k) =>
+        `<img src="${art(p)}" alt="" class="${k === (ui.slide || 0) % n ? "on" : ""}">`).join("")}</div></div>` : ""}
+    </div>
+    ${!g.box && !n ? `<p class="small" style="position:relative;opacity:.8;margin:0 28px 22px">${icon("image")} No box art yet. Run Skraper (or EmulationStation's scraper) on your game folder, and the art shows up here.</p>` : ""}
+  </div></div>`;
+}
+
 function library() {
   return `<div class="page">
     <div class="head"><div><div class="eyebrow">Library</div><h1>My games</h1></div>
       <div class="row"><button class="btn" data-act="rescan">${icon("refresh-cw")} Scan again</button><button class="btn primary" data-act="add-folder">${icon("folder-plus")} Add a folder</button></div></div>
-    ${S.library.length ? `<div class="games">${S.library.map(g => gameCard(g, false)).join("")}</div>` :
+    ${S.library.length ? `<div class="games">${S.library.map(g => gameCard(g, false, true)).join("")}</div>` :
       `<div class="empty card"><div class="icon-big">${icon("library")}</div><h2 style="margin:12px 0 6px">No games yet</h2>
        <p class="muted">Add the folder where your game files are. Box art from Skraper or EmulationStation shows up by itself.</p></div>`}
     <h2 style="margin:28px 0 10px">Folders</h2>
@@ -289,7 +319,7 @@ function draw() {
   if (!S) return;
   if (!S.setup.done && ui.page !== "legal") { root.innerHTML = welcome(); return; }
   if (ui.page === "room" && !(S.myroom || S.seat)) ui.page = "arcade";
-  const pages = { arcade, host, room, library, settings, legal, chat: arcade };
+  const pages = { arcade, host, room, library, settings, legal, game: gamePage, chat: arcade };
   const keep = document.getElementById("chatinput");
   const draft = keep ? keep.value : "";
   const focused = document.activeElement?.id;
@@ -352,12 +382,15 @@ async function addFolder() {
 // ---------------------------------------------------------------- what the player does
 document.addEventListener("click", async e => {
   if (!e.target.closest("#menu")) closeMenu();
-  const t = e.target.closest("[data-go],[data-act],[data-join],[data-pick],[data-seats],[data-stream],[data-filter],[data-answer],[data-menu],[data-chat],[data-copy],[data-lobby],[data-emu],[data-unblock],[data-unfolder]");
+  const t = e.target.closest("[data-go],[data-act],[data-join],[data-pick],[data-game],[data-hostgame],[data-solo],[data-seats],[data-stream],[data-filter],[data-answer],[data-menu],[data-chat],[data-copy],[data-lobby],[data-emu],[data-unblock],[data-unfolder]");
   if (!t) return;
   const d = t.dataset;
   if (d.go) { e.preventDefault(); ui.page = d.go === "welcome" ? "arcade" : d.go; return draw(); }
   if (d.filter) { ui.filter = d.filter; return draw(); }
   if (d.pick) { ui.pick = +d.pick; ui.stream = false; return draw(); }
+  if (d.game) { ui.game = +d.game; ui.page = "game"; return draw(); }
+  if (d.hostgame) { ui.pick = +d.hostgame; ui.stream = false; ui.page = "host"; return draw(); }
+  if (d.solo) { const r = await act("play_solo", { game: +d.solo }); if (r.ok) toast("Starting the game..."); return; }
   if (d.seats) { ui.seats = +d.seats; return draw(); }
   if (d.stream) { ui.stream = d.stream === "1"; return draw(); }
   if (d.chat) { ui.chatTab = d.chat; return draw(); }
@@ -420,6 +453,14 @@ document.addEventListener("submit", async e => {
   }
 });
 document.addEventListener("keydown", e => { if (e.key === "Escape") closeMenu(); });
+
+// the game page's TV: the next screenshot every 6 seconds (classes only, so nothing else redraws)
+setInterval(() => {
+  const imgs = document.querySelectorAll(".tv-screen img");
+  if (imgs.length < 2 || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  ui.slide = ((ui.slide || 0) + 1) % imgs.length;
+  imgs.forEach((im, k) => im.classList.toggle("on", k === ui.slide));
+}, 6000);
 
 // netplay:// links (from a browser or a message): netplay://lobby?h=<host>&p=<port>[&code=<invite>]
 window.addEventListener("netplay-link", async e => {

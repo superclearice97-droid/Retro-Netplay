@@ -72,6 +72,11 @@ if [ -n "$MAC" ]; then
   mkdir -p "$OUT/Retro-Netplay-Player/_internal/sdl2dll/dll"
   for n in SDL2 SDL2_ttf; do ditto "$D/$n.framework" "$OUT/Retro-Netplay-Player/_internal/sdl2dll/dll/$n.framework"; done
 fi
+# PyInstaller links some libraries GStreamer needs (libopus, libogg) to the SDL package's copies: make those real files
+# first, or deleting the SDL package's extras below would leave them pointing at nothing
+find "$OUT/Retro-Netplay-Player" -type l | while read -r l; do
+  case "$(readlink "$l")" in *sdl2dll*) t="$(readlink -f "$l")"; [ -f "$t" ] && cp --remove-destination "$t" "$l" ;; esac
+done
 # only SDL2 and its text library are needed (the SDL package also carries image and sound libraries)
 find "$OUT/Retro-Netplay-Player" -path '*sdl2dll*' -type f -name 'lib*.so*' ! -name 'libSDL2-2.0*' ! -name 'libSDL2_ttf*' -delete
 for lib in libavif libdav1d libwebp libwebpdemux libtiff libxmp libgme libwavpack libopusfile; do   # (they were for those)

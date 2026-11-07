@@ -18,10 +18,42 @@
     "appId": "net.netplay.retro",
     "productName": "Retro-Netplay",
     "asar": true,
-    "files": ["main.js", "preload.js", "package.json"],
-    "extraResources": [{ "from": "../dist-engine/Retro-Netplay-Engine", "to": "engine" }],
-    "protocols": [{ "name": "Retro-Netplay link", "schemes": ["netplay"] }],
-    "linux": { "target": ["AppImage", "zip"], "category": "Game", "icon": "../icon-256.png", "artifactName": "Retro-Netplay-${arch}.${ext}" },
-    "win": { "target": ["zip"], "icon": "../icon-256.png", "artifactName": "Retro-Netplay-windows-${arch}.${ext}" }
-  }
+    "files": [
+      "main.js",
+      "preload.js",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../dist-engine/Retro-Netplay-Engine",
+        "to": "engine"
+      }
+    ],
+    "protocols": [
+      {
+        "name": "Retro-Netplay link",
+        "schemes": [
+          "netplay"
+        ]
+      }
+    ],
+    "linux": {
+      "target": [
+        "AppImage",
+        "zip"
+      ],
+      "category": "Game",
+      "icon": "../icon-256.png",
+      "artifactName": "Retro-Netplay-${arch}.${ext}"
+    },
+    "win": {
+      "target": [
+        "zip"
+      ],
+      "icon": "../icon-256.png",
+      "artifactName": "Retro-Netplay-windows-${arch}.${ext}"
+    },
+    "publish": null
+  },
+  "repository": "https://github.com/superclearice97-droid/Retro-Netplay"
 }

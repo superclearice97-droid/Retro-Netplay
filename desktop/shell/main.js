@@ -8,6 +8,14 @@ const fs = require('fs');
 const { spawn } = require('child_process');
 
 app.setName('Retro-Netplay');
+// An AppImage can't use Chromium's setuid sandbox helper, and Ubuntu 24.04+ blocks the user-namespace sandbox for apps
+// without an AppArmor profile, so Electron would refuse to start there. This window only shows the engine's own page
+// on this computer (other sites open in the normal browser), so in that one case it runs without Chromium's sandbox.
+if (process.env.APPIMAGE) {
+  try {
+    if (fs.readFileSync('/proc/sys/kernel/apparmor_restrict_unprivileged_userns', 'utf8').trim() === '1') app.commandLine.appendSwitch('no-sandbox');
+  } catch {}
+}
 let engine, win, origin, quitting = false;
 const logFile = path.join(app.getPath('userData'), 'engine.log');
 

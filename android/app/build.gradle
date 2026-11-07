@@ -30,6 +30,16 @@ android {
     }
 }
 
+// the interface: the same files as the desktop app's (desktop/ui), copied in when the app is built
+def uiAssets = layout.buildDirectory.dir("generated/ui-assets")
+tasks.register('copyUi', Copy) {
+    from(rootProject.file('../desktop/ui')) { into 'ui' }
+    from(rootProject.file('../desktop/sounds')) { into 'ui/sounds' }
+    into uiAssets
+}
+android.sourceSets.main.assets.srcDir(uiAssets)
+tasks.named('preBuild') { dependsOn 'copyUi' }
+
 dependencies {
     implementation project(':core')
     // WebRTC for the stream player (Apache 2.0; Google's libwebrtc inside is BSD). Plays VP8 itself; H.264 only

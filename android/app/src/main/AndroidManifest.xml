@@ -32,12 +32,24 @@
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:theme="@style/Theme.Ink"
         android:usesCleartextTraffic="true">
-        <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop"
+        <!-- The arcade: the same interface as the desktop app, run by the phone's own engine. -->
+        <activity android:name=".ArcadeActivity" android:exported="true" android:launchMode="singleTask"
+            android:theme="@android:style/Theme.Black.NoTitleBar"
             android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- netplay://lobby?h=...&p=...[&code=...] invite links -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="netplay" android:host="lobby" />
+            </intent-filter>
+        </activity>
+        <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop"
+            android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation">
             <!-- netplay://join?... links from the invite page -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />

@@ -139,6 +139,10 @@ function gameCard(g, picked, open = false) {
 
 function host() {
   const lib = S.library;
+  if (S.device?.can_host === false) return `<div class="page"><div class="head"><div><div class="eyebrow">Host</div><h1>Host a game</h1></div></div>
+    <div class="empty card"><div class="icon-big">${icon("monitor-play")}</div><h2 style="margin:12px 0 6px">Hosting from a phone is coming later</h2>
+    <p class="muted">For now, open rooms from a computer with Retro-Netplay. On this phone you can join any room in the arcade.</p>
+    <button class="btn primary big" data-go="arcade">${icon("monitor-play")} See open rooms</button></div></div>`;
   if (!lib.length) return `<div class="page"><div class="head"><div><div class="eyebrow">Host</div><h1>Host a game</h1></div></div>
     <div class="empty card"><div class="icon-big">${icon("folder-plus")}</div><h2 style="margin:12px 0 6px">First, show Retro-Netplay your games</h2>
     <p class="muted">Pick the folder where your game files are. Retro-Netplay finds the games and their emulators.</p>
@@ -277,9 +281,9 @@ function settings() {
       <p class="muted">A lobby is where rooms and chat live. Any Retro-Netplay app can run one; people join it with its address.</p>
       <div class="row"><span class="dot ${L.connected ? "ok" : "bad"}"></span><b>${esc(L.name || L.address)}</b><span class="muted mono small">${esc(L.address)}</span></div>
       <div class="row"><input id="lobby-addr" placeholder="Lobby address, e.g. 203.0.113.5:7777" style="flex:1"><button class="btn primary" data-act="connect">Connect</button></div>
-      <div class="row"><button class="btn" data-lobby="127.0.0.1:7777">This computer's lobby</button>${(L.saved || []).map(a => `<button class="btn ghost mono" data-lobby="${esc(a)}">${esc(a)}</button>`).join("")}</div>
-      <label class="toggle"><input type="checkbox" id="run-lobby" ${L.run_own ? "checked" : ""}><span><b>Run a lobby on this computer</b>
-        <small>Others join it with this computer's address. For people outside your home, your router must let them in (the app asks it to). You moderate it: tap a name to mute, remove or ban.</small></span></label>
+      <div class="row">${S.device?.phone ? "" : `<button class="btn" data-lobby="127.0.0.1:7777">This computer's lobby</button>`}${(L.saved || []).map(a => `<button class="btn ghost mono" data-lobby="${esc(a)}">${esc(a)}</button>`).join("")}</div>
+      ${S.device?.phone ? "" : `<label class="toggle"><input type="checkbox" id="run-lobby" ${L.run_own ? "checked" : ""}><span><b>Run a lobby on this computer</b>
+        <small>Others join it with this computer's address. For people outside your home, your router must let them in (the app asks it to). You moderate it: tap a name to mute, remove or ban.</small></span></label>`}
       ${L.share ? shareBox(L.share) : ""}
       ${L.admin ? `<div class="note small">${icon("shield")} You run this lobby. Reports arrive here and are kept in its reports file.</div>` : ""}
     </section>
@@ -288,8 +292,8 @@ function settings() {
       <div><b>Blocked players</b> <span class="muted small">(you don't see their messages and they can't join your rooms)</span>
         ${S.blocked.length ? S.blocked.map(b => `<div class="row spread"><span>${esc(b.name || b.id)}</span><button class="btn ghost" data-unblock="${esc(b.id)}">Unblock</button></div>`).join("") : `<p class="muted small">Nobody.</p>`}</div>
     </section>
-    <section class="card stack"><h2>${icon("gamepad-2")} Emulators</h2>${emus}
-      <p class="muted small">Retro-Netplay starts these for you. Install the ones for your consoles (RetroArch, Dolphin, PCSX2, RPCS3); they're found by themselves.</p></section>
+    ${emus ? `<section class="card stack"><h2>${icon("gamepad-2")} Emulators</h2>${emus}
+      <p class="muted small">Retro-Netplay starts these for you. Install the ones for your consoles (RetroArch, Dolphin, PCSX2, RPCS3); they're found by themselves.</p></section>` : ""}
     <section class="card stack"><h2>${icon("user-x")} Profile</h2>
       <form class="row" id="rename"><input name="name" maxlength="24" value="${esc(S.me.name)}" style="flex:1"><button class="btn">Save name</button></form>
       <label class="toggle"><input type="checkbox" id="sounds" ${S.settings.sounds ? "checked" : ""}><span><b>Sounds</b><small>A chime when someone wants to join.</small></span></label>

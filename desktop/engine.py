@@ -239,6 +239,7 @@ class Engine:
                                                     "game_folders", "use_relay")},
                 "blocked": cfg.get("blocked", []),
                 "playing": {"note": self.play_note, "running": sorted(n for n, p in self.procs.items() if p.poll() is None)},
+                "device": {"phone": False, "can_host": True},
             }
 
     def library(self):

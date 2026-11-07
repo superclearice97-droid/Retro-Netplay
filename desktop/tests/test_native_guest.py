@@ -175,6 +175,9 @@ try:
                                        "--realm=netplay.test", "--no-tls", "--no-dtls", "--no-cli", "--allow-loopback-peers",
                                        "--log-file=stdout", "--min-port=51000", "--max-port=51200"],
                                       stdout=open(turnlog, "w"), stderr=subprocess.STDOUT))
+        time.sleep(1.0)
+        if procs[-1].poll() is not None:      # coturn refused its options (they change between versions): say which
+            print("coturn stopped right away:\n" + open(turnlog).read()[:1500], flush=True)
         port2 = free_port()
         procs.append(subprocess.Popen([sys.executable, "-u", os.path.join(D, "server.py"), str(port2), "0"],
                                       stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT,

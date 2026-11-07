@@ -29,6 +29,7 @@ import time
 import sys
 from urllib.parse import parse_qs, quote, urlsplit
 
+import lobby
 import sessions
 
 PING_SECONDS = 20          # keeps phones on flaky mobile networks from lingering as ghosts
@@ -479,6 +480,9 @@ async def handle(reader, writer):
             return
         if isinstance(req, dict) and req.get("op") == "stream":
             await stream_conn(reader, writer, req, ip)
+            return
+        if isinstance(req, dict) and req.get("op") == "lobby":
+            await lobby.member_conn(reader, writer, req, ip)
             return
         if isinstance(req, dict) and req.get("op") == "hello":
             await presence(reader, writer, req, ip)
@@ -1123,6 +1127,7 @@ async def main(port, http_port=None, discovery=True, ready=None):
     http_port = port + 1 if http_port is None else http_port
     load_codes()
     load_turn()
+    lobby.setup(data_dir(), computer_name())
     if discovery:
         try:
             await asyncio.get_running_loop().create_datagram_endpoint(

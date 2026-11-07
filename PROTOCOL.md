@@ -123,3 +123,41 @@ A client broadcasts the ASCII text `RETRO-NETPLAY-DISCOVER/1` by UDP to port N+2
 - A join is a `call` with `kind:"play"`; the host's app shows an approval card (or accepts on its own with the "join anytime" privilege).
 - In a private room (invite or call), if the two players can never be paired (no shared lane, or nobody can host), the server answers both with `{"op":"error","msg":"...","why":"no_common_lane"}` instead of letting them wait.
 - `{"v":1,"op":"whoami"}` as the only line: the server answers `{"op":"whoami","v":1,"ip":"<the address it sees>","app":"retro-netplay","since":...,"id":"...","name":"..."}` and closes. Apps use it to show your internet address.
+
+## Lobby (protocol v2): arcade rooms and chat
+
+Any Retro-Netplay app can run a lobby (it is part of the matchmaker, `lobby.py`). One connection per player; the
+first line is `{"op":"lobby","v":2,"me":"<secret, 32-64 hex>","name":"Sam","client":"desktop","blocked":[ids],
+"admin":"<token>"}`, then newline-delimited JSON both ways. `admin` is only sent by the app on the lobby's own
+computer: it reads it from `lobby-admin.token` in the server's data folder (readable only by that account), and it
+makes that player the lobby's moderator. Players answer `ping` with `{"op":"pong"}`; a player silent for 70 s is
+dropped.
+
+Server -> player: `welcome` {id, name, admin, lobby {name, rules}, rooms [...], online, chat [recent lobby messages]};
+`rooms` {rooms, online} whenever the list of open rooms changes. A public room view: {id, title, game, system,
+mode ("stream" or "netplay"), seats (2-4, host included), taken, host {id, name}, note, auto, public, created}.
+People in a room also get `room` {room} with `players` [{id, name, seat}] and the room's `invite` code.
+
+Hosting: `post` {room: {game, title, system, mode, seats, note, auto, public, native}} -> `posted` {room}.
+`native` holds what a guest's emulator needs (short keys and values; never `ip`), e.g. {"emu":"dolphin",
+"code":"<traversal host code>"} or {"emu":"retroarch","port":55435}. `update` {room: fields to change} (not game
+or mode). `close`. A host answers `request` {req, room, player} with `answer` {req, accept}; `kick` {player,
+ban} removes a seated player (ban: for this room). The host gets `seated` {room, seat, player, session?},
+`left` {room, seat, player, why} and `request_gone` {req}.
+
+Joining: `join` {room} or {invite: "<6-character code>"} -> `waiting` {room, req} (the host decides), then
+`accepted` {room, seat, session? | native?} or `declined` {room, why}. Auto-accept rooms seat straight away.
+`cancel_join`. `leave` gives the seat back. A seated player may get `removed` {room, why} or `room_closed` {room,
+why}. In a stream room each seat has its own session: `session` {key, sig: "tcp"} for the guest and for the host,
+used exactly like the stream lane above. In a netplay room the guest gets `native` (plus the host's `ip` when the
+emulator connects directly, i.e. when there is a `port`).
+
+Chat: `chat` {to: "lobby" | room id, text (up to 300 characters)} -> everyone in the lobby or the room gets `chat`
+{to, from {id, name}, text, ts}, except players who blocked the sender (`block` {ids} replaces the list). At most
+5 messages in 10 s. Markup characters are removed, and words in the lobby's `lobby-words.txt` are masked.
+`report` {player, why: abuse|cheating|spam|name|underage|other, text} -> `reported`; it is saved to
+`lobby-reports.jsonl` (with the reported player's last 10 messages) and sent to the moderator. The moderator's
+`mod` {action: mute|kick|ban|unban, player, minutes} -> `mod_done`; the player gets `muted` {minutes} or `bye`
+{why}. Bans are kept in `lobby-bans.json`. Problems come back as `error_soft` {about, msg}.
+
+Lobby name and rules: `lobby.json` {"name": ..., "rules": ...} in the server's data folder.

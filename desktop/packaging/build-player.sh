@@ -19,7 +19,7 @@ case "$(uname -s)" in MINGW*|MSYS*) WIN=1 ;; *) WIN="" ;; esac
 MAC=""; [ "$(uname -s)" != Darwin ] || MAC="$(brew --prefix)"     # macOS: Homebrew's GStreamer
 SRC="$HERE"                                  # (as the build's Python sees it: C:/... on Windows)
 [ -z "$WIN" ] || SRC="$(cygpath -m "$HERE")"
-PYI=6.11.1; [ -z "$MAC" ] || PYI=6.16.0     # (Homebrew's Python is newer than 6.11 supports)
+PYI=6.11.1; [ -z "$MAC" ] || PYI=6.22.3     # (Homebrew's Python is newer than 6.11 supports)
 "$PY" -c "import PyInstaller" 2>/dev/null || "$PY" -m pip install --quiet "pyinstaller==$PYI"
 "$PY" -m pip install --quiet pysdl2==0.9.17
 # SDL2 + SDL2_ttf: the pysdl2-dll package (official SDL builds) on Linux and macOS; on Windows MSYS2's SDL2 packages.

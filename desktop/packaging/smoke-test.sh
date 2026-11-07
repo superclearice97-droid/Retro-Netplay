@@ -13,6 +13,7 @@ EXTRA=""; [ "$(id -u)" = 0 ] && EXTRA="--no-sandbox"      # (Chromium won't run 
 cat > "$WORK/scene.sh" <<'EOF'
 # runs inside xvfb-run: scene.sh <app> <extra> <home> <out> <name> [<room json>]
 APP=$1; EXTRA=$2; export HOME=$3; OUT=$4; NAME=$5; ROOM=${6:-}
+export XDG_CONFIG_HOME="$HOME/.config"      # (CI machines set their own; the app's log must land in this home)
 "$APP" $EXTRA >"$HOME/app.log" 2>&1 &
 LOG="$HOME/.config/Retro-Netplay/engine.log"
 for _ in $(seq 1 60); do grep -q RETRO_NETPLAY_UI "$LOG" 2>/dev/null && break; sleep 1; done

@@ -26,7 +26,8 @@ def engine(name, games, extra):
     cfg = {"setup_done": True, "age_ok": True, "my_name": name, "game_folders": [os.path.join(home, "Games")],
            "paths": paths, "auto_ports": False, **extra}
     json.dump(cfg, open(os.path.join(home, ".netplay-matchmaker/config.json"), "w"))
-    env = dict(os.environ, HOME=home, PATH=os.path.join(home, "bin") + os.pathsep + os.environ["PATH"])
+    env = dict(os.environ, HOME=home, PATH=os.path.join(home, "bin") + os.pathsep + os.environ["PATH"],
+               XDG_CONFIG_HOME=os.path.join(home, ".config"))     # (CI machines set their own)
     p = subprocess.Popen([sys.executable, os.path.join(D, "engine.py"), "--no-browser"], env=env, stdout=subprocess.PIPE, text=True,
                          stderr=open(os.path.join(home, "engine.log"), "w"))
     procs.append(p)

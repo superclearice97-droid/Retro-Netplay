@@ -13,13 +13,15 @@ def check(name, cond, extra=""):
     ok &= bool(cond); print(("PASS " if cond else "FAIL ") + name + (f"  [{extra}]" if extra and not cond else ""), flush=True)
 
 def free_port():
-    s = socket.socket(); s.bind(("127.0.0.1", 0)); p = s.getsockname()[1]; s.close(); return p
+    # on all addresses, as the server binds: a port free on 127.0.0.1 can still be held on another address (e.g. by
+    # an outgoing connection that got it as its local port), and then the server's 0.0.0.0 bind fails
+    s = socket.socket(); s.bind(("0.0.0.0", 0)); p = s.getsockname()[1]; s.close(); return p
 
 mm.PING_SECONDS = 1          # quicker expiry checks for the test
 PORT = free_port()
 while True:                  # web port = PORT + 1 must be free too
     try:
-        t = socket.socket(); t.bind(("127.0.0.1", PORT + 1)); t.close(); break
+        t = socket.socket(); t.bind(("0.0.0.0", PORT + 1)); t.close(); break
     except OSError:
         PORT = free_port()
 threading.Thread(target=lambda: asyncio.run(mm.main(PORT, discovery=False)), daemon=True).start(); time.sleep(0.6)

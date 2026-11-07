@@ -159,6 +159,9 @@ class LobbyClient(threading.Thread):
         while not self.stop.is_set():
             try:
                 s = mmtls.connect(self.host, self.port, timeout=8)
+                if self.stop.is_set():          # replaced while it was connecting
+                    s.close()
+                    return
                 s.settimeout(None)
                 cfg = self.engine.cfg
                 hello = {"op": "lobby", "v": 2, "me": cfg["secret"], "name": cfg.get("my_name") or "Player",
@@ -175,19 +178,21 @@ class LobbyClient(threading.Thread):
                         msg = json.loads(line)
                     except ValueError:
                         continue
+                    if self.stop.is_set():
+                        break
                     if isinstance(msg, dict):
                         if msg.get("op") == "ping":
                             self.send({"op": "pong"})
                         else:
-                            self.engine.on_lobby(msg)
+                            self.engine.on_lobby(msg, self)
             except (OSError, ValueError) as e:
                 if not self.stop.is_set():
-                    self.engine.lobby_down(str(e))
+                    self.engine.lobby_down(str(e), self)
             with self.lock:
                 self.sock = None
             if self.stop.is_set():
                 return
-            self.engine.lobby_down("")
+            self.engine.lobby_down("", self)
             self.stop.wait(wait)
             wait = min(wait * 2, 30)
 
@@ -316,7 +321,9 @@ class Engine:
         self.lobby.start()
         self.changed()
 
-    def lobby_down(self, why):
+    def lobby_down(self, why, client=None):
+        if client is not None and client is not self.lobby:
+            return                      # (an old connection's last words)
         with self.lock:
             was = self.lobby_state["connected"]
             self.lobby_state.update(connected=False, error=why or self.lobby_state["error"])
@@ -331,7 +338,9 @@ class Engine:
             return False
         return True
 
-    def on_lobby(self, m):
+    def on_lobby(self, m, client=None):
+        if client is not None and client is not self.lobby:
+            return
         op = m.get("op")
         with self.lock:
             if op == "welcome":

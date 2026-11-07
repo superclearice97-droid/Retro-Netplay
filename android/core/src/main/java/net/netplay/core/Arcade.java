@@ -186,7 +186,8 @@ public final class Arcade {
         return true;
     }
 
-    private synchronized void lobbyDown(String why) {
+    private synchronized void lobbyDown(Link from, String why) {
+        if (from != link) return;
         boolean was = Boolean.TRUE.equals(lobby.get("connected"));
         lobby.put("connected", false);
         if (why != null && !why.isEmpty()) lobby.put("error", why);
@@ -196,7 +197,8 @@ public final class Arcade {
     }
 
     @SuppressWarnings("unchecked")
-    synchronized void onLobby(Map<String, Object> m) {
+    synchronized void onLobby(Link from, Map<String, Object> m) {
+        if (from != link) return;                     // (an old connection's last words)
         String op = str(m.get("op"));
         switch (op) {
             case "welcome": {
@@ -397,6 +399,7 @@ public final class Arcade {
             while (!stopped) {
                 try {
                     Socket s = MmTls.connect(host, port, 8000);
+                    if (stopped) { s.close(); return; }      // replaced while it was connecting
                     s.setSoTimeout(0);
                     List<Object> blocked = new ArrayList<>();
                     for (Object b : asList(cfg.get("blocked"))) blocked.add(asMap(b).get("id"));
@@ -411,15 +414,16 @@ public final class Arcade {
                     while ((line = r.readLine()) != null) {
                         Map<String, Object> m;
                         try { m = Json.parseObject(line); } catch (RuntimeException e) { continue; }
+                        if (stopped) break;
                         if ("ping".equals(m.get("op"))) send(map("op", "pong"));
-                        else onLobby(m);
+                        else onLobby(this, m);
                     }
                 } catch (IOException | RuntimeException e) {
-                    if (!stopped) lobbyDown(e.getMessage() == null ? "" : e.getMessage());
+                    if (!stopped) lobbyDown(this, e.getMessage() == null ? "" : e.getMessage());
                 }
                 synchronized (this) { sock = null; }
                 if (stopped) return;
-                lobbyDown("");
+                lobbyDown(this, "");
                 try { Thread.sleep(wait); } catch (InterruptedException e) { return; }
                 wait = Math.min(wait * 2, 30000);
             }

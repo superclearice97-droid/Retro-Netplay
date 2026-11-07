@@ -2,5 +2,6 @@ __pycache__/
 *.pyc
 desktop/ss_dev.py
 preview/
-dist-engine/
-shell/dist/
+desktop/dist-engine/
+desktop/shell/dist/
+dist/

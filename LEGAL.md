@@ -30,11 +30,13 @@ This is the checklist the project follows as it's built, so publishing doesn't n
 
 ## 4. Streaming and playing with strangers
 
-- Sessions stream gameplay only to the people in that session. Don't add public broadcast or recording of other people's sessions without their consent.
-- Matchmaking with "randoms" needs: block and report, a way to leave instantly, and no open text or voice chat with strangers until there's moderation.
-- Friends: mutual adds only, privileges stored on the device, "only match me with friends" available, no chat. If chat or friend requests between strangers are ever added, redo this section (moderation, reporting, age).
-- Games draw a young audience. Either set a 13+ age requirement (with an age prompt before random matchmaking), or plan for COPPA if children under 13 can use online features.
+The arcade (version 2) adds public rooms and text chat with strangers. What's in place, and what stays a rule:
 
+- **Age:** 13+. The app asks before you can enter a lobby; "seems under 13" is a report reason. Don't remove the gate. If under-13s must ever be allowed, plan for COPPA first.
+- **Moderation:** decentralised. Whoever runs a lobby moderates it: reports reach their app and `lobby-reports.jsonl` (with the reported player's last 10 messages), and they can mute, remove and ban (bans persist). The moderator is proven by a token file only their account can read. Room hosts can remove and ban from their room. Everyone can block. Chat is rate-limited (5 messages per 10 s), markup is stripped, the lobby's word list is masked server-side, and a swear-word and slur filter is on by default on each device.
+- **Data:** rooms, presence, mutes and the last 30 lobby messages live in memory only; room chat isn't kept; only reports and bans touch disk, on the lobby runner's computer (PRIVACY.md).
+- **No central service:** the project runs no lobby. Each lobby runner is the operator of their lobby (TERMS.md "Running a lobby"). If the project ever runs a public lobby itself, it becomes the operator: abuse contact, response times, and the content-moderation duties of the places it serves (for example the EU DSA and the UK Online Safety Act) apply. Redo this section first.
+- Sessions stream gameplay only to the people seated in that room (at most 4, host included). No spectators, no public broadcast, no recording.
 ## 5. Privacy
 
 - **Peer-to-peer exposes IP addresses** to the other players. Say so plainly in the app before the first online session, and offer relay mode as a privacy option.
@@ -76,7 +78,8 @@ These keep Retro-Netplay as private as possible from day one.
 The built-in streamer sends video and sound of a running game from the host's computer to a guest's player window (or, on Android, the app's built-in page). That is different from two people each running their own copy in sync (netplay).
 
 - Sending a copyrighted game's picture and sound to someone else can be treated as a public performance or distribution, depending on the country. Platforms such as Steam and Parsec handle this with their own licences and terms; a hobby project has none.
-- Mitigations the design already uses: private sessions between two people, no public or broadcast mode, no recording, invite links that expire.
+- Mitigations the design used before version 2: private sessions between two people, no public or broadcast mode, no recording, invite links that expire.
+- **Version 2 (the arcade) goes further:** stream rooms can be listed publicly and joined by strangers (up to 3 guests), which is how Parsec Arcade worked. Parsec had its own terms and licences; this project has none. This is a decision for the project owner, ideally with a lawyer, before release. Options that reduce the risk: rooms for games with native netplay default to netplay (each player runs their own copy); stream rooms could require each joining player to confirm they own the game; stream rooms could be limited to invite codes (not listed in the arcade).
 - Keep doing: tell both players that they should each own the game, never offer "watch" or "spectate" links for strangers, and never record or re-stream sessions.
 - Have a lawyer look at this section before any public launch. It is the part most likely to attract a complaint from a publisher.
 

@@ -10,18 +10,21 @@ def check(name, ok, info=""):
     print(("PASS " if ok else "FAIL ") + name + (f"  [{str(info)[:800]}]" if info and not ok else ""), flush=True); ok or fails.append(name)
 
 LOBBY = 7950
-procs = []
+procs, homes = [], []
 def engine(name, games, extra):
     home = tempfile.mkdtemp()
-    for d in (".netplay-matchmaker", "Games/GBA", "bin", ".config/retroarch/cores"):
+    homes.append(home)
+    for d in (".netplay-matchmaker", "Games/GBA", "Games/GameCube", "bin", ".config/retroarch/cores"):
         os.makedirs(os.path.join(home, d), exist_ok=True)
-    ra = os.path.join(home, "bin", "retroarch")
-    open(ra, "w").write("#!/bin/sh\necho \"$@\" >> \"$HOME/emulator.txt\"\nsleep 30\n"); os.chmod(ra, 0o755)
+    paths = {}
+    for emu in ("retroarch", "dolphin-emu"):
+        exe = paths[emu.split("-")[0]] = os.path.join(home, "bin", emu)
+        open(exe, "w").write("#!/bin/sh\necho \"$@\" >> \"$HOME/emulator.txt\"\nsleep 30\n"); os.chmod(exe, 0o755)
     open(os.path.join(home, ".config/retroarch/cores/mgba_libretro.so"), "w").close()
     for g in games:
-        open(os.path.join(home, "Games/GBA", g + ".gba"), "w").close()
+        open(os.path.join(home, "Games/GameCube" if g.endswith(".rvz") else "Games/GBA", g if g.endswith(".rvz") else g + ".gba"), "w").close()
     cfg = {"setup_done": True, "age_ok": True, "my_name": name, "game_folders": [os.path.join(home, "Games")],
-           "paths": {"retroarch": ra}, "auto_ports": False, **extra}
+           "paths": paths, "auto_ports": False, **extra}
     json.dump(cfg, open(os.path.join(home, ".netplay-matchmaker/config.json"), "w"))
     env = dict(os.environ, HOME=home, PATH=os.path.join(home, "bin") + os.pathsep + os.environ["PATH"])
     p = subprocess.Popen([sys.executable, os.path.join(D, "engine.py"), "--no-browser"], env=env, stdout=subprocess.PIPE, text=True,
@@ -63,17 +66,17 @@ def until(e, cond, timeout=8):
     return state(e)
 
 try:
-    sam = engine("Sam", ["Sonic Battle (USA)", "Bomberman Tournament (USA)"], {"run_lobby": True, "lobby_port": LOBBY, "lobby": f"127.0.0.1:{LOBBY}"})
+    sam = engine("Sam", ["Sonic Battle (USA)", "Bomberman Tournament (USA)", "F-Zero GX (USA).rvz"], {"run_lobby": True, "lobby_port": LOBBY, "lobby": f"127.0.0.1:{LOBBY}"})
     check("the interface page is served", get(sam, "/", token=False)[0] == 200 and b"app.js" in get(sam, "/", token=False)[1])
     check("the API needs the token", get(sam, "/api/state", token=False)[0] == 403)
     check("another site can't use the API (Host header)", get(sam, "/api/state", host="evil.example:80")[0] == 403)
     check("only the library's pictures are served", get(sam, "/art?p=/etc/passwd&t=" + sam["t"], token=False)[0] == 404)
     check("files outside the interface folder aren't served", get(sam, "/../engine.py", token=False)[0] in (400, 404))
-    s = until(sam, lambda s: s["lobby"]["connected"] and len(s["library"]) == 2)
-    check("the game folders are scanned at start", sorted(g["name"] for g in s["library"]) == ["Bomberman Tournament", "Sonic Battle"], s["library"])
+    s = until(sam, lambda s: s["lobby"]["connected"] and len(s["library"]) == 3)
+    check("the game folders are scanned at start", sorted(g["name"] for g in s["library"]) == ["Bomberman Tournament", "F-Zero GX", "Sonic Battle"], s["library"])
     check("connected to this computer's own lobby, as its moderator", s["lobby"]["connected"] and s["lobby"]["admin"], s["lobby"])
-    bea = engine("Bea", ["Sonic Battle (USA)"], {"run_lobby": False, "lobby": f"127.0.0.1:{LOBBY}"})
-    until(bea, lambda s: s["lobby"]["connected"] and s["library"])
+    bea = engine("Bea", ["Sonic Battle (USA)", "F-Zero GX (USA).rvz"], {"run_lobby": False, "lobby": f"127.0.0.1:{LOBBY}"})
+    until(bea, lambda s: s["lobby"]["connected"] and len(s["library"]) == 2)
     check("a second player's app isn't the moderator", not state(bea)["lobby"]["admin"])
 
     sonic = next(g["i"] for g in state(sam)["library"] if g["name"] == "Sonic Battle")
@@ -110,6 +113,20 @@ try:
     do(sam, "post", game=bomber, seats=2, auto=True)
     b = until(bea, lambda s: s["rooms"])
     check("a room for a game Bea doesn't have is listed (the interface greys it out)", b["rooms"] and b["rooms"][0]["mode"] == "netplay")
+    do(sam, "close_room")
+    until(bea, lambda s: not s["rooms"])
+    # Dolphin: both NetPlay windows are filled in (traversal, names, and the host's code once Sam shares it)
+    fzero = next(g["i"] for g in state(sam)["library"] if g["name"] == "F-Zero GX")
+    do(sam, "post", game=fzero, seats=2, auto=True)
+    until(sam, lambda s: s["myroom"])
+    ini = lambda e: open(os.path.join(e["home"], ".config/dolphin-emu/Dolphin.ini")).read() if os.path.exists(os.path.join(e["home"], ".config/dolphin-emu/Dolphin.ini")) else ""
+    check("the host's Dolphin NetPlay window is set up (traversal server, name)", "TraversalChoice = traversal" in ini(sam) and "Nickname = Sam" in ini(sam), ini(sam))
+    b = until(bea, lambda s: s["rooms"])
+    do(bea, "join", room=b["rooms"][0]["id"])
+    until(bea, lambda s: s["seat"] and s["seat"].get("seat") == 2)
+    do(sam, "update_room", code="AB12-CD34")
+    b = until(bea, lambda s: "AB12CD34" in s["playing"]["note"])
+    check("the host's Dolphin code reaches Bea and is filled into her Dolphin", "HostCode = AB12CD34" in ini(bea) and "Nickname = Bea" in ini(bea), (ini(bea), b["playing"]))
     r = do(sam, "setup", name="", age_ok=True)
     check("a name is required", not r["ok"] and "name" in r["msg"])
     r = do(sam, "setup", name="Sam", age_ok=False)
@@ -117,7 +134,8 @@ try:
 finally:
     for p in procs:
         p.terminate()
-    subprocess.run(["pkill", "-f", "sleep 30"], capture_output=True)
+    for h in homes:     # the pretend emulators, by their own folder (a plain "sleep 30" could match other programs)
+        subprocess.run(["pkill", "-f", os.path.join(h, "bin")], capture_output=True)
 
 print("ALL PASSED" if not fails else f"{len(fails)} FAILED")
 sys.exit(1 if fails else 0)

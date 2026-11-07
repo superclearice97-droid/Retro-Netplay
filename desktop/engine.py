@@ -21,6 +21,7 @@ import queue
 import re
 import secrets
 import subprocess
+import sys
 import threading
 import webbrowser
 from pathlib import Path
@@ -66,6 +67,64 @@ def parse_lobby(text):
         return None
     host, port = got
     return host, int(port or LOBBY_PORT)
+
+
+def dolphin_ini(exe):
+    """Where this Dolphin keeps Dolphin.ini: the one that exists, else where a fresh Dolphin would make it."""
+    home = Path.home()
+    if str(exe).startswith("flatpak run"):
+        cands = [home / ".var/app/org.DolphinEmu.dolphin-emu/config/dolphin-emu/Dolphin.ini"]
+    elif os.name == "nt":
+        portable = Path(str(exe)).parent / "portable.txt"
+        cands = ([Path(str(exe)).parent / "User/Config/Dolphin.ini"] if portable.exists() else []) + \
+                [Path(os.environ.get("APPDATA", home)) / "Dolphin Emulator/Config/Dolphin.ini",
+                 home / "Documents/Dolphin Emulator/Config/Dolphin.ini"]
+    elif sys.platform == "darwin":
+        cands = [home / "Library/Application Support/Dolphin/Config/Dolphin.ini"]
+    else:
+        cands = [Path(os.environ.get("XDG_CONFIG_HOME", home / ".config")) / "dolphin-emu/Dolphin.ini",
+                 home / ".dolphin-emu/Config/Dolphin.ini"]
+    return next((c for c in cands if c.exists()), cands[0])
+
+
+def set_ini(path, section, values):
+    """Set some keys of one [section] in an .ini file, leaving every other line as it was."""
+    try:
+        lines = Path(path).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        lines = []
+    out, inside, done = [], False, set()
+    for line in lines:
+        head = line.strip()
+        if head.startswith("[") and head.endswith("]"):
+            if inside:                                     # leaving the section: add what wasn't there
+                out += [f"{k} = {v}" for k, v in values.items() if k not in done]
+                done.update(values)
+            inside = head[1:-1] == section
+        elif inside and "=" in line and line.split("=", 1)[0].strip() in values:
+            k = line.split("=", 1)[0].strip()
+            out.append(f"{k} = {values[k]}")
+            done.add(k)
+            continue
+        out.append(line)
+    if inside:
+        out += [f"{k} = {v}" for k, v in values.items() if k not in done]
+    elif not done:
+        out += ([""] if out else []) + [f"[{section}]"] + [f"{k} = {v}" for k, v in values.items()]
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    Path(path).write_text("\n".join(out) + "\n", encoding="utf-8")
+
+
+def prefill_dolphin(exe, nickname, host_code=""):
+    """Fill in Dolphin's NetPlay window: traversal server (no open port needed), your name and, to join, the host's
+    code. Only these keys of [NetPlay] change; the player still presses Host or Connect in Dolphin."""
+    values = {"TraversalChoice": "traversal", "Nickname": nickname or "Player"}
+    if host_code:
+        values["HostCode"] = host_code
+    try:
+        set_ini(dolphin_ini(exe), "NetPlay", values)
+    except OSError:
+        pass
 
 
 class LobbyClient(threading.Thread):
@@ -154,7 +213,8 @@ class Engine:
         self.procs = {}                # name -> Popen (emulator, stream hosts per seat, player)
         self.play_note = ""
         self.finder = None
-        self.share = {"lan": "", "public": "", "router": "", "port": self.cfg.get("lobby_port", LOBBY_PORT)}    # how others reach this computer's lobby
+        self.share = {"lan": "", "public": "", "router": "", "port": self.cfg.get("lobby_port", LOBBY_PORT)}
+        self.emu_for = None            # (game key, room mode or "solo") the running emulator was started for    # how others reach this computer's lobby
 
     # ------------------------------------------------------------------ state for the interface
     def snapshot(self):
@@ -311,6 +371,13 @@ class Engine:
                 self.chat["room"] = []
                 self.notice("joined", f"You're in! You're Player {m.get('seat')}.", sound="found")
                 self.start_guest(m)
+            elif op == "native" and self.seat and self.seat.get("room", {}).get("id") == m.get("room"):
+                code = re.sub(r"[^A-Za-z0-9]", "", str((m.get("native") or {}).get("code", "")))[:16]
+                if code and self.cfg["paths"].get("dolphin"):
+                    prefill_dolphin(self.cfg["paths"]["dolphin"], self.cfg.get("my_name"), code)
+                    self.play_note = (f"The host shared Dolphin's code ({code}). In Dolphin: Tools > NetPlay > Connect "
+                                      "(it's filled in), then press Connect.")
+                    self.notice("info", "The host shared Dolphin's code: it's filled in for you.")
             elif op in ("declined", "removed", "room_closed"):
                 self.seat = None
                 self.chat["room"] = []
@@ -377,20 +444,24 @@ class Engine:
     def start_host_game(self):
         """The room is up: start the game, so the host plays while players come in (like Parsec Arcade)."""
         g = getattr(self, "_hosting", None)
-        if not g or (self.procs.get("emulator") and self.procs["emulator"].poll() is None):
-            return
         room = self.myroom or {}
+        want = (core.game_key(g), room.get("mode")) if g else None
+        running = self.procs.get("emulator") and self.procs["emulator"].poll() is None
+        if not g or (running and self.emu_for == want):
+            return                     # (already playing this game this way: keep it)
         if room.get("mode") == "netplay" and core.SYSTEMS[g["system"]]["emu"] == "retroarch":
             kind, argv = core.build_cmd(self.cfg, g, "native", "host", {})
             note = "RetroArch is hosting netplay. Players who join connect to it by themselves."
         elif room.get("mode") == "netplay":
+            prefill_dolphin(self.cfg["paths"]["dolphin"], self.cfg.get("my_name"))
             argv = core.emu_argv(self.cfg["paths"]["dolphin"])
-            note = ("In Dolphin: Tools > NetPlay > Host, choose the game, then paste Dolphin's host code into the room "
-                    "so players can connect.")
+            note = ("In Dolphin: Tools > NetPlay > Host (it's already set up), choose the game, then copy Dolphin's "
+                    "host code into the box below so players can connect.")
         else:
             argv = core.solo_cmd(self.cfg, g)
             note = "Playing. Players who join see your game window and control Players 2 to 4."
         self.launch("emulator", argv)
+        self.emu_for = want
         self.play_note = note
 
     def start_stream_host(self, seat, key):
@@ -445,10 +516,12 @@ class Engine:
             self.launch("emulator", argv)
             self.play_note = "RetroArch is connecting to the host's game."
         elif nat.get("emu") == "dolphin":
+            code = re.sub(r"[^A-Za-z0-9]", "", str(nat.get("code", "")))[:16]
+            prefill_dolphin(self.cfg["paths"]["dolphin"], self.cfg.get("my_name"), code)
             self.launch("emulator", core.emu_argv(self.cfg["paths"]["dolphin"]))
-            code = nat.get("code", "")
-            self.play_note = (f"In Dolphin: Tools > NetPlay > Connect, choose Traversal Server and enter the host code {code}."
-                              if code else "Wait for the host to share Dolphin's host code in the room, then connect in Dolphin.")
+            self.play_note = (f"In Dolphin: Tools > NetPlay > Connect. The host's code ({code}) is already filled in: "
+                              "press Connect." if code else
+                              "Waiting for the host to share Dolphin's host code. When it appears, leave and join again.")
 
     # ------------------------------------------------------------------ programs
     def launch(self, name, argv, log=None):
@@ -595,6 +668,7 @@ class Engine:
             g = self.game(a.get("game"))
             if g and not (p := core.boot_problem(cfg, g)):
                 self.launch("emulator", core.solo_cmd(cfg, g))
+                self.emu_for = (core.game_key(g), "solo")
             elif g:
                 return {"ok": False, "msg": p}
         else:

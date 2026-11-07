@@ -176,6 +176,8 @@ sam.send({"op": "join", "room": nr.get("id")})
 na = sam.wait("accepted")
 check("netplay room: Dolphin host code, no session, no address the host typed in",
       na.get("native") == {"emu": "dolphin", "code": "ABCD1234"} and "session" not in na, na)
+nat_host.send({"op": "update", "room": {"native": {"emu": "dolphin", "code": "WXYZ9876"}}})
+check("a new Dolphin host code reaches the players already in the room", sam.wait("native").get("native") == {"emu": "dolphin", "code": "WXYZ9876"})
 sam.send({"op": "leave"})
 check("leaving frees the seat", nat_host.wait("left").get("seat") == 2)
 nat_host.send({"op": "update", "room": {"native": {"emu": "retroarch", "port": 55435}}})

@@ -512,7 +512,11 @@ def on_message(m, msg, now):
         r, problem = clean_room(msg.get("room"), m.room)
         if problem:
             return soft(m, "update", problem)
+        changed = r["native"] != m.room.native
         m.room.apply(r)
+        if changed and m.room.mode == "netplay" and "port" not in r["native"]:
+            for guest in m.room.seated.values():        # e.g. Dolphin's host code, for the players already in
+                send(guest, {"op": "native", "room": m.room.id, "native": dict(r["native"])})
         return room_update(m.room)
     if op == "close":
         if m.room:

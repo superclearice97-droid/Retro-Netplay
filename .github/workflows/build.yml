@@ -268,12 +268,12 @@ jobs:
             --title "Retro-Netplay test build" \
             --notes "Early test build, from commit ${GITHUB_SHA::7}.
 
-          - Android: Retro-Netplay.apk (install on your phone; debug-signed).
-          - Linux: Retro-Netplay-x86_64.AppImage (one file: download, then double-click; if it won't open, right-click > Properties > Permissions > Allow executing as program), or Retro-Netplay-linux-x86_64.zip (unzip, open the folder, double-click Retro-Netplay).
+          Version 2, the arcade: open a room for the game you're playing and people in the lobby ask to join, or jump into someone else's room. Netplay rooms (RetroArch, Dolphin) for games whose emulator has its own netplay, stream rooms (like Parsec Arcade) for everything else. Lobby and room chat with a swear-word filter, block and report; whoever runs a lobby can mute, remove and ban. Any app can run a lobby: share it from Settings > Lobby. For people 13 and over. All devices need this version (older apps can't use the new lobbies). README.txt explains it step by step.
 
-          New: joining a friend's PS2/PS3 stream opens Retro-Netplay's own player window (no web browser): Friends > Join, they tap Allow, the game appears. F11 full screen, F2 numbers, Esc twice to leave. Invites are netplay:// links plus a code to type under Enter code. Both computers need this version. The Android app has its own player now too (the phone's video chip decodes the picture; controller or on-screen buttons). Older app versions can no longer stream: update the app on both sides. Also new: title cards. Double-click (or tap) a game for its box art, details and a gameplay window on a moving, game-coloured background; the art comes from Skraper's files next to your games (see README.txt, Title cards and game art).
-          - Windows (EARLY TEST, never tried on a real Windows PC yet): Retro-Netplay-windows-x86_64.zip, unzip and double-click Retro-Netplay. It can join a friend's stream (hosting is Linux only).
-          - Mac (EARLY TEST, Apple Silicon M1 and later, never tried on a real Mac yet): Retro-Netplay-mac-arm64.zip, double-click to unzip, move Retro-Netplay to Applications and open it. It isn't signed by Apple, so the first time macOS refuses: open System Settings > Privacy & Security and press Open Anyway. It can join a friend's stream and opens netplay:// links.
+          - Linux: Retro-Netplay-x86_64.AppImage (one file: download, then double-click; if it won't open, right-click > Properties > Permissions > Allow executing as program), or Retro-Netplay-linux-x86_64.zip (unzip, open the folder, double-click retro-netplay). Hosting stream rooms works on Linux.
+          - Windows (EARLY TEST, never tried on a real Windows PC yet): Retro-Netplay-windows-x86_64.zip, unzip and double-click Retro-Netplay. Joins rooms; hosting netplay rooms should work but hasn't been tested, and hosting stream rooms comes later.
+          - Mac (EARLY TEST, Apple Silicon, never tried on a real Mac yet): Retro-Netplay-mac-arm64.zip, unzip, move Retro-Netplay to Applications and open it. It isn't signed by Apple, so the first time: System Settings > Privacy & Security > Open Anyway. Joins rooms.
+          - Android: Retro-Netplay.apk (debug-signed). Joins rooms (stream rooms in the app's player; RetroArch rooms in RetroArch). Hosting from a phone comes later.
 
           No games, BIOS or firmware are included. Licence GPL-3.0."
       - name: Screenshots from the automatic test (separate test release)

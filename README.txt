@@ -1,102 +1,104 @@
-NETPLAY MATCHMAKER  -  two apps, one matchmaker
+RETRO-NETPLAY  -  your old games, online, arcade style
 
-  desktop/   Linux, Windows and Mac app (Python). Start with desktop/README.txt.
-  android/   Android app (Java, open it in Android Studio).
-  PROTOCOL.md  The few rules both apps follow so they can match each other.
+WHAT YOU NEED
+  - A computer (Linux works best; Windows and Mac are early tests) or an Android phone.
+  - The emulators for your games. Retro-Netplay starts them for you:
+      Game Boy Advance, PS1, Dreamcast:  RetroArch (with the mGBA, PCSX ReARMed and Flycast cores)
+      GameCube and Wii:                  Dolphin
+      PlayStation 2:                     PCSX2
+      PlayStation 3:                     RPCS3
+  - Your games (files you own). Retro-Netplay never includes or sends anyone game files.
 
-HOW YOU PLAY (new)
-  - Tap a game (phone) or press Play (computer). The game starts and you're in the queue at
-    the same time. When someone is found, the player already in the game starts hosting inside
-    it (no restart) and the other player joins.
-  - Already in a game? Hold START + SELECT for 3 seconds: you're in the queue, and RetroArch
-    shows "in the queue" on screen. Hold them again to leave.
-    Phone: switch on "Retro-Netplay controller shortcut" once (setup shows you where), and turn
-    on Network Commands in RetroArch (Settings > Network). Computer: it just works with RetroArch.
-  - RetroArch on Android can't be told to join someone else's game by another app, so when the
-    PHONE is the joining player, RetroArch shows exactly what to pick (Netplay > Refresh Netplay
-    Host List > the host's name, or Connect to Netplay Host, address already copied).
-  - FRIENDS: kept simple. Share your 6-character friend code (like K7M-4QZ); your friend types it
-    under Add a friend and you accept. Then you see each other online and what you're playing.
-    Tap Join next to a friend: they get Allow / Deny, and once they allow it they host and you
-    connect straight to their game. Both apps must use the same matchmaker. If the matchmaker runs
-    on the host's PC, a phone on the same Wi-Fi connects with Friends > Find on my network (or the
-    PC's address shown in the PC's Friends window). On Linux, open the firewall once:
-    sudo ufw allow 7777:7778/tcp && sudo ufw allow 7779/udp
+INSTALL
+  Linux:   download Retro-Netplay-x86_64.AppImage, then double-click it. If it won't open:
+           right-click > Properties > Permissions > Allow executing as program.
+           (Or the zip: unzip, open the folder, double-click retro-netplay.)
+  Windows: unzip Retro-Netplay-windows-x86_64.zip and double-click Retro-Netplay (early test).
+  Mac:     unzip, move Retro-Netplay to Applications and open it. The first time, macOS refuses because the
+           app isn't signed by Apple: System Settings > Privacy & Security > Open Anyway (early test).
+  Android: install Retro-Netplay.apk.
 
-HOW THEY WORK TOGETHER
-  Both apps connect to the same matchmaker (desktop/server.py). Pick the same game with the
-  exact same name and system on both and you're paired. Games found through Game folders are
-  named the same way on every device, so this usually just works.
-  - The matchmaker runs inside the desktop app (on by default), or on any always-on machine
-    with:  python3 desktop/server.py
-    At home, every device finds it by itself on the Wi-Fi: nothing to type. Over the internet,
-    the matchmaker's computer needs port 7777 (TCP) reachable.
-  - A phone can't host a stream and usually can't host netplay over mobile data, so the
-    matchmaker always makes the COMPUTER the host when a phone is playing a computer.
-  - Android <-> computer netplay is RetroArch to RetroArch. Both need the SAME core and the SAME
-    game file. Android <-> computer streaming: the computer hosts, the phone joins.
-    That is how a phone can play PS2 / PS3 games running on your PC.
+FIRST START
+  1. Pick a player name (others see it) and confirm you're 13 or older.
+  2. My games > Add a folder: pick where your games are. Games inside (and in subfolders) are found and named
+     by themselves. If Skraper, EmulationStation or RetroArch made box art and details next to them, click a
+     game to see its page.
+  3. You're in this computer's own lobby. To play with people outside your home, join a lobby someone shares
+     (Settings > Lobby, or click their invite link), or share yours (below).
 
-BUILT-IN STREAMING (new, the default for PS2 / PS3)
-  Our own low-latency streamer, so Linux can host (Parsec can't). The host's computer captures
-  the game window and its sound, encodes it (on the graphics card if possible) and sends it over
-  WebRTC. Joining feels like Parsec or emulator netplay: Friends > Join, your friend taps Allow,
-  and the game appears in Retro-Netplay's own player window with your controller working. No web
-  browser, nothing to copy or click. The guest's controller (or keyboard, or on-screen buttons on a
-  phone) goes back and appears on the host as a virtual Xbox 360 controller = Player 2. A guest can
-  only press game buttons; they never get your mouse, keyboard or desktop.
-  - PLAYER WINDOW: F11 or Alt+Enter = full screen, F2 = the numbers (round trip, fps, decode time,
-    lost packets), Esc twice = leave. Keyboard: Z/X/A/S = A/B/X/Y, Q/W = shoulders, arrows = d-pad,
-    Enter = Start, Shift = Select. If the host lets you choose, press 2, 3 or 4 to be that player.
-    If anything goes wrong it says why on screen, including the host computer's own error message.
-  - The Linux, Windows and Mac downloads carry the player with its own GStreamer. It decodes the video on
-    your graphics card (Linux: Intel/AMD with VA-API, or NVIDIA; Windows: Direct3D 11; Mac: VideoToolbox). A computer without one uses its own GStreamer
-    instead, if it has a software decoder: Settings > Streaming check says what to install (usually
-    one package, gstreamer1.0-libav). (The download can't include a software H.264 decoder: patents.)
-  - The Android app plays streams in its own player too (no browser, no web page): the phone's video
-    chip decodes the picture. A controller paired with the phone works in it; without one, on-screen
-    buttons appear (the Buttons switch at the top hides them). Stats shows the numbers; Leave, or Back
-    twice, ends it. (Both computers need this version or newer: the app says so if the other one is older.)
-  - HOST SETUP (Linux): run  python3 desktop/stream_host.py --doctor  . It lists exactly what is
-    missing (GStreamer pieces, a hardware encoder, permission for the virtual controller) with the
-    install commands. Hosting is Linux only for now. Joining: the Linux download has the player window
-    built in; there are early Windows and Mac downloads with it too (not yet tried on a real Windows PC
-    or Mac).
-  - MAC (Apple Silicon, M1 and later): download Retro-Netplay-mac-arm64.zip, double-click it, drag
-    Retro-Netplay into Applications and open it. It is not signed by Apple (that needs a paid developer
-    account), so the first time macOS says it can't check it: open System Settings > Privacy & Security,
-    scroll down and press Open Anyway. After that it opens normally, and netplay:// links open it.
-  - On Wayland your desktop shows its own "share a window" picker: choose the game window.
-  - Every session writes what the guest experienced (round trip, jitter buffer, decode time,
-    frames per second, lost packets) AND what the host spent (capture age, convert, encode, pack)
-    to ~/.netplay-matchmaker/stream-stats.csv (the joining computer writes the same file). Turn host timing
-    off with --no-timing. The guest sees the same numbers on screen: F2 in the player window (on a phone:
-    tap Stats at the top of the player).
-    Those numbers are how we tune latency.
-  - Players only pair if both use the same streaming method (Built-in or Parsec, Settings).
-  - Behind a strict router the stream may not connect directly. The fix is a TURN relay next to the
-    matchmaker (below). The apps use it by themselves whenever the matchmaker has one; without one, the
-    player window says so in plain words when the direct connection fails.
+JOIN A ROOM
+  Arcade shows the open rooms in the lobby, one tile per room, coloured by console:
+    "Just join"        a stream room: you see the host's game and control your player. You need nothing else.
+    "Bring your copy"  a netplay room: you need the same game in My games. Greyed out if you don't have it.
+  Click a tile. The host gets your request and lets you in (some rooms let you straight in). Then:
+    - stream room: the player window opens. F11 full screen, F2 numbers, Esc twice to leave.
+    - RetroArch room: RetroArch opens already connected to the host.
+    - Dolphin room: Dolphin opens with its NetPlay window filled in (the host's code too, once the host shares
+      it). In Dolphin: Tools > NetPlay > Connect, then press Connect.
+  Friends can also type the room's invite code in the box at the top of Arcade.
 
-ENCRYPTION (for whoever runs a matchmaker on the internet)
-  Give the matchmaker a domain name and a certificate for it (for example free from Let's Encrypt), and
-  start it with NETPLAY_TLS_CERT=/path/fullchain.pem NETPLAY_TLS_KEY=/path/privkey.pem. Apps that use the
-  matchmaker by that name then encrypt everything they send it (searches, friends, stream setup), and
-  refuse to connect if the encryption ever disappears. Old apps can still connect without it. At home
-  (matchmaker found on your Wi-Fi) nothing is encrypted to the matchmaker: certificates need a name.
+HOST A ROOM
+  Host a game (or a game's page > Host this game): pick the game, the number of players (2 to 4), a note, and:
+    - How players join (for netplay games): Netplay (smoothest, each player needs the game) or Stream (anyone
+      can join with just the app).
+    - Let people in without asking: on, and free seats fill by themselves; off, and you accept each request.
+    - Show the room in the arcade: off, and only people with the invite code can find it.
+  Open the room: your game starts right away, so you play while people come in.
+    - Stream rooms: the first time, your desktop asks which window to share: pick the game window.
+    - Dolphin rooms: in Dolphin, Tools > NetPlay > Host (already set up), pick the game, then copy Dolphin's host
+      code into the box in your room so players can connect.
+  In the room, click "..." next to a player to remove them, ban them from the room, block or report them.
 
-TURN RELAY (for friends behind strict routers; optional, for whoever runs the matchmaker)
-  The relay passes the stream along when two devices can't reach each other directly. The video stays
-  encrypted end to end: the relay only sees how much data passes. Nothing is set up by default, and no
-  relay password is ever built into the apps: the matchmaker hands each player a password that works for
-  3 hours, made from a secret it shares with the relay.
-  1. On the matchmaker's computer (or any always-on server): sudo apt install coturn
+SHARE YOUR LOBBY (or join someone's)
+  Settings > Lobby shows your lobby's addresses:
+    - People on your Wi-Fi: your home address. Phones on the same Wi-Fi find the lobby by themselves; other
+      computers type this address under Settings > Lobby, or click the invite link.
+    - Everyone else: your public address. The app asks your router to let them in (UPnP or NAT-PMP). If your
+      router doesn't allow that, turn on UPnP in its settings, or forward TCP port 7777 to this computer.
+  "Copy invite link" copies a netplay://lobby link: send it, and a click opens Retro-Netplay in your lobby.
+  To join someone else's lobby, click their link, or type their address under Settings > Lobby.
+  The lobby's name and rules: put {"name": "...", "rules": "..."} in ~/.netplay-matchmaker/server/lobby.json
+  and restart the app.
+
+KEEPING YOUR LOBBY SAFE (if you run one)
+  You moderate the lobby on your computer: click a name in chat or a room to mute (10 minutes), remove or ban
+  them. Reports arrive in your app and are kept in ~/.netplay-matchmaker/server/lobby-reports.jsonl; bans in
+  lobby-bans.json (to unban someone, remove their player id from that file and restart the app). Extra words to hide in chat: one per line in
+  lobby-words.txt. Everyone can block people and has a swear-word filter (Settings > Chat). See TERMS.md.
+
+PHONE
+  The phone app has the same Arcade. It finds a lobby on your Wi-Fi by itself, or type an address in
+  Settings. Stream rooms open in the app's player (a controller or the on-screen buttons). RetroArch rooms open
+  RetroArch, with the host's address copied: in RetroArch, Netplay > Connect to Netplay Host, and paste it.
+  Hosting from a phone comes later.
+
+IF SOMETHING GOES WRONG
+  - "Not connected": the lobby's computer is off, or its router doesn't let you in. Ask for its address again.
+  - Stream won't connect: behind some routers the two computers can't reach each other directly. Whoever runs
+    the lobby can add a relay (below).
+  - Logs: ~/.netplay-matchmaker/stream-host-*.log (hosting), stream-guest.log (joining), and the window's own
+    log in ~/.config/Retro-Netplay/engine.log. They contain no video or names.
+  - If the app or a check ever uses far too much memory, it's stopped and memory-report.txt says which part.
+
+FOR WHOEVER RUNS A LOBBY ON A SERVER
+  A lobby can also run on its own, without the app:  python3 desktop/server.py [port]   (default 7777; TCP)
+  Its data folder is ~/.netplay-matchmaker/server/ (or NETPLAY_DATA). Moderating from the app needs the token
+  in lobby-admin.token there, so moderate from the app on the same computer and account.
+
+  ENCRYPTION: give the server a domain name and a certificate (for example from Let's Encrypt) and start it with
+  NETPLAY_TLS_CERT=/path/fullchain.pem NETPLAY_TLS_KEY=/path/privkey.pem. Apps that use it by that name then
+  encrypt everything they send it, and refuse to connect if the encryption ever disappears.
+
+  RELAY (for players behind strict routers): the relay passes the stream along when two devices can't reach
+  each other. The video stays encrypted end to end; no relay password is built into the apps: the lobby hands
+  each player a password that works for 3 hours, made from a secret it shares with the relay.
+  1. sudo apt install coturn
   2. Make a long random secret:  openssl rand -hex 32
-  3. In /etc/turnserver.conf put (your address and secret):
+  3. In /etc/turnserver.conf:
        listening-port=3478
        fingerprint
        use-auth-secret
-       static-auth-secret=<the secret from step 2>
+       static-auth-secret=<the secret>
        realm=netplay
        no-cli
        no-multicast-peers
@@ -106,119 +108,10 @@ TURN RELAY (for friends behind strict routers; optional, for whoever runs the ma
      (the denied-peer lines stop strangers from using your relay to reach your home network)
      then: sudo systemctl enable --now coturn
   4. Open UDP and TCP port 3478, and UDP ports 49152-65535, on that computer's router/firewall.
-  5. Tell the matchmaker, before starting it:
-       NETPLAY_TURN_URLS="turn:<your public address>:3478?transport=udp,turn:<your public address>:3478?transport=tcp"
-       NETPLAY_TURN_SECRET="<the same secret>"
-       python3 desktop/server.py
-     Or, for the matchmaker inside the desktop app, put the same two values in
-     ~/.netplay-matchmaker/server/turn.json as {"urls": ["turn:..."], "secret": "..."} and restart the app.
-     The matchmaker prints "relay for strict routers: ..." when it found them.
-  A player can switch the relay off in Settings ("Use the matchmaker's relay server...").
-
-
-FIRST-TIME SETUP (both apps)
-  The first time you open the app, a short setup walks you through everything once:
-  1. Your games: pick the folders where you keep games. Every game inside is found and
-     named automatically (so it matches the other player's name), and new games show up
-     next time you open the app. If a file could be for two consoles, you're asked once
-     per folder.
-  2. Emulators (PC) / RetroArch (phone): found automatically where possible.
-  3. Online: the matchmaker address, and "Open ports automatically". The app asks your
-     router (UPnP / NAT-PMP) to open only the netplay port, then asks the matchmaker to
-     test it, and tells you in plain words whether hosting will work.
-  4. Controllers (PC).
-  Run it again any time: Settings > Run setup again.
-
-TITLE CARDS AND GAME ART
-  Double-click a game (on a phone: tap it) to see its title card: a moving background in the game's
-  colours, its box art, year, developer, players, genre and rating, a description, and a gameplay
-  window (the screenshots slowly panning on an old-TV screen; on a phone the gameplay clip plays).
-  Play is on the card, and the card stays open while the app looks for an opponent.
-  The art comes from files you already have. Easiest way to get them, for all your games at once:
-    1. Install Skraper (skraper.net, free) on your computer and sign in with a free ScreenScraper
-       account (screenscraper.fr).
-    2. Point it at your game folders and let it scrape (a profile such as EmulationStation or
-       RetroPie; ask for box art, screenshots, title screens, wheel logos and videos).
-    3. It writes gamelist.xml and a media folder next to your games. Open a title card: the art is
-       there. On a phone, copy those folders along with your games, then Game folders > rescan.
-  Also used: ES-DE's downloaded_media folder, Batocera/Recalbox gamelists, and the thumbnails
-  RetroArch downloads (Main Menu > Online Updater > Thumbnails Updater), on the computer.
-  Built-in download (optional, computer and phone): Settings > Game art (or "Game art..." on a card
-  without art) downloads art from ScreenScraper with your own account, once this version carries the
-  app's ScreenScraper developer ID (it asks you first, and says exactly what it sends; see PRIVACY.md).
-  Until then it says it isn't available.
-  Sounds: the app makes small sounds on the card and when a match is found; Settings > Interface
-  sounds turns them off.
+  5. Start the lobby with NETPLAY_TURN_URLS="turn:<public address>:3478?transport=udp,turn:<public address>:3478?transport=tcp"
+     and NETPLAY_TURN_SECRET="<the secret>", or put {"urls": ["turn:..."], "secret": "..."} in turn.json in
+     its data folder. It prints "relay for strict routers: ..." when it found them.
 
 LEGAL AND PRIVACY
-  PRIVACY.md says exactly what leaves your device. NOTICE.md lists third-party licenses, the
-  Retro-Netplay is licensed under GPL-3.0 (see LICENSE).
-
-TESTING WITHOUT A SECOND PERSON OR YOUR HOME PC
-  Read PHONE-TEST-GUIDE.txt. `sh phone-test.sh` starts a matchmaker and a pretend opponent
-  (desktop/fake_opponent.py) to check matching, invites and the app's screens. A real stream needs a
-  computer hosting it.
-
-INVITE LINKS
-  Starting a search makes an invite link on either app. Friends who open it join you in a private
-  match; everyone else can still match you at random (switchable). On a computer the invite is a
-  netplay:// link that opens Retro-Netplay directly, plus a short code (like ABCD-2345) your friend can
-  type under Enter code... instead (same matchmaker). Clicking a link while the app is open hands it to
-  the open window. The desktop app can also post
-  the link to Discord or Telegram for you if you connect them (off until you turn it on). The
-  Android app uses the share sheet, so every social app you have works and no login is stored.
-  The matchmaker serves a small invite page for the Android app's links on port 7778 (TCP port + 1), so
-  allow that port as well as 7777 if you host it.
-
-ANDROID APP: BUILD AND INSTALL
-  NO COMPUTER? Let GitHub build it. Put this whole folder in a GitHub repository (the file
-  .github/workflows/android.yml is already here). Open the repo's Actions tab > "Build Android APK",
-  and when it finishes download the artifact "NetplayMatchmaker-APK" on your phone, unzip it, and
-  install app-debug.apk (Android will ask you to allow installing from your browser/files app).
-  OR, with a computer:
-  1. Install Android Studio and open the "android" folder. Accept any offer to update Gradle or
-     the Android plugin. Press Run with your phone plugged in (USB debugging on),
-     or Build > Build APK(s) and copy it to your phone.
-  2. On the phone install RetroArch (Google Play) and, inside it, download the cores:
-     Load Core > Download a Core > mGBA, PCSX ReARMed, Flycast. Streaming needs nothing extra: the app plays it.
-  3. Open the app > Settings: type the matchmaker address (your PC's address) and port 7777.
-  4. Add a game: its name (same as your opponent's), its system, and the full path to the game
-     file, for example /storage/emulated/0/ROMs/game.gba. Leave the path blank for PS2 / PS3 games
-     you'll only stream.
-  5. Tap a game. RetroArch opens with it and you're in the queue. For PS2/PS3/GameCube games the
-     phone joins a friend's stream instead: when matched, the stream plays inside the app (your controller works in it; press Back twice, or Leave, to stop).
-
-WHAT WAS AND WASN'T TESTED
-  Tested: the matchmaker rules, the desktop app's engine, and the Android app's matching logic
-  (it was run against the real server with the desktop app as the other player).
-  Tested for the built-in streamer (tests in desktop/tests/, run by the automatic build on every change):
-  the native player window (with a pretend screen) against the REAL stream host over the matchmaker's
-  TCP connection: video arrives at 60 fps, controller packets from a pretend SDL controller arrive intact,
-  slot choice, wrong keys are refused, the host's real error is shown, old and new apps never pair, and
-  the stream also works through a real TURN relay (coturn) with the matchmaker's short-lived password.
-  The same test runs against the PACKAGED player from the Linux download (both ways it can start).
-  It also runs against the player inside the Mac download on GitHub's Apple Silicon Mac (a virtual
-  machine): video decoded by macOS's VideoToolbox, controller, slots, relay and errors all work there;
-  it managed about 40 frames a second while also running the host, so real-Mac speed is unknown.
-  The phone app's own player in an Android emulator against the REAL host: the video is decoded by
-  Android's own decoder, the test's button presses arrive at the host as Player 2, leaving tells the
-  host, and a wrong key is explained.
-  Also: access control, the host's session logic and the virtual-controller event translation, and
-  the app's Join > Allow flow opening the player window by itself.
-  Tested for title cards: reading Skraper / EmulationStation / ES-DE / Batocera / RetroArch art
-  (the phone and the computer give the same answers), the card in the packaged Linux app on a
-  virtual screen, and the phone's card in an Android emulator with a playing clip, all with made-up
-  pictures. The ScreenScraper download (computer and phone, which follow the same rules and were
-  checked to agree) was tested against a pretend ScreenScraper only, the phone's in the emulator too.
-  Tested for queue and friends: friends-first matching, priority, friends-only, mutual adds, the
-  online list and calls (server, Android core and desktop app against the real matchmaker), the
-  desktop Play/hotkey flow with a pretend RetroArch, and the RetroArch commands against a
-  pretend RetroArch.
-  NOT tested: anything on real hardware. The player window on a real screen with a real controller,
-  decoding on a real graphics card (VA-API / NVIDIA), sound, full screen on a real desktop; netplay://
-  links opening the app on Windows and Mac; the controller shortcut and notifications on a real phone,
-  a real RetroArch answering network commands, the real host's screen capture, GPU encoding and the
-  virtual controller on a real /dev/uinput, the Wayland picker. So actual latency is unknown until you
-  run it. Also not tested: the Android screens and the RetroArch launch on a real phone (only the player
-  ran, in an emulator),
-  and any real emulator session.
+  No games, BIOS or firmware are included: use games you own. For people aged 13 and over. See TERMS.md,
+  PRIVACY.md, NOTICE.md and LEGAL.md. Licence GPL-3.0.

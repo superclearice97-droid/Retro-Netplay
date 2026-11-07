@@ -37,6 +37,7 @@ The arcade (version 2) adds public rooms and text chat with strangers. What's in
 - **Data:** rooms, presence, mutes and the last 30 lobby messages live in memory only; room chat isn't kept; only reports and bans touch disk, on the lobby runner's computer (PRIVACY.md).
 - **No central service:** the project runs no lobby. Each lobby runner is the operator of their lobby (TERMS.md "Running a lobby"). If the project ever runs a public lobby itself, it becomes the operator: abuse contact, response times, and the content-moderation duties of the places it serves (for example the EU DSA and the UK Online Safety Act) apply. Redo this section first.
 - Sessions stream gameplay only to the people seated in that room (at most 4, host included). No spectators, no public broadcast, no recording.
+
 ## 5. Privacy
 
 - **Peer-to-peer exposes IP addresses** to the other players. Say so plainly in the app before the first online session, and offer relay mode as a privacy option.

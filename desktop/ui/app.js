@@ -318,19 +318,28 @@ function legal() {
 }
 
 // ---------------------------------------------------------------- drawing
+// What the player is typing survives redraws (the page redraws whenever the engine reports a change).
+const drafts = {};
+const fieldKey = el => (el.form?.id || "") + ":" + (el.id || el.name || "");
+
 function draw() {
   const root = document.getElementById("root");
   if (!S) return;
-  if (!S.setup.done && ui.page !== "legal") { root.innerHTML = welcome(); return; }
-  if (ui.page === "room" && !(S.myroom || S.seat)) ui.page = "arcade";
-  const pages = { arcade, host, room, library, settings, legal, game: gamePage, chat: arcade };
-  const keep = document.getElementById("chatinput");
-  const draft = keep ? keep.value : "";
-  const focused = document.activeElement?.id;
+  const active = document.activeElement;
+  const focusKey = active && active.matches?.("input, textarea") ? fieldKey(active) : "";
+  const caret = focusKey && typeof active.selectionStart === "number" ? [active.selectionStart, active.selectionEnd] : null;
   const scroll = document.querySelector("main")?.scrollTop || 0;
-  root.innerHTML = `<div id="app" class="${ui.page === "chat" ? "chatpage" : ""}">${rail()}<main>${(pages[ui.page] || arcade)()}</main>${chatPanel()}</div>`;
-  const ci = document.getElementById("chatinput");
-  if (ci) { ci.value = draft; if (focused === "chatinput") ci.focus(); }
+  if (!S.setup.done && ui.page !== "legal") root.innerHTML = welcome();
+  else {
+    if (ui.page === "room" && !(S.myroom || S.seat)) ui.page = "arcade";
+    const pages = { arcade, host, room, library, settings, legal, game: gamePage, chat: arcade };
+    root.innerHTML = `<div id="app" class="${ui.page === "chat" ? "chatpage" : ""}">${rail()}<main>${(pages[ui.page] || arcade)()}</main>${chatPanel()}</div>`;
+  }
+  root.querySelectorAll("input:not([type=checkbox]):not([type=radio]), textarea").forEach(el => {
+    const k = fieldKey(el);
+    if (k in drafts) el.value = drafts[k];
+    if (k === focusKey) { el.focus(); if (caret) try { el.setSelectionRange(caret[0], caret[1]); } catch {} }
+  });
   const m = document.querySelector("main"); if (m) m.scrollTop = scroll;
   const msgs = document.getElementById("msgs"); if (msgs) msgs.scrollTop = msgs.scrollHeight;
 }
@@ -391,9 +400,9 @@ document.addEventListener("click", async e => {
   const d = t.dataset;
   if (d.go) { e.preventDefault(); ui.page = d.go === "welcome" ? "arcade" : d.go; return draw(); }
   if (d.filter) { ui.filter = d.filter; return draw(); }
-  if (d.pick) { ui.pick = +d.pick; ui.stream = false; return draw(); }
+  if (d.pick) { ui.pick = +d.pick; ui.stream = false; delete drafts[":r-title"]; return draw(); }
   if (d.game) { ui.game = +d.game; ui.page = "game"; return draw(); }
-  if (d.hostgame) { ui.pick = +d.hostgame; ui.stream = false; ui.page = "host"; return draw(); }
+  if (d.hostgame) { ui.pick = +d.hostgame; ui.stream = false; delete drafts[":r-title"]; ui.page = "host"; return draw(); }
   if (d.solo) { const r = await act("play_solo", { game: +d.solo }); if (r.ok) toast("Starting the game..."); return; }
   if (d.seats) { ui.seats = +d.seats; return draw(); }
   if (d.stream) { ui.stream = d.stream === "1"; return draw(); }
@@ -414,7 +423,7 @@ document.addEventListener("click", async e => {
       const r = await act("post", { game: ui.pick, title: document.getElementById("r-title").value, seats: ui.seats,
         note: document.getElementById("r-note").value, auto: document.getElementById("r-auto").checked,
         public: document.getElementById("r-pub").checked, stream: ui.stream });
-      if (r.ok) { ui.page = "room"; draw(); }
+      if (r.ok) { delete drafts[":r-title"]; delete drafts[":r-note"]; ui.note = ""; ui.page = "room"; draw(); }
       return;
     }
     case "close-room": if (confirm("Close the room? Everyone in it leaves.")) { await act("close_room"); ui.page = "arcade"; draw(); } return;
@@ -434,11 +443,15 @@ document.addEventListener("change", e => {
   if (id === "chat-filter") act("settings", { chat_filter: e.target.checked });
   if (id === "sounds") act("settings", { sounds: e.target.checked });
 });
-document.addEventListener("input", e => { if (e.target.id === "r-note") ui.note = e.target.value; });
+document.addEventListener("input", e => {
+  if (e.target.matches("input:not([type=checkbox]):not([type=radio]), textarea")) drafts[fieldKey(e.target)] = e.target.value;
+  if (e.target.id === "r-note") ui.note = e.target.value;
+});
 
 document.addEventListener("submit", async e => {
   e.preventDefault();
   const f = e.target;
+  for (const el of f.querySelectorAll("input, textarea")) delete drafts[fieldKey(el)];
   if (f.id === "setup" || f.id === "rename") {
     const r = await act("setup", { name: f.name.value, age_ok: f.id === "rename" ? true : f.age.checked });
     if (r.ok && f.id === "rename") toast("Name saved.");

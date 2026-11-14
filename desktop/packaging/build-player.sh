@@ -37,7 +37,8 @@ PLUGINS = ["coreelements", "app", "videoconvert", "videoconvertscale", "webrtc",
 from PyInstaller.utils.hooks import collect_dynamic_libs, collect_data_files
 if "$WIN":   # MSYS2's SDL2 and SDL2_ttf next to the player (PySDL2 is told to look there)
     import sys
-    sdl = [(f, ".") for n in ("SDL2.dll", "SDL2_ttf.dll") for f in [os.path.join(sys.base_prefix, "bin", n)]
+    # (SDL3.dll too: MSYS2's SDL2.dll is now a compatibility library that needs it, and without it stops with an error box)
+    sdl = [(f, ".") for n in ("SDL2.dll", "SDL2_ttf.dll", "SDL3.dll") for f in [os.path.join(sys.base_prefix, "bin", n)]
            if os.path.exists(f)]
     sdl_data = []
 elif "$MAC":  # pysdl2-dll's SDL2 frameworks are copied in after PyInstaller (see below)

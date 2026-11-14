@@ -24,6 +24,13 @@ import threading
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+if getattr(sys, "frozen", False):
+    # The packaged player: GStreamer looks for plugins in its plugins folder only. PyInstaller's start-up code also
+    # lists the whole library folder, and GStreamer then loads EVERY bundled library to see whether it is a plugin:
+    # slow, risky, and on Windows one of them (SDL2's compatibility library) stops with an error box nobody sees.
+    _plugins = next((d for d in (os.path.join(sys._MEIPASS, n) for n in ("gst_plugins", "gst-plugins")) if os.path.isdir(d)), None)
+    if _plugins:
+        os.environ["GST_PLUGIN_PATH"] = _plugins
 if sys.platform == "darwin":
     os.environ.setdefault("GST_REGISTRY_FORK", "no")    # (macOS: a forked plugin scan can hang; scan in this process)
 STATS_CSV = os.path.expanduser("~/.netplay-matchmaker/stream-stats.csv")

@@ -44,6 +44,8 @@ def launcher():
 
 def host_script():
     """stream_host.py as a real file (it runs under the computer's own Python, which has GStreamer)."""
+    if os.environ.get("NETPLAY_HOST_SCRIPT"):        # (automatic tests: the host with a recording controller)
+        return Path(os.environ["NETPLAY_HOST_SCRIPT"])
     p = BASE / "hostpy" / "stream_host.py"
     return p if p.exists() else SRC / "stream_host.py"
 

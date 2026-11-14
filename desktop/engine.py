@@ -316,6 +316,7 @@ class Engine:
         with self.lock:
             self.lobby_state.update(connected=False, address=f"{host}:{port}", error="", name="")
             self.rooms, self.myroom, self.requests, self.seat = [], None, [], None
+            self.stop_proc("streamhost")
             self.chat = {"lobby": [], "room": []}
             self.cfg["lobby"] = f"{host}:{port}"
             core.save_cfg(self.cfg)
@@ -330,6 +331,7 @@ class Engine:
             was = self.lobby_state["connected"]
             self.lobby_state.update(connected=False, error=why or self.lobby_state["error"])
             self.rooms, self.myroom, self.requests = [], None, []
+            self.stop_proc("streamhost")        # (the room went with the connection)
         if was:
             self.notice("warn", "Lost the connection to the lobby. Trying again...")
         self.changed()
@@ -373,7 +375,7 @@ class Engine:
                 if m.get("session"):
                     self.start_stream_host(m["seat"], m["session"].get("key", ""))
             elif op == "left":
-                self.stop_proc(f"stream{m.get('seat')}")
+                self.tell_stream_host({"op": "remove", "slot": m.get("seat")})
                 self.notice("info", f"{m.get('player', {}).get('name', 'A player')} left the room")
             elif op == "waiting":
                 self.seat = {"room": next((r for r in self.rooms if r["id"] == m.get("room")), {"id": m.get("room")}),
@@ -485,19 +487,29 @@ class Engine:
     def start_stream_host(self, seat, key):
         if not KEY_RE.fullmatch(key):
             return
-        host, port = parse_lobby(self.cfg.get("lobby")) or ("127.0.0.1", LOBBY_PORT)
-        cmd = [runtime.host_python(), str(runtime.host_script()), "--mm", f"{host}:{port}", f"--key={key}",
-               "--slot", str(int(seat))] + ([] if self.cfg.get("use_relay", True) else ["--no-relay"])
-        self.launch(f"stream{seat}", cmd, log=f"stream-host-{seat}.log")
-        self.notice("share", "When the 'share your screen' box opens (only the first time), choose the game window.")
+        p = self.procs.get("streamhost")
+        if not (p and p.poll() is None):       # the room's one stream program: it captures once for every player
+            host, port = parse_lobby(self.cfg.get("lobby")) or ("127.0.0.1", LOBBY_PORT)
+            cmd = [runtime.host_python(), str(runtime.host_script()), "--mm", f"{host}:{port}", "--room"] + (
+                [] if self.cfg.get("use_relay", True) else ["--no-relay"])
+            self.launch("streamhost", cmd, log="stream-host.log", stdin=subprocess.PIPE)
+            self.notice("share", "When the 'share your screen' box opens (only the first time), choose the game window.")
+        self.tell_stream_host({"op": "add", "key": key, "slot": int(seat)})
+
+    def tell_stream_host(self, msg):
+        p = self.procs.get("streamhost")
+        if p and p.poll() is None and p.stdin:
+            try:
+                p.stdin.write((json.dumps(msg) + "\n").encode())
+                p.stdin.flush()
+            except OSError:
+                pass
 
     def close_room(self):
         self.send({"op": "close"})
         with self.lock:
             self.myroom, self.requests = None, []
-            for n in list(self.procs):
-                if n.startswith("stream"):
-                    self.stop_proc(n)
+            self.stop_proc("streamhost")
             self.play_note = ""
         self.changed()
 
@@ -546,7 +558,7 @@ class Engine:
                               "Waiting for the host to share Dolphin's host code. When it appears, leave and join again.")
 
     # ------------------------------------------------------------------ programs
-    def launch(self, name, argv, log=None):
+    def launch(self, name, argv, log=None, stdin=None):
         self.stop_proc(name)
         out = subprocess.DEVNULL
         if log:
@@ -557,7 +569,7 @@ class Engine:
             except OSError:
                 out = subprocess.DEVNULL
         try:
-            self.procs[name] = subprocess.Popen(argv, stdout=out, stderr=subprocess.STDOUT)
+            self.procs[name] = subprocess.Popen(argv, stdout=out, stderr=subprocess.STDOUT, stdin=stdin)
         except OSError as e:
             self.notice("error", f"Couldn't start {argv[0] if argv else name}: {e}")
 

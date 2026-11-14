@@ -76,7 +76,7 @@ IF SOMETHING GOES WRONG
   - "Not connected": the lobby's computer is off, or its router doesn't let you in. Ask for its address again.
   - Stream won't connect: behind some routers the two computers can't reach each other directly. Whoever runs
     the lobby can add a relay (below).
-  - Logs: ~/.netplay-matchmaker/stream-host-*.log (hosting), stream-guest.log (joining), and the window's own
+  - Logs: ~/.netplay-matchmaker/stream-host.log (hosting), stream-guest.log (joining), and the window's own
     log in ~/.config/Retro-Netplay/engine.log. They contain no video or names.
   - If the app or a check ever uses far too much memory, it's stopped and memory-report.txt says which part.
 

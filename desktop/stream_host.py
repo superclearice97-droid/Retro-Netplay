@@ -1,15 +1,17 @@
 """Host side of the built-in streamer (Linux).
 
-Captures a window/screen + game audio, encodes it with the fastest encoder available, and sends it
-to ONE guest over WebRTC (the desktop app's player window, or the Android app's player). The guest's controller comes back over a data channel and is
-fed into a virtual gamepad. The matchmaker only relays the setup messages.
+Captures a window/screen + game audio and encodes it ONCE with the fastest encoder available (Capture), and sends
+it to every player in the room over WebRTC, each on their own connection (GstBackend; the desktop app's player
+window, or the Android app's player). Each player's controller comes back over a data channel and is fed into their
+own virtual gamepad. The lobby only relays the setup messages.
 
-  python3 stream_host.py --mm HOST:PORT --key KEY                 (the app starts this for you)
-  python3 stream_host.py --doctor                                  (checks this computer, no network)
+  python3 stream_host.py --mm HOST:PORT --room      (the app starts this for a room; seats arrive on standard input
+                                                     as lines: {"op":"add","key":KEY,"slot":2} / {"op":"remove","slot":2})
+  python3 stream_host.py --mm HOST:PORT --key KEY   (one player, then exit)
+  python3 stream_host.py --doctor                   (checks this computer, no network)
 
-The orchestration (Session) and all packing/choosing logic are plain Python and unit-tested.
-GstBackend (the real capture/encode/WebRTC) needs GStreamer and has NOT been run in the sandbox
-this was written in; run --doctor first and send back anything it flags.
+The orchestration (Session) and all packing/choosing logic are plain Python and unit-tested; the capture, encoder
+and WebRTC parts are tested against the real player (tests/test_native_guest.py, tests/test_stream_room.py).
 """
 import argparse
 import json
@@ -315,17 +317,7 @@ class Session:
 
 
 # ===================================================================== GStreamer backend
-class GstBackend:
-    """capture -> encode -> webrtcbin, plus the 'pad' and 'ctl' data channels."""
-
-    def __init__(self, session, opts, ice_servers):
-        self.s, self.o, self.ice = session, opts, ice_servers
-        self.pipe = self.wb = self.pad_ch = self.ctl_ch = None
-        self.offered = self.offering = self.playing = False
-        self.keepalive = []
-        self.timer = HostTimer() if opts.get("timing", True) else None
-
-    # ---- helpers
+class GstTools:
     def _mk(self, factory, props=None, name=None):
         from gi.repository import Gst
         el = Gst.ElementFactory.make(factory, name)
@@ -359,41 +351,66 @@ class GstBackend:
         from gi.repository import Gst
         return self._mk("capsfilter", {"caps": Gst.Caps.from_string(text)})
 
-    # ---- pipeline
-    def start(self):
-        from gi.repository import Gst, GstWebRTC
-        o = self.o
-        self.pipe = Gst.Pipeline.new("netplay")
-        self.wb = self._mk("webrtcbin", {"bundle-policy": "max-bundle"}, "wb")
-        stun, turns = ice_to_gst(self.ice)
-        if stun:
-            self.wb.set_property("stun-server", stun)
-        for t in turns:
-            self.wb.emit("add-turn-server", t)
-        self.pipe.add(self.wb)
 
-        # ---- video
+KEYFRAME_GAP = 0.5      # seconds between forced keyframes at most (one player with a bad connection can't flood the rest)
+
+
+class Capture(GstTools):
+    """The game's picture and sound, captured and encoded ONCE for the whole room. Every player's GstBackend takes
+    the encoded frames from here, so a second or third player costs no extra capture or encoding, and the desktop
+    asks which window to share only once."""
+
+    def __init__(self, opts):
+        self.o = opts
+        self.pipe = self.enc = None
+        self.peers = ()         # the players' backends (replaced, never changed in place: GStreamer's threads read it)
+        self.keepalive = []
+        self.has_audio = False
+        self.timer = HostTimer() if opts.get("timing", True) else None
+        self._last_key = 0.0
+        self._watched = False
+
+    def acquire(self, status=None):
+        """Make sure the capture runs (the first player starts it). status(text) tells that player what's going on."""
+        if self.pipe is None:
+            try:
+                self._start(status)
+            except Exception:
+                self.stop()
+                raise
+
+    def add(self, peer):
+        self.peers = self.peers + (peer,)
+        self.keyframe(now=True)             # a new player can only start watching at a full picture
+
+    def release(self, peer):
+        self.peers = tuple(p for p in self.peers if p is not peer)
+        if not self.peers and self.pipe is not None and self.o["capture"] != "portal":
+            self.stop()     # nobody's watching. (A shared window stays open, or the desktop would ask again next time.)
+
+    def _start(self, status):
+        from gi.repository import Gst
+        o = self.o
+        say = status or (lambda text: log(text))
+        self.pipe = Gst.Pipeline.new("capture")
+        self.pipe.use_clock(Gst.SystemClock.obtain())      # (the players' pipelines run on the same clock and base time)
         chain = []
         if o["capture"] == "portal":
             import portal_capture
-            if hasattr(self.s, "status"):
-                self.s.status("Waiting for your friend to choose the game window on their computer "
-                              "(a 'share your screen' box opens there)...")
-            slow = (lambda: self.s.status("Still waiting for the 'share your screen' box on your friend's computer. "
-                                          "It may be hidden behind the game: they can press Alt+Tab to find it.")
-                    ) if hasattr(self.s, "status") else None
+            say("Waiting for your friend to choose the game window on their computer "
+                "(a 'share your screen' box opens there)...")
+            slow = lambda: say("Still waiting for the 'share your screen' box on your friend's computer. "
+                               "It may be hidden behind the game: they can press Alt+Tab to find it.")
             try:
                 fd, node = portal_capture.request_screencast(timeout=60, on_slow=slow, progress=lambda t: log(t))
             except RuntimeError as e:
                 if "in time" not in str(e):
                     raise
                 # a box stuck from an earlier try blocks new ones (KDE shows one at a time): reset and ask again
-                if hasattr(self.s, "status"):
-                    self.s.status("Resetting screen sharing on your friend's computer and asking again...")
+                say("Resetting screen sharing on your friend's computer and asking again...")
                 restart_portal()
                 fd, node = portal_capture.request_screencast(timeout=90, progress=lambda t: log(t), plain=True)
-            if hasattr(self.s, "status"):
-                self.s.status("Game window chosen. Connecting the video...")
+            say("Game window chosen. Connecting the video...")
             self.keepalive.append(fd)
             chain += [self._mk("pipewiresrc", {"fd": fd, "path": str(node), "do-timestamp": True}),
                       self._mk("videorate", {"drop-only": True}), self._caps(f"video/x-raw,framerate=0/1,max-framerate={o['fps']}/1")]
@@ -406,36 +423,182 @@ class GstBackend:
                 props["xid"] = int(o["window"], 0)
             chain += [self._mk("ximagesrc", props), self._caps(f"video/x-raw,framerate={o['fps']}/1")]
         enc_name, enc_props = o["encoder"]
+        self.enc = self._mk(enc_name, enc_props)
+        vsink = self._mk("appsink", {"emit-signals": True, "sync": False, "async": False})
         chain += [self._mk("videoconvert"),
                   self._mk("queue", {"max-size-buffers": 2, "max-size-bytes": 0, "max-size-time": 0, "leaky": "downstream"}),
-                  self._mk(enc_name, enc_props),
+                  self.enc,
                   self._caps(f"video/x-h264,profile={o['profile']}"),
                   self._mk("h264parse", {"config-interval": -1}),
-                  self._mk("rtph264pay", {"config-interval": -1, "pt": 96, "aggregate-mode": "zero-latency"}),
-                  self._caps("application/x-rtp,media=video,encoding-name=H264,payload=96,clock-rate=90000")]
+                  vsink]
         self._link(chain)
+        vsink.connect("new-sample", self._on_sample, "video")
         if self.timer:
-            self._attach_probes(chain, enc_name)
+            self._attach_probes(chain)
         log(f"video: {o['capture']} -> {enc_name} @ {o['kbps']} kbps, {o['fps']} fps")
 
         # ---- audio (optional): what the game plays, from the default output's monitor
+        self.has_audio = False
         if o.get("audio"):
             try:
+                asink = self._mk("appsink", {"emit-signals": True, "sync": False, "async": False})
                 a = [self._mk("pulsesrc", {"device": o["audio"], "buffer-time": 20000, "latency-time": 10000}),
                      self._mk("audioconvert"), self._mk("audioresample"),
                      self._caps("audio/x-raw,rate=48000,channels=2"),
                      self._mk("opusenc", {"audio-type": "restricted-lowdelay", "frame-size": "10", "bitrate": 128000}),
-                     self._mk("rtpopuspay", {"pt": 97}),
-                     self._caps("application/x-rtp,media=audio,encoding-name=OPUS,payload=97,clock-rate=48000")]
+                     asink]
                 self._link(a)
+                asink.connect("new-sample", self._on_sample, "audio")
+                self.has_audio = True
                 log("audio:", o["audio"])
             except RuntimeError as e:
                 log("no audio:", e)
 
+        bus = self.pipe.get_bus()
+        bus.add_signal_watch()
+        self._watched = True
+        bus.connect("message::error", self._on_error)
+        self.pipe.set_state(Gst.State.PLAYING)
+        self.pipe.get_state(5 * Gst.SECOND)      # (running, so its base time is known to the players' pipelines)
+
+    def _link(self, els):
+        for e in els:
+            self.pipe.add(e)
+        for a, b in zip(els, els[1:]):
+            if not a.link(b):
+                raise RuntimeError(f"could not connect {a.get_name()} to {b.get_name()} (format mismatch)")
+
+    def _on_sample(self, sink, kind):
+        from gi.repository import Gst
+        sample = sink.emit("pull-sample")
+        if sample is not None:
+            for p in self.peers:
+                p.push(kind, sample)
+        return Gst.FlowReturn.OK
+
+    def _on_error(self, _bus, m):
+        err, detail = m.parse_error()
+        log("GStreamer error:", err.message, detail)
+        for p in self.peers:
+            if hasattr(p.s, "status"):
+                p.s.status("The stream stopped on your friend's computer: " + err.message)
+            p.s.end("pipeline error: " + err.message)
+        self.stop()
+
+    def keyframe(self, now=False):
+        """Ask the encoder for a full picture (a new player, or a player who lost packets)."""
+        from gi.repository import Gst
+        t = time.monotonic()
+        if self.enc is None or (not now and t - self._last_key < KEYFRAME_GAP):
+            return
+        self._last_key = t
+        ev = Gst.Event.new_custom(Gst.EventType.CUSTOM_UPSTREAM,
+                                  Gst.Structure.new_from_string("GstForceKeyUnit, all-headers=(boolean)true"))
+        self.enc.get_static_pad("src").send_event(ev)
+
+    def _attach_probes(self, chain):
+        """Time every frame through capture -> convert -> encode (each player's backend adds 'packetised').
+        Failures here never stop the stream."""
+        try:
+            from gi.repository import Gst
+            def probe(el, padname, stage):
+                def cb(pad, info):
+                    buf = info.get_buffer()
+                    if buf is not None and buf.pts != Gst.CLOCK_TIME_NONE:
+                        age = None
+                        if stage == "cap":
+                            clock = self.pipe.get_clock() if self.pipe else None
+                            if clock is not None:
+                                age = (clock.get_time() - self.pipe.get_base_time() - buf.pts) / 1e6
+                        self.timer.mark(stage, buf.pts, time.monotonic(), age)
+                    return Gst.PadProbeReturn.OK
+                el.get_static_pad(padname).add_probe(Gst.PadProbeType.BUFFER, cb)
+            probe(chain[0], "src", "cap")
+            probe(self.enc, "sink", "enc_in")
+            probe(self.enc, "src", "enc_out")
+        except Exception as e:
+            log("note: host timing is off:", e)
+            self.timer = None
+
+    def stop(self):
+        from gi.repository import Gst
+        if self.pipe:
+            if self._watched:
+                self.pipe.get_bus().remove_signal_watch()
+            self.pipe.set_state(Gst.State.NULL)
+        self.pipe = self.enc = None
+        self._watched = False
+        for fd in self.keepalive:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        if self.keepalive:
+            import portal_capture
+            portal_capture.end_sessions()      # stop sharing the window on the desktop too
+        self.keepalive = []
+
+
+class GstBackend(GstTools):
+    """One player's connection: the room's encoded picture and sound (from Capture) -> webrtcbin, plus that player's
+    'pad' and 'ctl' data channels."""
+
+    def __init__(self, session, opts, ice_servers, capture=None):
+        self.s, self.o, self.ice = session, opts, ice_servers
+        self.capture = capture or Capture(opts)
+        self.pipe = self.wb = self.pad_ch = self.ctl_ch = None
+        self.src = {}               # "video"/"audio" -> appsrc
+        self.wait_key = True        # nothing is sent to this player before a full picture
+        self.offered = self.offering = self.playing = False
+        self._watched = False
+
+    # ---- pipeline
+    def start(self):
+        try:
+            self._start()
+        except Exception:
+            self.stop()
+            raise
+
+    def _start(self):
+        from gi.repository import Gst, GLib
+        self.capture.acquire(getattr(self.s, "status", None))
+        self.pipe = Gst.Pipeline.new("player")
+        # the same clock and base time as the capture, so its timestamps mean the same here
+        self.pipe.use_clock(Gst.SystemClock.obtain())
+        self.pipe.set_start_time(Gst.CLOCK_TIME_NONE)
+        self.pipe.set_base_time(self.capture.pipe.get_base_time())
+        self.wb = self._mk("webrtcbin", {"bundle-policy": "max-bundle"}, "wb")
+        stun, turns = ice_to_gst(self.ice)
+        if stun:
+            self.wb.set_property("stun-server", stun)
+        for t in turns:
+            self.wb.emit("add-turn-server", t)
+        self.pipe.add(self.wb)
+
+        # handle-segment-change: the encoder shifts its timestamps and says so in its segment; keep that meaning.
+        # Leaky: while this player is still connecting nothing is sent yet, and old frames must not pile up
+        # (they start from a fresh full picture once connected, see _on_state).
+        live = {"is-live": True, "format": "time", "do-timestamp": False, "handle-segment-change": True,
+                "max-buffers": 4, "leaky-type": "downstream"}
+        vsrc = self._mk("appsrc", live)
+        pay = self._mk("rtph264pay", {"config-interval": -1, "pt": 96, "aggregate-mode": "zero-latency"})
+        self._link([vsrc, pay, self._caps("application/x-rtp,media=video,encoding-name=H264,payload=96,clock-rate=90000")])
+        # this player lost packets and asks for a full picture: pass it on to the room's encoder
+        vsrc.get_static_pad("src").add_probe(Gst.PadProbeType.EVENT_UPSTREAM, self._on_upstream)
+        if self.capture.timer:
+            pay.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER | Gst.PadProbeType.BUFFER_LIST, self._on_packetised)
+            GLib.timeout_add_seconds(2, self._report_timing)
+        self.src["video"] = vsrc
+        if self.capture.has_audio:
+            asrc = self._mk("appsrc", live)
+            self._link([asrc, self._mk("rtpopuspay", {"pt": 97}),
+                        self._caps("application/x-rtp,media=audio,encoding-name=OPUS,payload=97,clock-rate=48000")])
+            self.src["audio"] = asrc
+
         self.wb.connect("on-negotiation-needed", self._on_negotiation)
         self.wb.connect("on-ice-candidate", lambda el, idx, cand: self.s.on_ice(idx, cand))
-        self.wb.connect("notify::connection-state",
-                        lambda el, _p: self.s.on_state(el.get_property("connection-state").value_nick))
+        self.wb.connect("notify::connection-state", self._on_state)
 
         # ---- data channels (made before the offer so they are part of it). webrtcbin only makes them once the
         # pipeline is at least READY; before that it returns nothing (newer GStreamer), so switch it on first.
@@ -452,6 +615,7 @@ class GstBackend:
         self.ctl_ch.connect("on-message-string", self._on_ctl_string)
         bus = self.pipe.get_bus()
         bus.add_signal_watch()
+        self._watched = True
         bus.connect("message::error", lambda b, m: (log("GStreamer error:", m.parse_error()[0].message, m.parse_error()[1]),
                                                     hasattr(self.s, "status") and self.s.status(
                                                         "The stream stopped on your friend's computer: " + m.parse_error()[0].message),
@@ -459,45 +623,51 @@ class GstBackend:
         self.pipe.set_state(Gst.State.PLAYING)
         self._set_sendonly()
         self.playing = True
-        from gi.repository import GLib
+        self.capture.add(self)
         GLib.timeout_add(200, self._make_offer)
 
-    def _attach_probes(self, chain, enc_name):
-        """Time every frame through capture -> convert -> encode -> packetise. Failures here never stop the stream."""
-        try:
-            from gi.repository import Gst, GLib
-            name = lambda e: e.get_factory().get_name()
-            enc = next(e for e in chain if name(e) == enc_name)
-            pay = next(e for e in chain if name(e) == "rtph264pay")
-            def probe(el, padname, stage):
-                def cb(pad, info):
-                    if info.type & Gst.PadProbeType.BUFFER_LIST:       # the packetiser sends lists
-                        lst = info.get_buffer_list()
-                        buf = lst.get(0) if lst is not None and lst.length() else None
-                    else:
-                        buf = info.get_buffer()
-                    if buf is not None and buf.pts != Gst.CLOCK_TIME_NONE:
-                        age = None
-                        if stage == "cap":
-                            clock = self.pipe.get_clock()
-                            if clock is not None:
-                                age = (clock.get_time() - self.pipe.get_base_time() - buf.pts) / 1e6
-                        self.timer.mark(stage, buf.pts, time.monotonic(), age)
-                    return Gst.PadProbeReturn.OK
-                el.get_static_pad(padname).add_probe(Gst.PadProbeType.BUFFER | Gst.PadProbeType.BUFFER_LIST, cb)
-            probe(chain[0], "src", "cap")
-            probe(enc, "sink", "enc_in")
-            probe(enc, "src", "enc_out")
-            probe(pay, "src", "pay")
-            GLib.timeout_add_seconds(2, self._report_timing)
-        except Exception as e:
-            log("note: host timing is off:", e)
-            self.timer = None
+    def _on_state(self, el, _p):
+        state = el.get_property("connection-state").value_nick
+        if state == "connected":        # start this player at a fresh full picture, not at frames from while connecting
+            self.wait_key = True
+            self.capture.keyframe(now=True)
+        self.s.on_state(state)
+
+    def push(self, kind, sample):
+        """An encoded frame from the room's capture (called on GStreamer's threads)."""
+        from gi.repository import Gst
+        src = self.src.get(kind)
+        if src is None:
+            return
+        if kind == "video" and self.wait_key:
+            if sample.get_buffer().has_flags(Gst.BufferFlags.DELTA_UNIT):
+                return                  # (a frame that only makes sense after the full picture this player hasn't got)
+            self.wait_key = False
+        src.emit("push-sample", sample)
+
+    def _on_upstream(self, _pad, info):
+        from gi.repository import Gst
+        st = info.get_event().get_structure()
+        if st is not None and st.get_name() == "GstForceKeyUnit":
+            self.capture.keyframe()
+        return Gst.PadProbeReturn.OK
+
+    def _on_packetised(self, _pad, info):
+        from gi.repository import Gst
+        timer = self.capture.timer
+        if info.type & Gst.PadProbeType.BUFFER_LIST:       # the packetiser sends lists
+            lst = info.get_buffer_list()
+            buf = lst.get(0) if lst is not None and lst.length() else None
+        else:
+            buf = info.get_buffer()
+        if timer and buf is not None and buf.pts != Gst.CLOCK_TIME_NONE:
+            timer.mark("pay", buf.pts, time.monotonic())
+        return Gst.PadProbeReturn.OK
 
     def _report_timing(self):
-        if not self.timer or not self.pipe:
+        if not self.capture.timer or not self.pipe:
             return False
-        summ = self.timer.summary()
+        summ = self.capture.timer.summary()
         if summ:
             self.s.host_stats = summ
             self.send_ctl({"t": "host", "s": summ})
@@ -591,18 +761,14 @@ class GstBackend:
 
     def stop(self):
         from gi.repository import Gst
+        self.capture.release(self)
+        self.src = {}
         if self.pipe:
+            if self._watched:
+                self.pipe.get_bus().remove_signal_watch()
             self.pipe.set_state(Gst.State.NULL)
             self.pipe = None
-        for fd in self.keepalive:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
-        if self.keepalive:
-            import portal_capture
-            portal_capture.end_sessions()      # stop sharing the window on the desktop too
-        self.keepalive = []
+        self._watched = False
 
 
 # ===================================================================== doctor
@@ -811,7 +977,8 @@ def test_share(session_type):
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Netplay Matchmaker stream host")
     ap.add_argument("--mm", help="matchmaker address for the stream connection, e.g. 1.2.3.4:7777")
-    ap.add_argument("--key", help="session key from the match")
+    ap.add_argument("--key", help="session key of one player (stream to them, then exit)")
+    ap.add_argument("--room", action="store_true", help="stream to every player of a room: seats arrive on standard input")
     ap.add_argument("--doctor", action="store_true", help="check this computer and exit")
     ap.add_argument("--test-share", action="store_true", help="open the 'share your screen' box once and say if it worked")
     ap.add_argument("--capture", choices=["auto", "x11", "portal", "test"], default="auto")
@@ -835,8 +1002,8 @@ def main(argv=None):
         return 0 if not any(l.startswith("[X") for l in lines) else 1
     if a.test_share:
         return test_share(session_type)
-    if not a.mm or not a.key:
-        ap.error("--mm and --key are required (or use --doctor)")
+    if not a.mm or not (a.key or a.room):
+        ap.error("--mm and --key (or --room) are required (or use --doctor)")
     if elements is None:
         print("\n".join(doctor_lines(None, session_type, "", False)))
         return 2
@@ -874,46 +1041,106 @@ def main(argv=None):
     opts = {"capture": capture, "window": a.window, "encoder": enc, "kbps": a.kbps, "fps": a.fps,
             "profile": a.profile, "audio": audio, "timing": not a.no_timing}
     loop = GLib.MainLoop()
-    pad = uinput_pad.UinputPad(f"Netplay Virtual Pad (Player {a.slot})")
-    pad.open()
-    on_msg = lambda m: GLib.idle_add(lambda: session.on_signal(m) and False)
-    on_end = lambda why: GLib.idle_add(lambda: (session.end(why), False)[1])
+    capture = Capture(opts)            # one capture and one encoder, however many players join
     import stream_signal
     host, port = stream_signal.parse_address(a.mm)
-    sig = stream_signal.TcpSignaling(host, port, a.key, on_msg=on_msg, on_end=on_end)
-    try:
-        ice = sig.connect().get("iceServers", [])
-        if a.no_relay:
-            ice = stream_signal.without_relay(ice)
-    except stream_signal.SignalError as e:
-        print(f"STREAM ERROR: can't reach the matchmaker: {e}", flush=True)
-        pad.close()
-        return 2
+    seats = {}                         # player number -> (Session, its connection to the lobby)
+
     def new_pad(n):
         p = uinput_pad.UinputPad(f"Netplay Virtual Pad (Player {n})")
         p.open()
         return p
-    session = Session(sig, lambda s: GstBackend(s, opts, ice), pad, slot=a.slot,
-                      pick=[2, 3, 4] if a.slot_pick else None, pad_factory=new_pad)
-    def tick():
-        session.watchdog_tick()
-        if session.ended.is_set():
-            loop.quit()
+
+    def add(key, slot):
+        """A player was let into the room: their own controller, connection and video."""
+        drop(slot, "replaced")
+        pad = new_pad(slot)
+        on_msg = lambda m: GLib.idle_add(lambda: session.on_signal(m) and False)
+        on_end = lambda why: GLib.idle_add(lambda: (session.end(why), False)[1])
+        sig = stream_signal.TcpSignaling(host, port, key, on_msg=on_msg, on_end=on_end)
+        try:
+            ice = sig.connect().get("iceServers", [])
+            if a.no_relay:
+                ice = stream_signal.without_relay(ice)
+        except stream_signal.SignalError as e:
+            print(f"STREAM ERROR: can't reach the matchmaker: {e}", flush=True)
+            pad.close()
+            return None
+        session = Session(sig, lambda s: GstBackend(s, opts, ice, capture), pad, slot=slot,
+                          pick=[2, 3, 4] if a.slot_pick and not a.room else None, pad_factory=new_pad)
+        seats[slot] = (session, sig)
+        sig.start()
+        log(f"Player {slot}: waiting for the guest to connect...")
+        return session
+
+    def drop(slot, why):
+        """A player left (or was removed): close their connection and unplug their controller."""
+        session, sig = seats.pop(slot, (None, None))
+        if session is None:
+            return
+        session.end(why)
+        if hasattr(sig, "flush"):
+            sig.flush()
+        def close():           # (a moment later, so the goodbye still goes out)
+            sig.stop()
+            session.pad.close()   # (the guest may have switched to another player's pad)
             return False
+        GLib.timeout_add(300, close)
+
+    def tick():
+        for slot, (session, _sig) in list(seats.items()):
+            session.watchdog_tick()
+            if session.ended.is_set():
+                why = plain_reason(getattr(session, "why", ""))
+                if not a.room:
+                    loop.quit()
+                    return False
+                if why:
+                    print(f"STREAM ERROR: Player {slot}: {why}", flush=True)
+                drop(slot, "ended")
         return True
+
+    def control():
+        """Room mode: the app says who joins and leaves, one line of JSON each. When the app goes away, so do we."""
+        for line in sys.stdin:
+            try:
+                m = json.loads(line)
+            except ValueError:
+                continue
+            slot = m.get("slot") if isinstance(m, dict) else None
+            if not isinstance(slot, int) or isinstance(slot, bool) or not 2 <= slot <= 4:
+                continue
+            if m.get("op") == "add" and isinstance(m.get("key"), str):
+                GLib.idle_add(lambda m=m: add(m["key"], m["slot"]) and False)
+            elif m.get("op") == "remove":
+                GLib.idle_add(lambda m=m: drop(m["slot"], "left the room") and False)
+        GLib.idle_add(loop.quit)
+
+    session = None
+    if a.room:
+        threading.Thread(target=control, daemon=True).start()
+        log("room: waiting for players...")
+    else:
+        session = add(a.key, a.slot)
+        if session is None:
+            return 2
     GLib.timeout_add(100, tick)
-    sig.start()
-    log("waiting for the guest to connect...")
     try:
         loop.run()
     except KeyboardInterrupt:
-        session.end("interrupted")
+        pass
     finally:
-        if hasattr(sig, "flush"):
-            sig.flush()
-        time.sleep(0.3)      # let the final 'bye' go out
-        sig.stop()
-        session.pad.close()   # (the guest may have switched to another player's pad)
+        for slot in list(seats):
+            session_, sig = seats.pop(slot)
+            session_.end("interrupted" if not session_.ended.is_set() else "")
+            if hasattr(sig, "flush"):
+                sig.flush()
+            time.sleep(0.3)      # let the final 'bye' go out
+            sig.stop()
+            session_.pad.close()
+        capture.stop()
+    if a.room:
+        return 0
     why = plain_reason(getattr(session, "why", ""))
     if why:
         print(f"STREAM ERROR: {why}", flush=True)   # the app shows this line when the stream stops

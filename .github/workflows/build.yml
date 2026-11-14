@@ -107,9 +107,13 @@ jobs:
       - name: The real RetroArch, started by the app, in one netplay session (on a virtual screen)
         timeout-minutes: 20      # (a stalled package install fails here, with its log, instead of hanging)
         run: |
-          bash .github/apt-install.sh retroarch libretro-mgba xvfb
+          bash .github/apt-install.sh retroarch libretro-mgba xvfb gstreamer1.0-x
           /usr/bin/python3 desktop/tests/test_real_retroarch.py | tee real.txt
           grep -q "ALL PASSED" real.txt      # (it must really run here, not skip)
+      - name: A stream room for real (one host for three players; then through the app on a virtual screen)
+        run: |
+          /usr/bin/python3 desktop/tests/test_stream_room.py | tee room.txt
+          grep -q "ALL PASSED" room.txt
 
   android-player:
     # the phone app's own player (libwebrtc + Android's video decoder) in an Android emulator, against the real

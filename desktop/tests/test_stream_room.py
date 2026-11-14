@@ -30,6 +30,8 @@ if not os.environ.get("DISPLAY"):
 
 os.environ["NETPLAY_DATA"] = tempfile.mkdtemp()
 os.environ["NETPLAY_ICE_JSON"] = "[]"        # (this machine only: no STUN server needed)
+import site
+os.environ["PYTHONUSERBASE"] = site.getuserbase()      # (the players get their own HOME; keep this user's Python packages)
 import server
 
 fails = []

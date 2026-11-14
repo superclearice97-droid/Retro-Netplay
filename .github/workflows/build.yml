@@ -167,6 +167,7 @@ jobs:
     # the Windows download: the app plus the player window with its own GStreamer (from MSYS2) and SDL.
     # Released as an early test build: it hasn't been tried on a real Windows PC yet (see README.txt).
     runs-on: windows-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - name: ScreenScraper developer ID for the art download (only if this project has one in its secrets)
@@ -203,7 +204,22 @@ jobs:
         shell: pwsh
         run: |
           $P = "desktop/shell/dist/win-unpacked/resources/engine/_internal/player"
-          $out = & "$P/Retro-Netplay-Player.exe" --check 2>&1 | Out-String
+          # with a time limit: when the check hangs, say what was running and what GStreamer last did
+          $env:GST_DEBUG = "2,GST_REGISTRY:5,GST_PLUGIN_LOADING:5"
+          $env:GST_DEBUG_FILE = "$PWD/gst-check.log"
+          $env:GST_DEBUG_NO_COLOR = "1"
+          $proc = Start-Process -FilePath "$P/Retro-Netplay-Player.exe" -ArgumentList "--check" -NoNewWindow -PassThru `
+            -RedirectStandardOutput check-out.txt -RedirectStandardError check-err.txt
+          if (-not $proc.WaitForExit(120000)) {
+            Write-Output "THE PLAYER'S CHECK HUNG. Processes:"
+            Get-CimInstance Win32_Process | Where-Object { $_.Name -like "*Retro*" -or $_.Name -like "gst*" } |
+              ForEach-Object { "{0} (parent {1}) {2} MB  {3}" -f $_.ProcessId, $_.ParentProcessId, [int]($_.WorkingSetSize / 1MB), $_.CommandLine }
+            Write-Output "--- its output so far:"; Get-Content check-out.txt, check-err.txt
+            Write-Output "--- GStreamer's last steps:"; Get-Content gst-check.log -Tail 80
+            taskkill /F /T /PID $proc.Id
+            exit 1
+          }
+          $out = (Get-Content check-out.txt, check-err.txt | Out-String)
           Write-Output $out
           if ($out -notmatch "\[OK\] webrtcbin" -or $out -notmatch "\[OK\] window and controllers") { exit 1 }
           $lic = (Get-ChildItem "$P/licenses").Count

@@ -14,6 +14,7 @@ this computer.
   python3 engine.py [--port N] [--no-browser]
 """
 import asyncio
+import ipaddress
 import json
 import mimetypes
 import os
@@ -37,6 +38,7 @@ import social
 
 UI = runtime.BASE / "ui"
 LOBBY_PORT = 7777
+RA_NETPLAY_PORT = 55435        # RetroArch's own default
 CHAT_KEEP = 150
 GAME_KEY_RE = re.compile(r"^[a-z0-9]+:[a-z0-9-]+$")
 KEY_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
@@ -427,7 +429,7 @@ class Engine:
     def native_details(self, g):
         s = core.SYSTEMS[g["system"]]
         if s["emu"] == "retroarch":
-            return {"emu": "retroarch", "port": 55435, "core": s["core"]}
+            return {"emu": "retroarch", "port": RA_NETPLAY_PORT, "core": s["core"]}
         if s["emu"] == "dolphin":
             return {"emu": "dolphin"}           # the host adds the host code Dolphin shows (update_room)
         return {}
@@ -461,6 +463,7 @@ class Engine:
             return                     # (already playing this game this way: keep it)
         if room.get("mode") == "netplay" and core.SYSTEMS[g["system"]]["emu"] == "retroarch":
             kind, argv = core.build_cmd(self.cfg, g, "native", "host", {})
+            argv += ["--port", str(RA_NETPLAY_PORT)] + self.ra_nick()      # (the port the room tells players)
             note = "RetroArch is hosting netplay. Players who join connect to it by themselves."
         elif room.get("mode") == "netplay":
             prefill_dolphin(self.cfg["paths"]["dolphin"], self.cfg.get("my_name"))
@@ -473,6 +476,11 @@ class Engine:
         self.launch("emulator", argv)
         self.emu_for = want
         self.play_note = note
+
+    def ra_nick(self):
+        """Your player name inside RetroArch's netplay (instead of "Anonymous")."""
+        name = social.clean_name(self.cfg.get("my_name"))
+        return ["--nick", name] if name else []
 
     def start_stream_host(self, seat, key):
         if not KEY_RE.fullmatch(key):
@@ -521,8 +529,12 @@ class Engine:
             return self.notice("warn", self.play_note)
         if nat.get("emu") == "retroarch" and nat.get("ip"):
             s = core.SYSTEMS[g["system"]]
+            try:
+                ip, port = str(ipaddress.ip_address(str(nat["ip"]))), int(nat.get("port", RA_NETPLAY_PORT))
+            except ValueError:
+                return self.notice("error", "The lobby sent an address for the host that doesn't look right. Try joining again.")
             argv = core.emu_argv(self.cfg["paths"]["retroarch"]) + ["-L", core.find_core(self.cfg, s["core"]), g["rom"],
-                                                                    "--connect", str(nat["ip"]), "--port", str(int(nat.get("port", 55435)))]
+                                                                    "--connect", ip, "--port", str(port)] + self.ra_nick()
             self.launch("emulator", argv)
             self.play_note = "RetroArch is connecting to the host's game."
         elif nat.get("emu") == "dolphin":

@@ -104,6 +104,12 @@ jobs:
           done
       - name: Native player window (headless) against the real stream host over TCP, also through a relay
         run: /usr/bin/python3 desktop/tests/test_native_guest.py
+      - name: The real RetroArch, started by the app, in one netplay session (on a virtual screen)
+        timeout-minutes: 20      # (a stalled package install fails here, with its log, instead of hanging)
+        run: |
+          bash .github/apt-install.sh retroarch libretro-mgba xvfb
+          /usr/bin/python3 desktop/tests/test_real_retroarch.py | tee real.txt
+          grep -q "ALL PASSED" real.txt      # (it must really run here, not skip)
 
   android-player:
     # the phone app's own player (libwebrtc + Android's video decoder) in an Android emulator, against the real

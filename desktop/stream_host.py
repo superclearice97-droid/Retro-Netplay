@@ -352,6 +352,100 @@ class GstTools:
         return self._mk("capsfilter", {"caps": Gst.Caps.from_string(text)})
 
 
+def descendants(pid):
+    """pid and every process it started (Linux /proc)."""
+    kids = {}
+    try:
+        names = os.listdir("/proc")
+    except OSError:
+        return [pid]
+    for d in names:
+        if d.isdigit():
+            try:
+                with open(f"/proc/{d}/stat") as f:
+                    kids.setdefault(int(f.read().rsplit(")", 1)[1].split()[1]), []).append(int(d))
+            except (OSError, ValueError, IndexError):
+                continue
+    out, todo = [], [pid]
+    while todo:
+        q = todo.pop()
+        out.append(q)
+        todo += kids.get(q, [])
+    return out
+
+
+def x11_game_window(pids, wm_class=""):
+    """The game's window on an X11 screen: the biggest top-level window that belongs to one of these processes
+    (_NET_WM_PID), or else whose class contains wm_class (a sandboxed emulator has other process numbers).
+    -> window id or None. Plain Xlib through ctypes, so nothing extra to install."""
+    import ctypes, ctypes.util
+    try:
+        x = ctypes.CDLL(ctypes.util.find_library("X11") or "libX11.so.6")
+    except OSError:
+        return None
+    V, UL = ctypes.c_void_p, ctypes.c_ulong
+    x.XOpenDisplay.restype = V
+    x.XOpenDisplay.argtypes = [ctypes.c_char_p]
+    dpy = x.XOpenDisplay(None)
+    if not dpy:
+        return None
+    handler_t = ctypes.CFUNCTYPE(ctypes.c_int, V, V)
+    quiet = handler_t(lambda _d, _e: 0)        # a window may vanish while we look at it: that's not an error
+    x.XSetErrorHandler.restype = V
+    x.XSetErrorHandler.argtypes = [handler_t]
+    before = x.XSetErrorHandler(quiet)
+    x.XDefaultRootWindow.restype = UL
+    x.XDefaultRootWindow.argtypes = [V]
+    x.XInternAtom.restype = UL
+    x.XInternAtom.argtypes = [V, ctypes.c_char_p, ctypes.c_int]
+    x.XGetWindowProperty.argtypes = [V, UL, UL, ctypes.c_long, ctypes.c_long, ctypes.c_int, UL, ctypes.POINTER(UL),
+                                     ctypes.POINTER(ctypes.c_int), ctypes.POINTER(UL), ctypes.POINTER(UL), ctypes.POINTER(V)]
+    x.XQueryTree.argtypes = [V, UL, ctypes.POINTER(UL), ctypes.POINTER(UL), ctypes.POINTER(V), ctypes.POINTER(ctypes.c_uint)]
+    x.XGetGeometry.argtypes = [V, UL, ctypes.POINTER(UL)] + [ctypes.POINTER(ctypes.c_int)] * 2 + [ctypes.POINTER(ctypes.c_uint)] * 4
+    x.XFree.argtypes = [V]
+    x.XCloseDisplay.argtypes = [V]
+
+    def prop(win, name, as_longs):
+        kind, fmt, n, left, data = UL(), ctypes.c_int(), UL(), UL(), V()
+        if x.XGetWindowProperty(dpy, win, x.XInternAtom(dpy, name, 0), 0, 4096, 0, 0, ctypes.byref(kind), ctypes.byref(fmt),
+                                ctypes.byref(n), ctypes.byref(left), ctypes.byref(data)) != 0 or not data.value:
+            return [] if as_longs else b""
+        try:
+            if as_longs:
+                return list(ctypes.cast(data, ctypes.POINTER(UL))[:n.value]) if fmt.value == 32 else []
+            return ctypes.string_at(data, n.value) if fmt.value == 8 else b""
+        finally:
+            x.XFree(data)
+
+    try:
+        root = x.XDefaultRootWindow(dpy)
+        wins = prop(root, b"_NET_CLIENT_LIST", True)
+        if not wins:        # no window manager that keeps the list: the windows directly on the screen
+            r, par, kids, n = UL(), UL(), V(), ctypes.c_uint()
+            if x.XQueryTree(dpy, root, ctypes.byref(r), ctypes.byref(par), ctypes.byref(kids), ctypes.byref(n)) and kids.value:
+                wins = list(ctypes.cast(kids, ctypes.POINTER(UL))[:n.value])
+                x.XFree(kids)
+        pids = set(pids)
+        best = {}           # how it matched (0 = process, 1 = class) -> (area, window)
+        for w in wins:
+            how = 0 if pids & set(prop(w, b"_NET_WM_PID", True)) else (
+                1 if wm_class and wm_class.lower().encode() in prop(w, b"WM_CLASS", False).lower() else None)
+            if how is None:
+                continue
+            r, gx, gy, gw, gh, bw, depth = UL(), ctypes.c_int(), ctypes.c_int(), ctypes.c_uint(), ctypes.c_uint(), ctypes.c_uint(), ctypes.c_uint()
+            if not x.XGetGeometry(dpy, w, ctypes.byref(r), ctypes.byref(gx), ctypes.byref(gy), ctypes.byref(gw), ctypes.byref(gh),
+                                  ctypes.byref(bw), ctypes.byref(depth)):
+                continue
+            area = gw.value * gh.value
+            if area >= 64 * 64 and area > best.get(how, (0, 0))[0]:      # (not a tray icon or a hidden helper window)
+                best[how] = (area, w)
+        hit = best.get(0) or best.get(1)
+        return hit[1] if hit else None
+    finally:
+        x.XSetErrorHandler(ctypes.cast(before, handler_t) if before else ctypes.cast(None, handler_t))
+        x.XCloseDisplay(dpy)
+
+
 KEYFRAME_GAP = 0.5      # seconds between forced keyframes at most (one player with a bad connection can't flood the rest)
 
 
@@ -419,13 +513,29 @@ class Capture(GstTools):
                       self._caps(f"video/x-raw,width=640,height=480,framerate={o['fps']}/1")]
         else:
             props = {"use-damage": False, "show-pointer": False}
-            if o.get("window"):
-                props["xid"] = int(o["window"], 0)
+            xid = int(o["window"], 0) if o.get("window") else None
+            if xid is None and (o.get("game_pid") or o.get("game_class")):
+                # only the game's window, never the rest of the desktop: wait a little for it to appear
+                for _ in range(20):
+                    xid = x11_game_window(descendants(o["game_pid"]) if o.get("game_pid") else [], o.get("game_class", ""))
+                    if xid is not None:
+                        break
+                    time.sleep(0.5)
+                if xid is None and not o.get("whole_screen"):
+                    raise RuntimeError("the game's window wasn't found on the host's screen (is the game still open?). "
+                                       "The host can restart the room, or allow sharing the whole screen in Settings")
+            if xid is not None:
+                props["xid"] = xid
+                log(f"capturing only the game's window (0x{xid:x})")
+            else:
+                log("capturing the whole screen")
             chain += [self._mk("ximagesrc", props), self._caps(f"video/x-raw,framerate={o['fps']}/1")]
         enc_name, enc_props = o["encoder"]
         self.enc = self._mk(enc_name, enc_props)
         vsink = self._mk("appsink", {"emit-signals": True, "sync": False, "async": False})
         chain += [self._mk("videoconvert"),
+                  # H.264 needs even sizes, and a shared window can be any size: round to even (no work when it already is)
+                  self._mk("videoscale"), self._caps("video/x-raw,width=[2,16384,2],height=[2,16384,2]"),
                   self._mk("queue", {"max-size-buffers": 2, "max-size-bytes": 0, "max-size-time": 0, "leaky": "downstream"}),
                   self.enc,
                   self._caps(f"video/x-h264,profile={o['profile']}"),
@@ -982,7 +1092,10 @@ def main(argv=None):
     ap.add_argument("--doctor", action="store_true", help="check this computer and exit")
     ap.add_argument("--test-share", action="store_true", help="open the 'share your screen' box once and say if it worked")
     ap.add_argument("--capture", choices=["auto", "x11", "portal", "test"], default="auto")
-    ap.add_argument("--window", help="X11 window id to capture (default: whole screen)")
+    ap.add_argument("--window", help="X11 window id to capture")
+    ap.add_argument("--game-pid", type=int, help="X11: capture only the window of this process (the game the app started)")
+    ap.add_argument("--game-class", default="", help="X11: ...or the window whose class contains this (a sandboxed emulator)")
+    ap.add_argument("--whole-screen", action="store_true", help="X11: when the game's window can't be found, share the whole screen")
     ap.add_argument("--encoder", default="auto", help="auto, nvh264enc, vah264lpenc, vah264enc, vaapih264enc, x264enc")
     ap.add_argument("--kbps", type=int, default=8000)
     ap.add_argument("--fps", type=int, default=60)
@@ -1038,7 +1151,8 @@ def main(argv=None):
     _signal.signal(_signal.SIGTERM, stopped)
     capture = a.capture if a.capture != "auto" else ("portal" if session_type == "wayland" else "x11")
     audio = "" if a.no_audio else default_monitor()
-    opts = {"capture": capture, "window": a.window, "encoder": enc, "kbps": a.kbps, "fps": a.fps,
+    opts = {"capture": capture, "window": a.window, "game_pid": a.game_pid, "game_class": a.game_class,
+            "whole_screen": a.whole_screen, "encoder": enc, "kbps": a.kbps, "fps": a.fps,
             "profile": a.profile, "audio": audio, "timing": not a.no_timing}
     loop = GLib.MainLoop()
     capture = Capture(opts)            # one capture and one encoder, however many players join

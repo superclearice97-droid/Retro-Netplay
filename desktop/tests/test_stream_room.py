@@ -6,7 +6,8 @@ each is told their own player number, and each player's button presses reach the
 nobody else's. When one leaves, the other keeps playing; a third player can take the free seat.
 
 Part 2 (through the app): two engines on a virtual screen. Sam opens a stream room and the app starts one stream
-host for it; Bea joins, the app opens her player window, and video of Sam's screen arrives in it.
+host for it; Bea joins, the app opens her player window, and video of ONLY Sam's game window arrives in it (not the
+rest of his screen). With the game closed, no stream starts and Bea is told why.
 
 The host's virtual controller is swapped for one that records what it's told (tests/recording_host.py); capture,
 encoding, WebRTC and the player are the real thing. Skips without GStreamer, SDL or a (virtual) screen."""
@@ -149,8 +150,14 @@ try:
         home = tempfile.mkdtemp(); homes.append(home)
         for d in (".netplay-matchmaker", "Games/PS2", "bin"):
             os.makedirs(os.path.join(home, d), exist_ok=True)
+        # the "emulator": a real 640x360 window on the (800x600) screen
+        game = os.path.join(home, "game.py")
+        open(game, "w").write("import sdl2, time\nsdl2.SDL_Init(sdl2.SDL_INIT_VIDEO)\n"
+                              "w = sdl2.SDL_CreateWindow(b'Urban Reign', 40, 40, 640, 360, sdl2.SDL_WINDOW_SHOWN)\n"
+                              "e = sdl2.SDL_Event()\nend = time.time() + 120\n"
+                              "while time.time() < end:\n    while sdl2.SDL_PollEvent(e): pass\n    time.sleep(0.05)\n")
         emu = os.path.join(home, "bin", "pcsx2-qt")
-        open(emu, "w").write("#!/bin/sh\nsleep 120\n"); os.chmod(emu, 0o755)
+        open(emu, "w").write(f"#!/bin/sh\nexec {sys.executable} {game}\n"); os.chmod(emu, 0o755)
         iso = bytearray(0x9500); iso[0x8001:0x8006] = b"CD001"; iso[0x8008:0x8013] = b"PLAYSTATION"
         open(os.path.join(home, "Games/PS2", "Urban Reign (USA).iso"), "wb").write(iso)
         cfg = {"setup_done": True, "age_ok": True, "my_name": name, "game_folders": [os.path.join(home, "Games")],
@@ -208,12 +215,21 @@ try:
     check("Bea's player window opened", "player" in until(bea, lambda s: "player" in s["playing"]["running"])["playing"]["running"])
     check("the host captured Sam's screen once and Bea connected", file_says(sam, "stream-host.log", "connection: connected")
           and read(sam, "stream-host.log").count("video: x11 -> ") == 1, read(sam, "stream-host.log")[-1500:])
-    check("video of Sam's screen arrives in Bea's player window", file_says(bea, "stream-guest.log", "[player] video: 800x600"),
-          read(bea, "stream-guest.log")[-1500:])
+    check("Bea's player window shows ONLY the game's window (640x360), not Sam's whole 800x600 screen",
+          file_says(bea, "stream-guest.log", "[player] video: 640x360") and "capturing only the game's window" in read(sam, "stream-host.log"),
+          read(bea, "stream-guest.log")[-1200:] + read(sam, "stream-host.log")[-600:])
     do(bea, "leave")
     check("leaving closes Bea's player", "player" not in until(bea, lambda s: "player" not in s["playing"]["running"])["playing"]["running"])
     check("the host hears Player 2 left and keeps the room's stream program for the next player",
           file_says(sam, "stream-host.log", "ending:", 10) and "streamhost" in state(sam)["playing"]["running"], read(sam, "stream-host.log")[-600:])
+    # the game was closed: nobody gets Sam's desktop instead; the player is told why
+    subprocess.run(["pkill", "-9", "-f", os.path.join(sam["home"], "game.py")])     # (-9: SDL turns a polite stop into an event)
+    time.sleep(1.0)
+    do(bea, "join", room=b["rooms"][0]["id"])
+    check("no game window: the stream doesn't start (never the whole screen), and Bea is told why",
+          file_says(bea, "stream-guest.log", "the game's window wasn't found", 40) and "capturing the whole screen" not in read(sam, "stream-host.log"),
+          [l for l in read(sam, "stream-host.log").splitlines() if "sees:" not in l and "spends:" not in l and "screen:" not in l][-14:])
+    do(bea, "leave")
     do(sam, "close_room")
     check("closing the room stops the stream program", "streamhost" not in until(sam, lambda s: "streamhost" not in s["playing"]["running"])["playing"]["running"])
 finally:

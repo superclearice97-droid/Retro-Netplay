@@ -292,6 +292,11 @@ function settings() {
       <div><b>Blocked players</b> <span class="muted small">(you don't see their messages and they can't join your rooms)</span>
         ${S.blocked.length ? S.blocked.map(b => `<div class="row spread"><span>${esc(b.name || b.id)}</span><button class="btn ghost" data-unblock="${esc(b.id)}">Unblock</button></div>`).join("") : `<p class="muted small">Nobody.</p>`}</div>
     </section>
+    ${S.device?.can_host ? `<section class="card stack"><h2>${icon("monitor-play")} Streaming</h2>
+      <p class="muted">In a stream room, players see <b>only the game's window</b>, never the rest of your screen. (On some desktops your computer asks you which window to share the first time.)</p>
+      <label class="toggle"><input type="checkbox" id="share-screen" ${S.settings.share_screen ? "checked" : ""}><span><b>If the game's window can't be found, share my whole screen</b>
+        <small>Off: the stream doesn't start instead, and you're told why. Leave it off unless streaming won't start without it.</small></span></label>
+    </section>` : ""}
     ${emus ? `<section class="card stack"><h2>${icon("gamepad-2")} Emulators</h2>${emus}
       <p class="muted small">Retro-Netplay starts these for you. Install the ones for your consoles (RetroArch, Dolphin, PCSX2, RPCS3); they're found by themselves.</p></section>` : ""}
     <section class="card stack"><h2>${icon("user-x")} Profile</h2>
@@ -442,6 +447,7 @@ document.addEventListener("change", e => {
   if (id === "run-lobby") act("settings", { run_lobby: e.target.checked });
   if (id === "chat-filter") act("settings", { chat_filter: e.target.checked });
   if (id === "sounds") act("settings", { sounds: e.target.checked });
+  if (id === "share-screen") act("settings", { share_screen: e.target.checked });
 });
 document.addEventListener("input", e => {
   if (e.target.matches("input:not([type=checkbox]):not([type=radio]), textarea")) drafts[fieldKey(e.target)] = e.target.value;

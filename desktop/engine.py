@@ -43,7 +43,7 @@ CHAT_KEEP = 150
 GAME_KEY_RE = re.compile(r"^[a-z0-9]+:[a-z0-9-]+$")
 KEY_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 NEW_DEFAULTS = {"age_ok": False, "lobby_port": LOBBY_PORT, "lobbies": [], "lobby": "", "run_lobby": True, "blocked": [], "chat_filter": True,
-                "prefer_netplay": True, "seats": 2, "auto_accept": False}
+                "prefer_netplay": True, "seats": 2, "auto_accept": False, "share_screen": False}
 
 
 def admin_token():
@@ -243,7 +243,7 @@ class Engine:
                               for k, v in core.EMUS.items()},
                 "systems": {k: {"label": v["label"], "netplay": v["native"]} for k, v in core.SYSTEMS.items()},
                 "settings": {k: cfg.get(k) for k in ("chat_filter", "prefer_netplay", "seats", "auto_accept", "sounds",
-                                                    "game_folders", "use_relay")},
+                                                    "game_folders", "use_relay", "share_screen")},
                 "blocked": cfg.get("blocked", []),
                 "playing": {"note": self.play_note, "running": sorted(n for n, p in self.procs.items() if p.poll() is None)},
                 "device": {"phone": False, "can_host": True},
@@ -492,6 +492,14 @@ class Engine:
             host, port = parse_lobby(self.cfg.get("lobby")) or ("127.0.0.1", LOBBY_PORT)
             cmd = [runtime.host_python(), str(runtime.host_script()), "--mm", f"{host}:{port}", "--room"] + (
                 [] if self.cfg.get("use_relay", True) else ["--no-relay"])
+            # X11 desktops: players see only the game's window (found by the emulator's process, or its window class),
+            # never the rest of the screen, unless the host allowed that in Settings. (Wayland asks the host itself.)
+            g, emu = getattr(self, "_hosting", None), self.procs.get("emulator")
+            if emu and emu.poll() is None:
+                cmd += ["--game-pid", str(emu.pid)]
+            cmd += ["--game-class", core.SYSTEMS[g["system"]]["emu"] if g else "retroarch"]
+            if self.cfg.get("share_screen"):
+                cmd.append("--whole-screen")
             self.launch("streamhost", cmd, log="stream-host.log", stdin=subprocess.PIPE)
             self.notice("share", "When the 'share your screen' box opens (only the first time), choose the game window.")
         self.tell_stream_host({"op": "add", "key": key, "slot": int(seat)})
@@ -672,7 +680,7 @@ class Engine:
         elif act == "mod":
             self.send({"op": "mod", "action": a.get("what"), "player": a.get("player"), "minutes": a.get("minutes", 0)})
         elif act == "settings":
-            for k in ("chat_filter", "prefer_netplay", "sounds", "use_relay"):
+            for k in ("chat_filter", "prefer_netplay", "sounds", "use_relay", "share_screen"):
                 if isinstance(a.get(k), bool):
                     cfg[k] = a[k]
             if isinstance(a.get("run_lobby"), bool) and a["run_lobby"] != cfg.get("run_lobby"):
